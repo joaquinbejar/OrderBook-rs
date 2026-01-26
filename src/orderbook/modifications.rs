@@ -478,10 +478,13 @@ where
                 self.order_locations.remove(&order_id);
 
                 // Unregister special orders from re-pricing tracking
-                self.special_order_tracker
-                    .unregister_pegged_order(&order_id);
-                self.special_order_tracker
-                    .unregister_trailing_stop(&order_id);
+                #[cfg(feature = "special_orders")]
+                {
+                    self.special_order_tracker
+                        .unregister_pegged_order(&order_id);
+                    self.special_order_tracker
+                        .unregister_trailing_stop(&order_id);
+                }
 
                 // If the level became empty, remove it
                 if empty_level {
@@ -600,6 +603,7 @@ where
                 .insert(unit_order_arc.id(), (price, side));
 
             // Register special orders for re-pricing tracking
+            #[cfg(feature = "special_orders")]
             match &order {
                 OrderType::PeggedOrder { id, .. } => {
                     self.special_order_tracker.register_pegged_order(*id);

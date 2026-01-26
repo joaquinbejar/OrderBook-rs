@@ -40,6 +40,10 @@ sha2 = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt"] }
 bitflags = { workspace = true }
 
+[features]
+default = []
+special_orders = []
+
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 

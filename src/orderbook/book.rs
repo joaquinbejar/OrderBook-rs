@@ -7,15 +7,16 @@ use super::market_impact::{MarketImpact, OrderSimulation};
 use super::snapshot::{EnrichedSnapshot, MetricFlags, OrderBookSnapshot, OrderBookSnapshotPackage};
 use super::statistics::{DepthStats, DistributionBin};
 use crate::orderbook::book_change_event::PriceLevelChangedListener;
+#[cfg(feature = "special_orders")]
 use crate::orderbook::repricing::SpecialOrderTracker;
 use crate::orderbook::trade::{TradeListener, TradeResult};
 use crate::utils::current_time_millis;
 use crossbeam::atomic::AtomicCell;
 use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
-use pricelevel::{
-    Hash32, MatchResult, OrderId, OrderType, OrderUpdate, PriceLevel, Side, UuidGenerator,
-};
+#[cfg(feature = "special_orders")]
+use pricelevel::OrderUpdate;
+use pricelevel::{Hash32, MatchResult, OrderId, OrderType, PriceLevel, Side, UuidGenerator};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
@@ -86,6 +87,7 @@ pub struct OrderBook<T = ()> {
     pub price_level_changed_listener: Option<PriceLevelChangedListener>,
 
     /// Tracker for special orders that require re-pricing (PeggedOrder and TrailingStop)
+    #[cfg(feature = "special_orders")]
     pub(super) special_order_tracker: SpecialOrderTracker,
 }
 
@@ -335,6 +337,7 @@ where
             trade_listener: None,
             _phantom: PhantomData,
             price_level_changed_listener: None,
+            #[cfg(feature = "special_orders")]
             special_order_tracker: SpecialOrderTracker::new(),
         }
     }
@@ -359,6 +362,7 @@ where
             trade_listener: Some(trade_listener),
             _phantom: PhantomData,
             price_level_changed_listener: None,
+            #[cfg(feature = "special_orders")]
             special_order_tracker: SpecialOrderTracker::new(),
         }
     }
@@ -395,6 +399,7 @@ where
             trade_listener: Some(trade_listener),
             _phantom: PhantomData,
             price_level_changed_listener: Some(book_changed_listener),
+            #[cfg(feature = "special_orders")]
             special_order_tracker: SpecialOrderTracker::new(),
         }
     }
@@ -2439,10 +2444,12 @@ where
 }
 
 // Implementation of RepricingOperations trait for OrderBook
+#[cfg(feature = "special_orders")]
 use crate::orderbook::repricing::{
     RepricingOperations, RepricingResult, calculate_pegged_price, calculate_trailing_stop_price,
 };
 
+#[cfg(feature = "special_orders")]
 impl<T> RepricingOperations<T> for OrderBook<T>
 where
     T: Clone + Default + Send + Sync + 'static,
@@ -2608,6 +2615,7 @@ where
     }
 }
 
+#[cfg(feature = "special_orders")]
 impl<T> OrderBook<T>
 where
     T: Clone + Default + Send + Sync + 'static,

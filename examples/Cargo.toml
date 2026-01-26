@@ -3,6 +3,10 @@ name = "examples"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+special_orders = ["orderbook-rs/special_orders"]
+
 [dependencies]
 orderbook-rs = { workspace = true }
 tracing = { workspace = true }
@@ -11,3 +15,7 @@ uuid = { workspace = true }
 pricelevel = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+
+[[bin]]
+name = "special_orders_demo"
+required-features = ["special_orders"]

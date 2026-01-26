@@ -10,6 +10,7 @@ mod modifications;
 mod operations;
 mod order;
 mod order_placement_tests;
+#[cfg(feature = "special_orders")]
 mod repricing;
 mod serialize_tests;
 mod snapshot;
