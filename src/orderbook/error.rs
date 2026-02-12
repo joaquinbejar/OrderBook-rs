@@ -87,6 +87,25 @@ pub enum OrderBookError {
         /// The configured maximum order size, if any
         max: Option<u64>,
     },
+
+    /// Order rejected because `user_id` is `Hash32::zero()` while
+    /// Self-Trade Prevention is enabled. All orders must carry a non-zero
+    /// `user_id` when STP mode is active.
+    MissingUserId {
+        /// The order ID that was rejected
+        order_id: pricelevel::OrderId,
+    },
+
+    /// Self-trade prevention triggered: the incoming order would have
+    /// matched against a resting order from the same user.
+    SelfTradePrevented {
+        /// The STP mode that was active
+        mode: crate::orderbook::stp::STPMode,
+        /// The taker (incoming) order ID
+        taker_order_id: pricelevel::OrderId,
+        /// The user ID that triggered the STP check
+        user_id: pricelevel::Hash32,
+    },
 }
 
 impl fmt::Display for OrderBookError {
@@ -146,6 +165,22 @@ impl fmt::Display for OrderBookError {
                 write!(
                     f,
                     "order size out of range: quantity {quantity}, min {min:?}, max {max:?}"
+                )
+            }
+            OrderBookError::MissingUserId { order_id } => {
+                write!(
+                    f,
+                    "missing user_id: order {order_id} rejected because STP is enabled and user_id is zero"
+                )
+            }
+            OrderBookError::SelfTradePrevented {
+                mode,
+                taker_order_id,
+                user_id,
+            } => {
+                write!(
+                    f,
+                    "self-trade prevented ({mode}): taker {taker_order_id}, user {user_id}"
                 )
             }
         }

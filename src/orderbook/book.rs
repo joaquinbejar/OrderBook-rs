@@ -9,6 +9,7 @@ use super::statistics::{DepthStats, DistributionBin};
 use crate::orderbook::book_change_event::PriceLevelChangedListener;
 #[cfg(feature = "special_orders")]
 use crate::orderbook::repricing::SpecialOrderTracker;
+use crate::orderbook::stp::STPMode;
 use crate::orderbook::trade::{TradeListener, TradeResult};
 use crate::utils::current_time_millis;
 use crossbeam::atomic::AtomicCell;
@@ -105,6 +106,11 @@ pub struct OrderBook<T = ()> {
     /// Maximum order size. When set, orders with `total_quantity() > max` are
     /// rejected. `None` disables validation (default).
     pub(super) max_order_size: Option<u64>,
+
+    /// Self-Trade Prevention mode. When set to a mode other than `None`,
+    /// the matching engine checks `user_id` on incoming and resting orders
+    /// to prevent self-trades. Default is `STPMode::None` (disabled).
+    pub(super) stp_mode: STPMode,
 }
 
 impl<T> Serialize for OrderBook<T>
@@ -359,6 +365,7 @@ where
             lot_size: None,
             min_order_size: None,
             max_order_size: None,
+            stp_mode: STPMode::None,
         }
     }
 
@@ -424,6 +431,7 @@ where
             lot_size: None,
             min_order_size: None,
             max_order_size: None,
+            stp_mode: STPMode::None,
         }
     }
 
@@ -465,6 +473,7 @@ where
             lot_size: None,
             min_order_size: None,
             max_order_size: None,
+            stp_mode: STPMode::None,
         }
     }
 
@@ -567,6 +576,41 @@ where
     #[inline]
     pub fn max_order_size(&self) -> Option<u64> {
         self.max_order_size
+    }
+
+    /// Set the Self-Trade Prevention mode.
+    ///
+    /// When set to a mode other than [`STPMode::None`], the matching engine
+    /// checks `user_id` on incoming and resting orders to prevent self-trades.
+    /// Orders with `Hash32::zero()` always bypass STP checks.
+    ///
+    /// # Arguments
+    /// - `mode`: The STP mode to activate
+    pub fn set_stp_mode(&mut self, mode: STPMode) {
+        self.stp_mode = mode;
+    }
+
+    /// Returns the configured Self-Trade Prevention mode.
+    ///
+    /// [`STPMode::None`] means STP is disabled (default).
+    #[must_use]
+    #[inline]
+    pub fn stp_mode(&self) -> STPMode {
+        self.stp_mode
+    }
+
+    /// Create a new order book for the given symbol with Self-Trade Prevention.
+    ///
+    /// # Arguments
+    /// - `symbol`: The trading symbol for this order book
+    /// - `stp_mode`: The STP mode to activate
+    ///
+    /// # Returns
+    /// A new `OrderBook` instance with STP enabled
+    pub fn with_stp_mode(symbol: &str, stp_mode: STPMode) -> Self {
+        let mut book = Self::new(symbol);
+        book.stp_mode = stp_mode;
+        book
     }
 
     /// Get the symbol of this order book
@@ -1888,18 +1932,48 @@ where
         None
     }
 
-    /// Match a market order against the book
+    /// Match a market order against the book.
+    ///
+    /// This is a convenience wrapper that bypasses STP (uses `Hash32::zero()`).
+    /// Use [`Self::match_market_order_with_user`] when STP is needed.
     pub fn match_market_order(
         &self,
         order_id: OrderId,
         quantity: u64,
         side: Side,
     ) -> Result<MatchResult, OrderBookError> {
+        self.match_market_order_with_user(order_id, quantity, side, Hash32::zero())
+    }
+
+    /// Match a market order against the book with Self-Trade Prevention.
+    ///
+    /// When STP is enabled and `user_id` is non-zero, the matching engine
+    /// checks resting orders for same-user conflicts before executing fills.
+    ///
+    /// # Arguments
+    /// * `order_id` — Unique identifier for this market order.
+    /// * `quantity` — Quantity to match.
+    /// * `side` — Buy or Sell.
+    /// * `user_id` — Owner of the incoming order for STP checks.
+    ///   Pass `Hash32::zero()` to bypass STP.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::InsufficientLiquidity`] when no liquidity
+    /// is available, or [`OrderBookError::SelfTradePrevented`] when STP
+    /// cancels the taker before any fills occur.
+    pub fn match_market_order_with_user(
+        &self,
+        order_id: OrderId,
+        quantity: u64,
+        side: Side,
+        user_id: Hash32,
+    ) -> Result<MatchResult, OrderBookError> {
         trace!(
             "Order book {}: Matching market order {} for {} at side {:?}",
             self.symbol, order_id, quantity, side
         );
-        let match_result = OrderBook::<T>::match_order(self, order_id, side, quantity, None)?;
+        let match_result =
+            OrderBook::<T>::match_order_with_user(self, order_id, side, quantity, None, user_id)?;
 
         // Trigger trade listener if there are transactions
         if !match_result.transactions.transactions.is_empty()
@@ -1914,6 +1988,9 @@ where
 
     /// Attempts to match a limit order in the order book.
     ///
+    /// This is a convenience wrapper that bypasses STP (uses `Hash32::zero()`).
+    /// Use [`Self::match_limit_order_with_user`] when STP is needed.
+    ///
     /// # Parameters
     /// - `order_id`: The unique identifier of the order to be matched.
     /// - `quantity`: The quantity of the order to be matched.
@@ -1924,25 +2001,7 @@ where
     /// # Returns
     /// - `Ok(MatchResult)`: If the order is successfully matched, returning information
     ///   about the match, including possibly filled quantities and pricing details.
-    /// - `Err(OrderBookError)`: If the order cannot be matched due to an error, such as
-    ///   invalid parameters or an existing order book issue.
-    ///
-    /// # Behavior
-    /// - Logs a trace message with details about the order and its intended match parameters.
-    /// - Internally delegates to the `match_order` function, passing the provided parameters,
-    ///   including the optional `limit_price` which specifies the price constraint.
-    ///
-    /// # Errors
-    /// This function returns an error in cases such as:
-    /// - The specified `order_id` is not found in the order book.
-    /// - The provided parameters are invalid (e.g., negative quantity).
-    /// - The attempted match is not feasible within the order book's current state.
-    ///
-    /// # Notes
-    /// - The `limit_price` parameter sets a constraint on the match price:
-    ///   - For Buy orders, it specifies the maximum acceptable price.
-    ///   - For Sell orders, it specifies the minimum acceptable price.
-    /// - If `limit_price` is not met during the matching process, the order will not be executed.
+    /// - `Err(OrderBookError)`: If the order cannot be matched due to an error.
     pub fn match_limit_order(
         &self,
         order_id: OrderId,
@@ -1950,12 +2009,42 @@ where
         side: Side,
         limit_price: u128,
     ) -> Result<MatchResult, OrderBookError> {
+        self.match_limit_order_with_user(order_id, quantity, side, limit_price, Hash32::zero())
+    }
+
+    /// Attempts to match a limit order with Self-Trade Prevention support.
+    ///
+    /// # Arguments
+    /// * `order_id` — Unique identifier for this limit order.
+    /// * `quantity` — Quantity to match.
+    /// * `side` — Buy or Sell.
+    /// * `limit_price` — Maximum (Buy) or minimum (Sell) acceptable price.
+    /// * `user_id` — Owner of the incoming order for STP checks.
+    ///   Pass `Hash32::zero()` to bypass STP.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::SelfTradePrevented`] when STP cancels the
+    /// taker before any fills occur.
+    pub fn match_limit_order_with_user(
+        &self,
+        order_id: OrderId,
+        quantity: u64,
+        side: Side,
+        limit_price: u128,
+        user_id: Hash32,
+    ) -> Result<MatchResult, OrderBookError> {
         trace!(
             "Order book {}: Matching limit order {} for {} at side {:?} with limit price {}",
             self.symbol, order_id, quantity, side, limit_price
         );
-        let match_result =
-            OrderBook::<T>::match_order(self, order_id, side, quantity, Some(limit_price))?;
+        let match_result = OrderBook::<T>::match_order_with_user(
+            self,
+            order_id,
+            side,
+            quantity,
+            Some(limit_price),
+            user_id,
+        )?;
 
         // Trigger trade listener if there are transactions
         if !match_result.transactions.transactions.is_empty()

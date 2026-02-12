@@ -509,6 +509,16 @@ where
             order.price()
         );
 
+        // STP user_id enforcement: when STP is enabled, all orders must carry
+        // a non-zero user_id so that self-trade checks can identify the owner.
+        if self.stp_mode != crate::orderbook::stp::STPMode::None
+            && order.user_id() == pricelevel::Hash32::zero()
+        {
+            return Err(OrderBookError::MissingUserId {
+                order_id: order.id(),
+            });
+        }
+
         // Tick size validation: reject orders whose price is not a multiple of tick_size
         if let Some(tick) = self.tick_size
             && tick > 0
@@ -608,12 +618,13 @@ where
         }
 
         self.cache.invalidate();
-        // Attempt to match the order immediately
-        let match_result = self.match_order(
+        // Attempt to match the order immediately (with STP user_id propagation)
+        let match_result = self.match_order_with_user(
             order.id(),
             order.side(),
             order.total_quantity(), // Use total quantity for matching
             Some(order.price()),
+            order.user_id(),
         )?;
 
         if !match_result.transactions.transactions.is_empty()

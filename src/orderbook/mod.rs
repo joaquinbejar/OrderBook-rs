@@ -14,6 +14,9 @@ pub mod matching;
 /// Aggregate statistics for order book analysis.
 pub mod statistics;
 
+/// Self-Trade Prevention (STP) types and logic.
+pub mod stp;
+
 /// Price level change events for real-time order book updates.
 pub mod book_change_event;
 mod cache;

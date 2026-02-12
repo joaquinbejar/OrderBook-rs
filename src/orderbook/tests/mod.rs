@@ -15,5 +15,6 @@ mod repricing;
 mod serialize_tests;
 mod snapshot;
 mod statistics_tests;
+mod stp;
 mod time_in_force;
 mod uuid;

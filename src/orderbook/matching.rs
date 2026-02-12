@@ -1,16 +1,24 @@
 //! Contains the core matching engine logic for the order book.
+//!
+//! The matching engine supports Self-Trade Prevention (STP) when configured
+//! via [`crate::STPMode`]. When STP is disabled (`STPMode::None`, the default),
+//! the matching hot path is unchanged with zero overhead.
 
 use crate::orderbook::book_change_event::PriceLevelChangedEvent;
 use crate::orderbook::pool::MatchingPool;
+use crate::orderbook::stp::{STPAction, check_stp_at_level};
 use crate::{OrderBook, OrderBookError};
-use pricelevel::{MatchResult, OrderId, Side};
+use pricelevel::{Hash32, MatchResult, OrderId, OrderUpdate, Side};
 use std::sync::atomic::Ordering;
 
 impl<T> OrderBook<T>
 where
     T: Clone + Send + Sync + Default + 'static,
 {
-    /// Highly optimized internal matching function
+    /// Highly optimized internal matching function.
+    ///
+    /// This is the backward-compatible entry point that delegates to
+    /// [`Self::match_order_with_user`] with `Hash32::zero()` (bypasses STP).
     ///
     /// # Performance Optimization
     /// Uses SkipMap which maintains prices in sorted order automatically.
@@ -27,9 +35,39 @@ where
         quantity: u64,
         limit_price: Option<u128>,
     ) -> Result<MatchResult, OrderBookError> {
+        self.match_order_with_user(order_id, side, quantity, limit_price, Hash32::zero())
+    }
+
+    /// Internal matching function with Self-Trade Prevention support.
+    ///
+    /// When `taker_user_id` is `Hash32::zero()` or `stp_mode` is `None`,
+    /// the STP check is skipped entirely (zero overhead fast path).
+    ///
+    /// # Arguments
+    /// * `order_id` — The taker (incoming) order's unique identifier.
+    /// * `side` — The side of the incoming order (`Buy` or `Sell`).
+    /// * `quantity` — The quantity to match.
+    /// * `limit_price` — Optional price limit (`None` for market orders).
+    /// * `taker_user_id` — The user ID of the incoming order for STP checks.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::InsufficientLiquidity`] for market orders
+    /// when no liquidity is available, or [`OrderBookError::SelfTradePrevented`]
+    /// when STP in `CancelTaker` or `CancelBoth` mode cancels the entire taker.
+    pub fn match_order_with_user(
+        &self,
+        order_id: OrderId,
+        side: Side,
+        quantity: u64,
+        limit_price: Option<u128>,
+        taker_user_id: Hash32,
+    ) -> Result<MatchResult, OrderBookError> {
         self.cache.invalidate();
         let mut match_result = MatchResult::new(order_id, quantity);
         let mut remaining_quantity = quantity;
+
+        // Determine if STP checks are needed for this match
+        let stp_active = self.stp_mode.is_enabled() && taker_user_id != Hash32::zero();
 
         // Choose the appropriate side for matching
         let match_side = match side {
@@ -62,6 +100,9 @@ where
             (filled, empty)
         });
 
+        // Track whether STP cancelled the taker
+        let mut stp_taker_cancelled = false;
+
         // Iterate through prices in optimal order (already sorted by SkipMap)
         // For buy orders: iterate asks in ascending order (best ask first)
         // For sell orders: iterate bids in descending order (best bid first)
@@ -85,47 +126,134 @@ where
             // Get price level value from the entry
             let price_level = entry.value();
 
-            // Perform the match at this price level
+            // --- STP pre-processing ---
+            // When STP is active, check for self-trade conflicts before matching.
+            // This is done per-price-level to handle partial fills correctly.
+            if stp_active {
+                let orders = price_level.iter_orders();
+                let action = check_stp_at_level(&orders, taker_user_id, self.stp_mode);
+
+                match action {
+                    STPAction::NoConflict => {
+                        // No self-trade at this level; match normally below
+                    }
+
+                    STPAction::CancelTaker { safe_quantity } => {
+                        // Match up to safe_quantity, then cancel the taker
+                        if safe_quantity > 0 {
+                            let match_qty = remaining_quantity.min(safe_quantity);
+                            let saved_remaining = remaining_quantity;
+                            let price_level_match = price_level.match_order(
+                                match_qty,
+                                order_id,
+                                &self.transaction_id_generator,
+                            );
+                            // Compute actual executed from the sub-match
+                            let executed =
+                                match_qty.saturating_sub(price_level_match.remaining_quantity);
+                            Self::process_level_match(
+                                &mut match_result,
+                                &price_level_match,
+                                &mut filled_orders,
+                                &mut remaining_quantity,
+                                price,
+                                price_level,
+                                side,
+                                &self.last_trade_price,
+                                &self.has_traded,
+                                &self.price_level_changed_listener,
+                                &mut empty_price_levels,
+                            );
+                            // Correct remaining: process_level_match set it to
+                            // sub-match remaining, but we need overall remaining.
+                            remaining_quantity = saved_remaining.saturating_sub(executed);
+                        }
+                        stp_taker_cancelled = true;
+                        break;
+                    }
+
+                    STPAction::CancelMaker { maker_order_ids } => {
+                        // Cancel same-user resting orders, then match normally
+                        for maker_id in &maker_order_ids {
+                            let _ = price_level.update_order(OrderUpdate::Cancel {
+                                order_id: *maker_id,
+                            });
+                            self.order_locations.remove(maker_id);
+                        }
+                        // If the level is now empty, mark for removal and continue
+                        if price_level.order_count() == 0 {
+                            empty_price_levels.push(price);
+                            continue;
+                        }
+                        // Fall through to normal matching below
+                    }
+
+                    STPAction::CancelBoth {
+                        safe_quantity,
+                        maker_order_id,
+                    } => {
+                        // Match up to safe_quantity, cancel the maker, then cancel taker
+                        if safe_quantity > 0 {
+                            let match_qty = remaining_quantity.min(safe_quantity);
+                            let saved_remaining = remaining_quantity;
+                            let price_level_match = price_level.match_order(
+                                match_qty,
+                                order_id,
+                                &self.transaction_id_generator,
+                            );
+                            let executed =
+                                match_qty.saturating_sub(price_level_match.remaining_quantity);
+                            Self::process_level_match(
+                                &mut match_result,
+                                &price_level_match,
+                                &mut filled_orders,
+                                &mut remaining_quantity,
+                                price,
+                                price_level,
+                                side,
+                                &self.last_trade_price,
+                                &self.has_traded,
+                                &self.price_level_changed_listener,
+                                &mut empty_price_levels,
+                            );
+                            // Correct remaining: process_level_match set it to
+                            // sub-match remaining, but we need overall remaining.
+                            remaining_quantity = saved_remaining.saturating_sub(executed);
+                        }
+                        // Cancel the maker order
+                        let _ = price_level.update_order(OrderUpdate::Cancel {
+                            order_id: maker_order_id,
+                        });
+                        self.order_locations.remove(&maker_order_id);
+                        if price_level.order_count() == 0 {
+                            empty_price_levels.push(price);
+                        }
+                        stp_taker_cancelled = true;
+                        break;
+                    }
+                }
+            }
+
+            // --- Normal matching (no STP conflict or after CancelMaker cleanup) ---
             let price_level_match = price_level.match_order(
                 remaining_quantity,
                 order_id,
                 &self.transaction_id_generator,
             );
 
-            // Process transactions if any occurred
-            if !price_level_match.transactions.as_vec().is_empty() {
-                // Update last trade price atomically
-                self.last_trade_price.store(price);
-                self.has_traded.store(true, Ordering::Relaxed);
-
-                // Add transactions to result
-                for transaction in price_level_match.transactions.as_vec() {
-                    match_result.add_transaction(*transaction);
-                }
-
-                // notify price level changes
-                if let Some(ref listener) = self.price_level_changed_listener {
-                    listener(PriceLevelChangedEvent {
-                        side: side.opposite(),
-                        price: price_level.price(),
-                        quantity: price_level.visible_quantity(),
-                    });
-                }
-            }
-
-            // Collect filled orders for batch removal
-            for &filled_order_id in &price_level_match.filled_order_ids {
-                match_result.add_filled_order_id(filled_order_id);
-                filled_orders.push(filled_order_id);
-            }
-
-            // Update remaining quantity
-            remaining_quantity = price_level_match.remaining_quantity;
-
-            // Check if price level is empty and mark for removal
-            if price_level.order_count() == 0 {
-                empty_price_levels.push(price);
-            }
+            Self::process_level_match(
+                &mut match_result,
+                &price_level_match,
+                &mut filled_orders,
+                &mut remaining_quantity,
+                price,
+                price_level,
+                side,
+                &self.last_trade_price,
+                &self.has_traded,
+                &self.price_level_changed_listener,
+                &mut empty_price_levels,
+            );
 
             // Early exit if order is fully matched
             if remaining_quantity == 0 {
@@ -139,8 +267,8 @@ where
         }
 
         // Batch remove filled orders from tracking
-        for order_id in &filled_orders {
-            self.order_locations.remove(order_id);
+        for filled_id in &filled_orders {
+            self.order_locations.remove(filled_id);
         }
 
         // Return vectors to pool for reuse
@@ -148,6 +276,17 @@ where
             pool.return_filled_orders_vec(filled_orders);
             pool.return_price_vec(empty_price_levels);
         });
+
+        // If STP cancelled the taker and no fills occurred at all, return STP error.
+        // When partial fills happened (remaining < original quantity), return Ok
+        // with the partial result so the caller can see what was executed.
+        if stp_taker_cancelled && remaining_quantity == quantity {
+            return Err(OrderBookError::SelfTradePrevented {
+                mode: self.stp_mode,
+                taker_order_id: order_id,
+                user_id: taker_user_id,
+            });
+        }
 
         // Check for insufficient liquidity in market orders
         if limit_price.is_none() && remaining_quantity == quantity {
@@ -163,6 +302,63 @@ where
         match_result.is_complete = remaining_quantity == 0;
 
         Ok(match_result)
+    }
+
+    /// Processes match results from a single price level, updating the
+    /// aggregate match result and bookkeeping vectors.
+    ///
+    /// Extracted to avoid code duplication between the normal path and
+    /// the STP safe-quantity pre-match path.
+    #[allow(clippy::too_many_arguments)]
+    fn process_level_match(
+        match_result: &mut MatchResult,
+        price_level_match: &MatchResult,
+        filled_orders: &mut Vec<OrderId>,
+        remaining_quantity: &mut u64,
+        price: u128,
+        price_level: &std::sync::Arc<pricelevel::PriceLevel>,
+        side: Side,
+        last_trade_price: &crossbeam::atomic::AtomicCell<u128>,
+        has_traded: &std::sync::atomic::AtomicBool,
+        price_level_changed_listener: &Option<
+            crate::orderbook::book_change_event::PriceLevelChangedListener,
+        >,
+        empty_price_levels: &mut Vec<u128>,
+    ) {
+        // Process transactions if any occurred
+        if !price_level_match.transactions.as_vec().is_empty() {
+            // Update last trade price atomically
+            last_trade_price.store(price);
+            has_traded.store(true, Ordering::Relaxed);
+
+            // Add transactions to result
+            for transaction in price_level_match.transactions.as_vec() {
+                match_result.add_transaction(*transaction);
+            }
+
+            // Notify price level changes
+            if let Some(listener) = price_level_changed_listener {
+                listener(PriceLevelChangedEvent {
+                    side: side.opposite(),
+                    price: price_level.price(),
+                    quantity: price_level.visible_quantity(),
+                });
+            }
+        }
+
+        // Collect filled orders for batch removal
+        for &filled_order_id in &price_level_match.filled_order_ids {
+            match_result.add_filled_order_id(filled_order_id);
+            filled_orders.push(filled_order_id);
+        }
+
+        // Update remaining quantity
+        *remaining_quantity = price_level_match.remaining_quantity;
+
+        // Check if price level is empty and mark for removal
+        if price_level.order_count() == 0 {
+            empty_price_levels.push(price);
+        }
     }
 
     /// Optimized peek match without memory pooling or sorting

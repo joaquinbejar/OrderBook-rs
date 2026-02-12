@@ -246,6 +246,7 @@ pub use orderbook::manager::{BookManager, BookManagerStd, BookManagerTokio};
 pub use orderbook::market_impact::{MarketImpact, OrderSimulation};
 pub use orderbook::snapshot::{EnrichedSnapshot, MetricFlags};
 pub use orderbook::statistics::{DepthStats, DistributionBin};
+pub use orderbook::stp::STPMode;
 pub use orderbook::trade::{TradeListener, TradeResult};
 pub use orderbook::{OrderBook, OrderBookError, OrderBookSnapshot};
 pub use utils::current_time_millis;
