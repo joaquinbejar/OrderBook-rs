@@ -192,6 +192,8 @@ fn create_trade_info_from_result(trade_result: &TradeResult) -> TradeInfo {
             transaction_id: tx.transaction_id.to_string(),
             maker_order_id: tx.maker_order_id.to_string(),
             taker_order_id: tx.taker_order_id.to_string(),
+            maker_fee: 0,
+            taker_fee: 0,
         })
         .collect();
 

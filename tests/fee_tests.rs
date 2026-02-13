@@ -241,6 +241,7 @@ fn test_fee_schedule_default_trait() {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
+    use std::sync::Mutex;
 
     #[test]
     fn test_fee_schedule_with_matching() {
@@ -297,5 +298,121 @@ mod integration_tests {
         let snapshot = book.create_snapshot(10);
         assert!(!snapshot.bids.is_empty() || !snapshot.asks.is_empty());
         assert_eq!(book.fee_schedule(), Some(schedule));
+    }
+
+    #[test]
+    fn test_trade_listener_receives_fees() {
+        // Capture trades via listener
+        let captured_trades = Arc::new(Mutex::new(Vec::<TradeResult>::new()));
+        let captured_clone = captured_trades.clone();
+
+        let listener: Arc<dyn Fn(&TradeResult) + Send + Sync> =
+            Arc::new(move |trade_result: &TradeResult| {
+                let mut trades = captured_clone.lock().unwrap();
+                trades.push(trade_result.clone());
+            });
+
+        let mut book = OrderBook::<()>::with_trade_listener("BTC/USD", listener);
+
+        // Set fee schedule: -2 bps maker rebate, 5 bps taker fee
+        let schedule = FeeSchedule::new(-2, 5);
+        book.set_fee_schedule(Some(schedule));
+
+        // Add a resting sell order (will become maker)
+        let sell_id = OrderId::new_uuid();
+        book.add_limit_order(sell_id, 10_000, 100, Side::Sell, TimeInForce::Gtc, None)
+            .unwrap();
+
+        // Submit market buy (taker) — will match and trigger listener
+        let buy_id = OrderId::new_uuid();
+        book.submit_market_order(buy_id, 50, Side::Buy).unwrap();
+
+        // Verify the captured trade has correct fees
+        let trades = captured_trades.lock().unwrap();
+        assert_eq!(trades.len(), 1);
+
+        let tr = &trades[0];
+        assert_eq!(tr.symbol, "BTC/USD");
+
+        // notional = 10_000 * 50 = 500_000
+        // maker fee: 500_000 * -2 / 10_000 = -100
+        assert_eq!(tr.total_maker_fees, -100);
+        // taker fee: 500_000 * 5 / 10_000 = 250
+        assert_eq!(tr.total_taker_fees, 250);
+        // total: -100 + 250 = 150
+        assert_eq!(tr.total_fees(), 150);
+    }
+
+    #[test]
+    fn test_trade_listener_receives_zero_fees_when_no_schedule() {
+        let captured_trades = Arc::new(Mutex::new(Vec::<TradeResult>::new()));
+        let captured_clone = captured_trades.clone();
+
+        let listener: Arc<dyn Fn(&TradeResult) + Send + Sync> =
+            Arc::new(move |trade_result: &TradeResult| {
+                let mut trades = captured_clone.lock().unwrap();
+                trades.push(trade_result.clone());
+            });
+
+        let book = OrderBook::<()>::with_trade_listener("BTC/USD", listener);
+        // No fee schedule configured (None by default)
+
+        let sell_id = OrderId::new_uuid();
+        book.add_limit_order(sell_id, 10_000, 100, Side::Sell, TimeInForce::Gtc, None)
+            .unwrap();
+
+        let buy_id = OrderId::new_uuid();
+        book.submit_market_order(buy_id, 50, Side::Buy).unwrap();
+
+        let trades = captured_trades.lock().unwrap();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].total_maker_fees, 0);
+        assert_eq!(trades[0].total_taker_fees, 0);
+        assert_eq!(trades[0].total_fees(), 0);
+    }
+
+    #[test]
+    fn test_trade_listener_fees_across_multiple_price_levels() {
+        let captured_trades = Arc::new(Mutex::new(Vec::<TradeResult>::new()));
+        let captured_clone = captured_trades.clone();
+
+        let listener: Arc<dyn Fn(&TradeResult) + Send + Sync> =
+            Arc::new(move |trade_result: &TradeResult| {
+                let mut trades = captured_clone.lock().unwrap();
+                trades.push(trade_result.clone());
+            });
+
+        let mut book = OrderBook::<()>::with_trade_listener("BTC/USD", listener);
+
+        // 10 bps taker, -3 bps maker rebate
+        let schedule = FeeSchedule::new(-3, 10);
+        book.set_fee_schedule(Some(schedule));
+
+        // Add two sell orders at different prices
+        let sell_id1 = OrderId::new_uuid();
+        book.add_limit_order(sell_id1, 1000, 10, Side::Sell, TimeInForce::Gtc, None)
+            .unwrap();
+
+        let sell_id2 = OrderId::new_uuid();
+        book.add_limit_order(sell_id2, 2000, 10, Side::Sell, TimeInForce::Gtc, None)
+            .unwrap();
+
+        // Market buy that sweeps both levels
+        let buy_id = OrderId::new_uuid();
+        book.submit_market_order(buy_id, 20, Side::Buy).unwrap();
+
+        let trades = captured_trades.lock().unwrap();
+        assert_eq!(trades.len(), 1);
+
+        let tr = &trades[0];
+        // tx1: notional = 1000 * 10 = 10_000
+        //   maker: -3 * 10_000 / 10_000 = -3
+        //   taker: 10 * 10_000 / 10_000 = 10
+        // tx2: notional = 2000 * 10 = 20_000
+        //   maker: -3 * 20_000 / 10_000 = -6
+        //   taker: 10 * 20_000 / 10_000 = 20
+        assert_eq!(tr.total_maker_fees, -9);
+        assert_eq!(tr.total_taker_fees, 30);
+        assert_eq!(tr.total_fees(), 21);
     }
 }
