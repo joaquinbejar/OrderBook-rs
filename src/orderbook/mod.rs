@@ -27,8 +27,11 @@ mod pool;
 mod private;
 pub mod snapshot;
 mod tests;
-/// Trade-related types including TradeResult and TradeListener for monitoring order executions.
+/// Enhanced trade result that includes symbol information
 pub mod trade;
+
+/// Fee schedule implementation for trading fees
+pub mod fees;
 
 /// Re-pricing logic for special order types (PeggedOrder and TrailingStop).
 #[cfg(feature = "special_orders")]
@@ -36,6 +39,7 @@ pub mod repricing;
 
 pub use book::OrderBook;
 pub use error::OrderBookError;
+pub use fees::FeeSchedule;
 pub use implied_volatility::{
     BlackScholes, IVConfig, IVError, IVParams, IVQuality, IVResult, OptionType, PriceSource,
     SolverConfig,

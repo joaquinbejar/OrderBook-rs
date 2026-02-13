@@ -248,7 +248,7 @@ pub use orderbook::snapshot::{EnrichedSnapshot, MetricFlags};
 pub use orderbook::statistics::{DepthStats, DistributionBin};
 pub use orderbook::stp::STPMode;
 pub use orderbook::trade::{TradeListener, TradeResult};
-pub use orderbook::{OrderBook, OrderBookError, OrderBookSnapshot};
+pub use orderbook::{FeeSchedule, OrderBook, OrderBookError, OrderBookSnapshot};
 pub use utils::current_time_millis;
 
 /// Legacy type alias for `OrderBook<()>` to maintain backward compatibility.

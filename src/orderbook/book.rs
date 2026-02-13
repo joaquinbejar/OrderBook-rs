@@ -2,6 +2,7 @@
 
 use super::cache::PriceLevelCache;
 use super::error::OrderBookError;
+use super::fees::FeeSchedule;
 use super::iterators::{LevelInfo, LevelsInRange, LevelsUntilDepth, LevelsWithCumulativeDepth};
 use super::market_impact::{MarketImpact, OrderSimulation};
 use super::snapshot::{EnrichedSnapshot, MetricFlags, OrderBookSnapshot, OrderBookSnapshotPackage};
@@ -111,6 +112,10 @@ pub struct OrderBook<T = ()> {
     /// the matching engine checks `user_id` on incoming and resting orders
     /// to prevent self-trades. Default is `STPMode::None` (disabled).
     pub(super) stp_mode: STPMode,
+
+    /// Fee schedule for calculating trading fees. When None, no fees are applied.
+    /// Fees are calculated during trade execution and can be configured per orderbook.
+    pub(super) fee_schedule: Option<FeeSchedule>,
 }
 
 impl<T> Serialize for OrderBook<T>
@@ -125,7 +130,7 @@ where
         use std::collections::HashMap;
         use std::sync::atomic::Ordering;
 
-        let mut state = serializer.serialize_struct("OrderBook", 9)?;
+        let mut state = serializer.serialize_struct("OrderBook", 10)?;
 
         // Serialize symbol
         state.serialize_field("symbol", &self.symbol)?;
@@ -168,6 +173,9 @@ where
 
         // Serialize cache
         state.serialize_field("cache", &self.cache)?;
+
+        // Serialize fee schedule
+        state.serialize_field("fee_schedule", &self.fee_schedule)?;
 
         // Skip trade_listener (cannot be serialized) and transaction_id_generator, _phantom
 
@@ -366,6 +374,7 @@ where
             min_order_size: None,
             max_order_size: None,
             stp_mode: STPMode::None,
+            fee_schedule: None,
         }
     }
 
@@ -432,6 +441,7 @@ where
             min_order_size: None,
             max_order_size: None,
             stp_mode: STPMode::None,
+            fee_schedule: None,
         }
     }
 
@@ -474,6 +484,7 @@ where
             min_order_size: None,
             max_order_size: None,
             stp_mode: STPMode::None,
+            fee_schedule: None,
         }
     }
 
@@ -495,6 +506,44 @@ where
     /// remove price level listener for this order book
     pub fn remove_price_level_listener(&mut self) {
         self.price_level_changed_listener = None;
+    }
+
+    /// Set the fee schedule for this order book
+    ///
+    /// The fee schedule defines maker and taker fees in basis points.
+    /// When set, fees will be calculated during trade execution.
+    /// Set to None to disable fees.
+    ///
+    /// # Arguments
+    ///
+    /// * `fee_schedule` - The fee schedule to use, or None to disable fees
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use orderbook_rs::{OrderBook, FeeSchedule};
+    ///
+    /// let mut book = OrderBook::<()>::new("BTC/USD");
+    ///
+    /// // Set standard fees: 2 bps maker rebate, 5 bps taker fee
+    /// let schedule = FeeSchedule::new(-2, 5);
+    /// book.set_fee_schedule(Some(schedule));
+    ///
+    /// // Disable fees
+    /// book.set_fee_schedule(None);
+    /// ```
+    pub fn set_fee_schedule(&mut self, fee_schedule: Option<FeeSchedule>) {
+        self.fee_schedule = fee_schedule;
+    }
+
+    /// Get the current fee schedule for this order book
+    ///
+    /// # Returns
+    ///
+    /// The current fee schedule, or None if no fees are configured
+    #[must_use]
+    pub fn fee_schedule(&self) -> Option<FeeSchedule> {
+        self.fee_schedule
     }
 
     /// Set the minimum price increment for orders.
