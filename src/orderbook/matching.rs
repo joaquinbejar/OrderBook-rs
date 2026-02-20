@@ -173,13 +173,20 @@ where
                     }
 
                     STPAction::CancelMaker { maker_order_ids } => {
-                        // Cancel same-user resting orders, then match normally
+                        // Cancel same-user resting orders, then match normally.
+                        // Look up each maker's user_id from the snapshot rather
+                        // than assuming it equals taker_user_id.
                         for maker_id in &maker_order_ids {
+                            let maker_user_id = orders
+                                .iter()
+                                .find(|o| o.id() == *maker_id)
+                                .map(|o| o.user_id())
+                                .unwrap_or(taker_user_id);
                             let _ = price_level.update_order(OrderUpdate::Cancel {
                                 order_id: *maker_id,
                             });
                             self.order_locations.remove(maker_id);
-                            self.untrack_user_order(taker_user_id, maker_id);
+                            self.untrack_user_order(maker_user_id, maker_id);
                         }
                         // If the level is now empty, mark for removal and continue
                         if price_level.order_count() == 0 {
@@ -221,12 +228,18 @@ where
                             // sub-match remaining, but we need overall remaining.
                             remaining_quantity = saved_remaining.saturating_sub(executed);
                         }
-                        // Cancel the maker order
+                        // Cancel the maker order — look up its user_id from the
+                        // snapshot rather than assuming it equals taker_user_id.
+                        let maker_user_id = orders
+                            .iter()
+                            .find(|o| o.id() == maker_order_id)
+                            .map(|o| o.user_id())
+                            .unwrap_or(taker_user_id);
                         let _ = price_level.update_order(OrderUpdate::Cancel {
                             order_id: maker_order_id,
                         });
                         self.order_locations.remove(&maker_order_id);
-                        self.untrack_user_order(taker_user_id, &maker_order_id);
+                        self.untrack_user_order(maker_user_id, &maker_order_id);
                         if price_level.order_count() == 0 {
                             empty_price_levels.push(price);
                         }
