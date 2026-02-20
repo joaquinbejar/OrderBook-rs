@@ -179,6 +179,7 @@ where
                                 order_id: *maker_id,
                             });
                             self.order_locations.remove(maker_id);
+                            self.untrack_user_order(taker_user_id, maker_id);
                         }
                         // If the level is now empty, mark for removal and continue
                         if price_level.order_count() == 0 {
@@ -225,6 +226,7 @@ where
                             order_id: maker_order_id,
                         });
                         self.order_locations.remove(&maker_order_id);
+                        self.untrack_user_order(taker_user_id, &maker_order_id);
                         if price_level.order_count() == 0 {
                             empty_price_levels.push(price);
                         }
@@ -269,6 +271,7 @@ where
         // Batch remove filled orders from tracking
         for filled_id in &filled_orders {
             self.order_locations.remove(filled_id);
+            self.untrack_order_by_id(filled_id);
         }
 
         // Return vectors to pool for reuse

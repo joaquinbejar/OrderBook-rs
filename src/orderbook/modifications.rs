@@ -205,6 +205,7 @@ where
                     if is_empty {
                         price_levels.remove(&price);
                         self.order_locations.remove(&order_id);
+                        self.untrack_order_by_id(&order_id);
                     }
 
                     self.cache.invalidate();
@@ -299,6 +300,8 @@ where
 
                         // Remove from order locations tracking
                         self.order_locations.remove(&order_id);
+                        // Remove from user_orders index
+                        self.untrack_order_by_id(&order_id);
                     }
 
                     // If price level is empty, remove it
@@ -473,9 +476,12 @@ where
 
             self.cache.invalidate();
             // If we got a result and the order was canceled
-            if result.is_some() {
+            if let Some(ref cancelled_order) = result {
                 // Remove the order from the locations map
                 self.order_locations.remove(&order_id);
+
+                // Remove the order from the user_orders index
+                self.untrack_user_order(cancelled_order.user_id(), &order_id);
 
                 // Unregister special orders from re-pricing tracking
                 #[cfg(feature = "special_orders")]
@@ -683,6 +689,9 @@ where
             }
             self.order_locations
                 .insert(unit_order_arc.id(), (price, side));
+
+            // Track the order in the user_orders index
+            self.track_user_order(order.user_id(), unit_order_arc.id());
 
             // Register special orders for re-pricing tracking
             #[cfg(feature = "special_orders")]

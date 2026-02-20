@@ -53,8 +53,9 @@ pub struct OrderBook<T = ()> {
     /// This avoids having to search through all price levels to find an order
     pub(super) order_locations: DashMap<OrderId, (u128, Side)>,
 
-    /// A concurrent map from user ID to their order IDs for fast lookup
-    #[allow(dead_code)]
+    /// A concurrent map from user ID to their order IDs for fast lookup.
+    /// Maintained by `add_order`, `cancel_order`, and the matching engine
+    /// to enable O(1) user-based mass cancellation.
     pub(super) user_orders: DashMap<Hash32, Vec<OrderId>>,
 
     /// Generator for unique transaction IDs
@@ -2200,6 +2201,7 @@ where
             drop(entry);
         }
         self.order_locations.clear();
+        self.user_orders.clear();
         self.has_traded.store(false, Ordering::Relaxed);
         self.last_trade_price.store(0);
         self.has_market_close.store(false, Ordering::Relaxed);
@@ -2219,12 +2221,13 @@ where
             self.asks.insert(price, arc_level);
         }
 
-        // Rebuild order location map with generic order types
+        // Rebuild order location and user_orders maps
         for item in self.bids.iter() {
             let price = *item.key();
             let level = item.value();
             for order in level.iter_orders() {
                 self.order_locations.insert(order.id(), (price, Side::Buy));
+                self.track_user_order(order.user_id(), order.id());
             }
         }
 
@@ -2233,6 +2236,7 @@ where
             let level = item.value();
             for order in level.iter_orders() {
                 self.order_locations.insert(order.id(), (price, Side::Sell));
+                self.track_user_order(order.user_id(), order.id());
             }
         }
 

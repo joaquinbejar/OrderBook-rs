@@ -201,27 +201,12 @@ where
             self.symbol, user_id
         );
 
-        let mut order_ids = Vec::new();
-
-        // Scan bids
-        for entry in self.bids.iter() {
-            let level = entry.value();
-            for order in level.iter_orders() {
-                if order.user_id() == user_id {
-                    order_ids.push(order.id());
-                }
-            }
-        }
-
-        // Scan asks
-        for entry in self.asks.iter() {
-            let level = entry.value();
-            for order in level.iter_orders() {
-                if order.user_id() == user_id {
-                    order_ids.push(order.id());
-                }
-            }
-        }
+        // O(1) lookup via the user_orders index — no full book scan needed.
+        let order_ids = self
+            .user_orders
+            .remove(&user_id)
+            .map(|(_, ids)| ids)
+            .unwrap_or_default();
 
         self.cancel_order_batch(&order_ids)
     }

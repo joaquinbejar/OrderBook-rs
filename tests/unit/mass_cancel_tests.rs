@@ -575,3 +575,188 @@ fn cancel_by_side_then_cancel_all() {
     let r2 = book.cancel_all_orders();
     assert_eq!(r2.cancelled_count(), 1); // only the ask remains
 }
+
+// ---------------------------------------------------------------------------
+// user_orders tracking consistency (Issue #13)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn user_orders_populated_on_add_and_cleared_on_cancel() {
+    let book = new_book();
+    let user = uid(1);
+    let id1 = OrderId::new_uuid();
+    let id2 = OrderId::new_uuid();
+
+    book.add_limit_order_with_user(id1, 100, 10, Side::Buy, TimeInForce::Gtc, user, None)
+        .expect("add1");
+    book.add_limit_order_with_user(id2, 101, 5, Side::Buy, TimeInForce::Gtc, user, None)
+        .expect("add2");
+
+    // cancel_orders_by_user should find both via the index
+    let result = book.cancel_orders_by_user(user);
+    assert_eq!(result.cancelled_count(), 2);
+    assert!(result.cancelled_order_ids().contains(&id1));
+    assert!(result.cancelled_order_ids().contains(&id2));
+
+    // Second call should return 0 — index is clean
+    let result2 = book.cancel_orders_by_user(user);
+    assert_eq!(result2.cancelled_count(), 0);
+}
+
+#[test]
+fn user_orders_cleaned_after_individual_cancel() {
+    let book = new_book();
+    let user = uid(1);
+    let id1 = OrderId::new_uuid();
+    let id2 = OrderId::new_uuid();
+
+    book.add_limit_order_with_user(id1, 100, 10, Side::Buy, TimeInForce::Gtc, user, None)
+        .expect("add1");
+    book.add_limit_order_with_user(id2, 101, 5, Side::Buy, TimeInForce::Gtc, user, None)
+        .expect("add2");
+
+    // Cancel one order individually
+    let _ = book.cancel_order(id1);
+
+    // cancel_orders_by_user should only find the remaining one
+    let result = book.cancel_orders_by_user(user);
+    assert_eq!(result.cancelled_count(), 1);
+    assert!(result.cancelled_order_ids().contains(&id2));
+}
+
+#[test]
+fn user_orders_cleaned_after_full_match() {
+    let book = new_book();
+    let maker_user = uid(1);
+    let maker_id = OrderId::new_uuid();
+
+    // Place a resting sell order
+    book.add_limit_order_with_user(
+        maker_id,
+        100,
+        10,
+        Side::Sell,
+        TimeInForce::Gtc,
+        maker_user,
+        None,
+    )
+    .expect("maker");
+
+    // Submit a buy that fully fills the maker
+    let _ = book.submit_market_order(OrderId::new_uuid(), 10, Side::Buy);
+
+    // The maker's order should be gone from the user_orders index
+    let result = book.cancel_orders_by_user(maker_user);
+    assert_eq!(result.cancelled_count(), 0);
+}
+
+#[test]
+fn user_orders_partial_match_keeps_resting_order() {
+    let book = new_book();
+    let maker_user = uid(1);
+    let maker_id = OrderId::new_uuid();
+
+    // Place a resting sell order with qty 20
+    book.add_limit_order_with_user(
+        maker_id,
+        100,
+        20,
+        Side::Sell,
+        TimeInForce::Gtc,
+        maker_user,
+        None,
+    )
+    .expect("maker");
+
+    // Partially fill 5 of the 20
+    let _ = book.submit_market_order(OrderId::new_uuid(), 5, Side::Buy);
+
+    // The remaining order should still be in the user_orders index
+    let result = book.cancel_orders_by_user(maker_user);
+    assert_eq!(result.cancelled_count(), 1);
+    assert!(result.cancelled_order_ids().contains(&maker_id));
+}
+
+#[test]
+fn multi_user_cancel_does_not_affect_other_users() {
+    let book = new_book();
+    let user_a = uid(1);
+    let user_b = uid(2);
+
+    let a1 = OrderId::new_uuid();
+    let b1 = OrderId::new_uuid();
+    let b2 = OrderId::new_uuid();
+
+    book.add_limit_order_with_user(a1, 100, 10, Side::Buy, TimeInForce::Gtc, user_a, None)
+        .expect("a1");
+    book.add_limit_order_with_user(b1, 99, 5, Side::Buy, TimeInForce::Gtc, user_b, None)
+        .expect("b1");
+    book.add_limit_order_with_user(b2, 98, 3, Side::Buy, TimeInForce::Gtc, user_b, None)
+        .expect("b2");
+
+    // Cancel user_a
+    let ra = book.cancel_orders_by_user(user_a);
+    assert_eq!(ra.cancelled_count(), 1);
+
+    // user_b's orders should still be there
+    let rb = book.cancel_orders_by_user(user_b);
+    assert_eq!(rb.cancelled_count(), 2);
+}
+
+#[test]
+fn cancel_all_clears_all_user_entries() {
+    let book = new_book();
+    let user_a = uid(1);
+    let user_b = uid(2);
+
+    book.add_limit_order_with_user(
+        OrderId::new_uuid(),
+        100,
+        10,
+        Side::Buy,
+        TimeInForce::Gtc,
+        user_a,
+        None,
+    )
+    .expect("a");
+    book.add_limit_order_with_user(
+        OrderId::new_uuid(),
+        200,
+        5,
+        Side::Sell,
+        TimeInForce::Gtc,
+        user_b,
+        None,
+    )
+    .expect("b");
+
+    let _ = book.cancel_all_orders();
+
+    // Both users should have empty indices now
+    assert_eq!(book.cancel_orders_by_user(user_a).cancelled_count(), 0);
+    assert_eq!(book.cancel_orders_by_user(user_b).cancelled_count(), 0);
+}
+
+#[test]
+fn stp_cancel_maker_cleans_user_orders() {
+    let book: OrderBook<()> = OrderBook::with_stp_mode("STP", STPMode::CancelMaker);
+    let user = uid(1);
+
+    // Place a resting sell order
+    let maker_id = OrderId::new_uuid();
+    book.add_limit_order_with_user(maker_id, 100, 10, Side::Sell, TimeInForce::Gtc, user, None)
+        .expect("maker");
+
+    // Same user submits a buy that would self-trade — CancelMaker removes the resting order
+    let taker_id = OrderId::new_uuid();
+    let _ =
+        book.add_limit_order_with_user(taker_id, 100, 10, Side::Buy, TimeInForce::Gtc, user, None);
+
+    // The cancelled maker should be removed from user_orders.
+    // The taker may or may not rest depending on matching, but the
+    // maker should definitely be gone.
+    let result = book.cancel_orders_by_user(user);
+    // The maker was cancelled by STP; the taker rests (if not fully filled).
+    // We just verify the maker_id is NOT in the remaining user_orders.
+    assert!(!result.cancelled_order_ids().contains(&maker_id));
+}

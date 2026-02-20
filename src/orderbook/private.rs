@@ -65,7 +65,65 @@ where
         // The location is stored as (price, side) for efficient retrieval in cancel_order
         self.order_locations.insert(order_id, (price, side));
 
+        // Track the order in the user_orders index for efficient user-based cancellation
+        self.track_user_order(order.user_id(), order_id);
+
         Ok(order)
+    }
+
+    /// Register an order in the `user_orders` index.
+    ///
+    /// Orders with `Hash32::zero()` (anonymous) are still tracked so that
+    /// `cancel_all_orders` and `cancel_orders_by_side` work correctly.
+    #[inline]
+    pub(super) fn track_user_order(
+        &self,
+        user_id: pricelevel::Hash32,
+        order_id: pricelevel::OrderId,
+    ) {
+        self.user_orders.entry(user_id).or_default().push(order_id);
+    }
+
+    /// Remove an order from the `user_orders` index.
+    ///
+    /// If the user's order list becomes empty, the entry is removed entirely.
+    #[inline]
+    pub(super) fn untrack_user_order(
+        &self,
+        user_id: pricelevel::Hash32,
+        order_id: &pricelevel::OrderId,
+    ) {
+        if let Some(mut entry) = self.user_orders.get_mut(&user_id) {
+            entry.value_mut().retain(|id| id != order_id);
+            if entry.value().is_empty() {
+                drop(entry);
+                self.user_orders.remove(&user_id);
+            }
+        }
+    }
+
+    /// Remove an order from the `user_orders` index by scanning all entries.
+    ///
+    /// This is used in the matching engine where filled orders are already
+    /// removed from the price level and their `user_id` is no longer directly
+    /// accessible. The scan is efficient in practice because:
+    /// - Each order belongs to exactly one user (early return on first match)
+    /// - The number of active users is typically small
+    pub(super) fn untrack_order_by_id(&self, order_id: &pricelevel::OrderId) {
+        let mut user_to_remove = None;
+        for mut entry in self.user_orders.iter_mut() {
+            let ids = entry.value_mut();
+            if let Some(pos) = ids.iter().position(|id| id == order_id) {
+                ids.swap_remove(pos);
+                if ids.is_empty() {
+                    user_to_remove = Some(*entry.key());
+                }
+                break;
+            }
+        }
+        if let Some(user_id) = user_to_remove {
+            self.user_orders.remove(&user_id);
+        }
     }
 
     /// Convert `OrderType<T>` to OrderType<()> for compatibility with current PriceLevel API
