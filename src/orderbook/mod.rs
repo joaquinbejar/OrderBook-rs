@@ -36,6 +36,10 @@ pub mod fees;
 /// Mass cancel operations for bulk order removal.
 pub mod mass_cancel;
 
+/// NATS JetStream trade event publisher.
+#[cfg(feature = "nats")]
+pub mod nats;
+
 /// Re-pricing logic for special order types (PeggedOrder and TrailingStop).
 #[cfg(feature = "special_orders")]
 pub mod repricing;
@@ -50,6 +54,8 @@ pub use implied_volatility::{
 pub use iterators::LevelInfo;
 pub use market_impact::{MarketImpact, OrderSimulation};
 pub use mass_cancel::MassCancelResult;
+#[cfg(feature = "nats")]
+pub use nats::NatsTradePublisher;
 #[cfg(feature = "special_orders")]
 pub use repricing::{RepricingOperations, RepricingResult, SpecialOrderTracker};
 pub use snapshot::{

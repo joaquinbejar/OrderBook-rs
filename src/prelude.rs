@@ -41,6 +41,10 @@ pub use crate::orderbook::trade::{
 // Order types and enums from pricelevel
 pub use pricelevel::{OrderId, OrderType, Side, TimeInForce};
 
+// NATS integration types
+#[cfg(feature = "nats")]
+pub use crate::orderbook::nats::NatsTradePublisher;
+
 // Utility functions
 pub use crate::utils::current_time_millis;
 

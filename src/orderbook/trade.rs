@@ -5,10 +5,11 @@
 ******************************************************************************/
 use crate::orderbook::fees::FeeSchedule;
 use pricelevel::MatchResult;
+use serde::Serialize;
 use std::sync::Arc;
 
 /// Enhanced trade result that includes symbol information and fee details
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TradeResult {
     /// The symbol this trade result belongs to
     pub symbol: String,

@@ -237,6 +237,8 @@ pub mod orderbook;
 pub mod prelude;
 mod utils;
 
+#[cfg(feature = "nats")]
+pub use orderbook::NatsTradePublisher;
 pub use orderbook::implied_volatility::{
     BlackScholes, IVConfig, IVError, IVParams, IVQuality, IVResult, OptionType, PriceSource,
     SolverConfig,

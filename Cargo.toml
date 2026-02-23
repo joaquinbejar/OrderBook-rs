@@ -39,10 +39,13 @@ serde = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt"] }
 bitflags = { workspace = true }
+async-nats = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
 
 [features]
 default = []
 special_orders = []
+nats = ["dep:async-nats", "dep:bytes"]
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -81,3 +84,5 @@ crossbeam-skiplist = "0.1"
 crossbeam = "0.8"
 bitflags = { version = "2.10", features = ["serde"] }
 tracing-subscriber = "0.3"
+async-nats = "0.46"
+bytes = "1"
