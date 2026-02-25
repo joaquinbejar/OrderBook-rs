@@ -44,7 +44,8 @@ const BASE_RETRY_DELAY_MS: u64 = 10;
 ///
 /// - **publish_count** — number of successfully published messages
 /// - **error_count** — number of permanently failed publish attempts
-/// - **sequence** — monotonically increasing sequence number included in each message
+/// - **sequence** — monotonically increasing sequence number; each publish
+///   (symbol-specific and aggregate) receives its own unique value
 ///
 /// # Example
 ///
@@ -57,8 +58,9 @@ const BASE_RETRY_DELAY_MS: u64 = 10;
 /// let handle = tokio::runtime::Handle::current();
 ///
 /// let publisher = NatsTradePublisher::new(jetstream, "trades".to_string(), handle);
-/// let listener = publisher.into_listener();
+/// let (handle, listener) = publisher.into_listener();
 /// // Use `listener` as the OrderBook's trade_listener
+/// // Use `handle` to read metrics: handle.publish_count(), handle.error_count()
 /// # Ok(())
 /// # }
 /// ```
@@ -126,41 +128,43 @@ impl NatsTradePublisher {
     /// Returns the number of successfully published messages.
     #[must_use]
     #[inline]
-    pub fn publish_count(self: &Arc<Self>) -> u64 {
+    pub fn publish_count(&self) -> u64 {
         self.publish_count.load(Ordering::Relaxed)
     }
 
     /// Returns the number of permanently failed publish attempts.
     #[must_use]
     #[inline]
-    pub fn error_count(self: &Arc<Self>) -> u64 {
+    pub fn error_count(&self) -> u64 {
         self.error_count.load(Ordering::Relaxed)
     }
 
     /// Returns the current sequence number (next value to be assigned).
     #[must_use]
     #[inline]
-    pub fn sequence(self: &Arc<Self>) -> u64 {
+    pub fn sequence(&self) -> u64 {
         self.sequence.load(Ordering::Relaxed)
     }
 
     /// Convert this publisher into a [`TradeListener`] callback.
     ///
     /// The returned listener serializes each [`TradeResult`] to JSON, assigns
-    /// a sequence number, and spawns an async task that publishes to both
-    /// `{prefix}.{symbol}` and `{prefix}.all` subjects on the configured
-    /// JetStream context.
+    /// a unique sequence number per publish, and spawns an async task that
+    /// publishes to both `{prefix}.{symbol}` and `{prefix}.all` subjects on
+    /// the configured JetStream context.
     ///
     /// Publishing is non-blocking: the listener returns immediately after
     /// spawning the async task, keeping the matching engine hot path fast.
     ///
     /// # Returns
     ///
-    /// An `Arc<dyn Fn(&TradeResult) + Send + Sync>` suitable for use as
-    /// [`OrderBook::trade_listener`].
-    pub fn into_listener(self) -> TradeListener {
+    /// A tuple of `(Arc<NatsTradePublisher>, TradeListener)`. The `Arc` handle
+    /// allows the caller to read metrics (`publish_count`, `error_count`,
+    /// `sequence`) after wiring the listener into the order book.
+    pub fn into_listener(self) -> (Arc<Self>, TradeListener) {
         let publisher = Arc::new(self);
-        Arc::new(move |trade_result: &TradeResult| {
+        let handle = Arc::clone(&publisher);
+        let listener = Arc::new(move |trade_result: &TradeResult| {
             let payload = match serde_json::to_vec(trade_result) {
                 Ok(bytes) => bytes,
                 Err(e) => {
@@ -170,7 +174,8 @@ impl NatsTradePublisher {
                 }
             };
 
-            let seq = publisher.sequence.fetch_add(1, Ordering::Relaxed);
+            let symbol_seq = publisher.sequence.fetch_add(1, Ordering::Relaxed);
+            let all_seq = publisher.sequence.fetch_add(1, Ordering::Relaxed);
             let symbol_subject = format!("{}.{}", publisher.subject_prefix, trade_result.symbol);
             let all_subject = format!("{}.all", publisher.subject_prefix);
 
@@ -182,38 +187,44 @@ impl NatsTradePublisher {
                 symbol_subject,
                 all_subject,
                 payload_bytes,
-                seq,
+                symbol_seq,
+                all_seq,
             ));
-        })
+        });
+        (handle, listener)
     }
 
     /// Publish a trade event to both the symbol-specific and aggregate subjects
     /// with retry logic for transient failures.
+    ///
+    /// Each subject receives its own unique sequence number in the
+    /// `Nats-Sequence` header so consumers can deduplicate per-stream without
+    /// collisions between the symbol and aggregate streams.
     async fn publish_with_retry(
         publisher: Arc<Self>,
         symbol_subject: String,
         all_subject: String,
         payload: bytes::Bytes,
-        seq: u64,
+        symbol_seq: u64,
+        all_seq: u64,
     ) {
-        let mut headers = async_nats::HeaderMap::new();
-        headers.insert("Nats-Sequence", seq.to_string().as_str());
+        let mut symbol_headers = async_nats::HeaderMap::new();
+        symbol_headers.insert("Nats-Sequence", symbol_seq.to_string().as_str());
+
+        let mut all_headers = async_nats::HeaderMap::new();
+        all_headers.insert("Nats-Sequence", all_seq.to_string().as_str());
 
         // Publish to symbol-specific subject
-        let symbol_ok = Self::publish_single(
-            &publisher,
-            &symbol_subject,
-            payload.clone(),
-            headers.clone(),
-        )
-        .await;
+        let symbol_ok =
+            Self::publish_single(&publisher, &symbol_subject, payload.clone(), symbol_headers)
+                .await;
 
         // Publish to aggregate subject
-        let all_ok = Self::publish_single(&publisher, &all_subject, payload, headers).await;
+        let all_ok = Self::publish_single(&publisher, &all_subject, payload, all_headers).await;
 
         if symbol_ok && all_ok {
             publisher.publish_count.fetch_add(1, Ordering::Relaxed);
-            trace!(seq, symbol = %symbol_subject, "trade event published to NATS");
+            trace!(symbol_seq, all_seq, symbol = %symbol_subject, "trade event published to NATS");
         }
     }
 
@@ -262,9 +273,12 @@ impl NatsTradePublisher {
                 }
             }
 
-            // Exponential backoff: 10ms, 20ms, 40ms, ...
+            // Exponential backoff: 10ms, 20ms, 40ms, ... clamped to avoid
+            // panic from over-shifting when max_retries is large.
             if attempt + 1 < max_attempts {
-                let delay_ms = BASE_RETRY_DELAY_MS.saturating_mul(1u64 << attempt);
+                let shift = u32::min(attempt, 63);
+                let delay_ms =
+                    BASE_RETRY_DELAY_MS.saturating_mul(1u64.checked_shl(shift).unwrap_or(u64::MAX));
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
         }
@@ -368,9 +382,23 @@ mod tests {
     fn test_exponential_backoff_calculation() {
         // Verify the backoff sequence: 10, 20, 40, 80, ...
         for attempt in 0u32..4 {
-            let delay = BASE_RETRY_DELAY_MS.saturating_mul(1u64 << attempt);
+            let shift = u32::min(attempt, 63);
+            let delay =
+                BASE_RETRY_DELAY_MS.saturating_mul(1u64.checked_shl(shift).unwrap_or(u64::MAX));
             let expected = BASE_RETRY_DELAY_MS * 2u64.pow(attempt);
             assert_eq!(delay, expected);
+        }
+    }
+
+    #[test]
+    fn test_exponential_backoff_high_retry_count_does_not_panic() {
+        // With max_retries >= 64, the shift must not panic.
+        for attempt in [63u32, 64, 100, u32::MAX] {
+            let shift = u32::min(attempt, 63);
+            let delay =
+                BASE_RETRY_DELAY_MS.saturating_mul(1u64.checked_shl(shift).unwrap_or(u64::MAX));
+            // All values saturate rather than panic
+            assert!(delay >= BASE_RETRY_DELAY_MS);
         }
     }
 
