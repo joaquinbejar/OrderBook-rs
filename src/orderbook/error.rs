@@ -106,6 +106,20 @@ pub enum OrderBookError {
         /// The user ID that triggered the STP check
         user_id: pricelevel::Hash32,
     },
+
+    /// Failed to publish a trade event to NATS JetStream.
+    #[cfg(feature = "nats")]
+    NatsPublishError {
+        /// Description of the publish failure
+        message: String,
+    },
+
+    /// Failed to serialize a trade event for NATS publishing.
+    #[cfg(feature = "nats")]
+    NatsSerializationError {
+        /// Description of the serialization failure
+        message: String,
+    },
 }
 
 impl fmt::Display for OrderBookError {
@@ -182,6 +196,14 @@ impl fmt::Display for OrderBookError {
                     f,
                     "self-trade prevented ({mode}): taker {taker_order_id}, user {user_id}"
                 )
+            }
+            #[cfg(feature = "nats")]
+            OrderBookError::NatsPublishError { message } => {
+                write!(f, "nats publish error: {message}")
+            }
+            #[cfg(feature = "nats")]
+            OrderBookError::NatsSerializationError { message } => {
+                write!(f, "nats serialization error: {message}")
             }
         }
     }
