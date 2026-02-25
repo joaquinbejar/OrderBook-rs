@@ -39,7 +39,10 @@ pub use crate::orderbook::trade::{
 };
 
 // Order types and enums from pricelevel
-pub use pricelevel::{OrderId, OrderType, Side, TimeInForce};
+pub use pricelevel::{Id, OrderType, Side, TimeInForce};
+
+// Legacy alias for backward compatibility
+pub use crate::OrderId;
 
 // NATS integration types
 #[cfg(feature = "nats")]

@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion};
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce};
+use pricelevel::{Id, Side, TimeInForce};
 use std::hint::black_box;
 
 /// Register all benchmarks for updating orders in an order book
@@ -32,7 +32,7 @@ pub fn register_benchmarks(c: &mut Criterion) {
                 // This is just a placeholder based on the OrderBook API
                 let update = pricelevel::OrderUpdate::UpdateQuantity {
                     order_id: id,
-                    new_quantity: 20,
+                    new_quantity: pricelevel::Quantity::new(20),
                 };
                 let _ = black_box(order_book.update_order(update));
             }
@@ -67,7 +67,7 @@ fn setup_order_book_with_orders(order_count: u64) -> OrderBook {
 
     // Add orders to the book
     for _i in 0..order_count {
-        let id = OrderId::new_uuid();
+        let id = Id::new_uuid();
         order_book
             .add_limit_order(id, 1000, 10, Side::Buy, TimeInForce::Gtc, None)
             .unwrap();
@@ -77,7 +77,7 @@ fn setup_order_book_with_orders(order_count: u64) -> OrderBook {
 }
 
 // Helper function to collect some order IDs from the book
-fn collect_order_ids(order_book: &OrderBook, count: u64) -> Vec<OrderId> {
+fn collect_order_ids(order_book: &OrderBook, count: u64) -> Vec<Id> {
     // In a real implementation, you would extract these from the order book
     // This is a placeholder function
     let all_orders = order_book.get_all_orders();

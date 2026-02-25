@@ -1,7 +1,9 @@
 //! Additional unit tests to improve test coverage for book.rs
 //! These tests target specific uncovered lines and edge cases
 
-use pricelevel::{Hash32, OrderId, OrderType, PegReferenceType, Side, TimeInForce};
+use pricelevel::{
+    Hash32, Id, OrderType, PegReferenceType, Price, Quantity, Side, TimeInForce, TimestampMs,
+};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct TestExtraFields {
@@ -56,7 +58,7 @@ mod tests {
         assert_eq!(book.best_bid(), None);
 
         // Add a bid and test cache update
-        let order_id = OrderId::from_u64(1);
+        let order_id = Id::from_u64(1);
         let _ = book.add_limit_order(order_id, 100, 10, Side::Buy, TimeInForce::Gtc, None);
 
         // Clear cache to force recalculation
@@ -76,7 +78,7 @@ mod tests {
         assert_eq!(book.best_ask(), None);
 
         // Add an ask and test cache update
-        let order_id = OrderId::from_u64(1);
+        let order_id = Id::from_u64(1);
         let _ = book.add_limit_order(order_id, 200, 10, Side::Sell, TimeInForce::Gtc, None);
 
         // Clear cache to force recalculation
@@ -96,18 +98,18 @@ mod tests {
         assert_eq!(book.mid_price(), None);
 
         // Only bid
-        let bid_id = OrderId::from_u64(1);
+        let bid_id = Id::from_u64(1);
         let _ = book.add_limit_order(bid_id, 100, 10, Side::Buy, TimeInForce::Gtc, None);
         assert_eq!(book.mid_price(), None);
 
         // Only ask
         let book2 = OrderBook::<()>::new("TEST2");
-        let ask_id = OrderId::from_u64(2);
+        let ask_id = Id::from_u64(2);
         let _ = book2.add_limit_order(ask_id, 200, 10, Side::Sell, TimeInForce::Gtc, None);
         assert_eq!(book2.mid_price(), None);
 
         // Both bid and ask
-        let ask_id2 = OrderId::from_u64(3);
+        let ask_id2 = Id::from_u64(3);
         let _ = book.add_limit_order(ask_id2, 200, 10, Side::Sell, TimeInForce::Gtc, None);
         assert_eq!(book.mid_price(), Some(150.0));
     }
@@ -128,25 +130,25 @@ mod tests {
         assert_eq!(book.spread(), None);
 
         // Only bid
-        let bid_id = OrderId::from_u64(1);
+        let bid_id = Id::from_u64(1);
         let _ = book.add_limit_order(bid_id, 100, 10, Side::Buy, TimeInForce::Gtc, None);
         assert_eq!(book.spread(), None);
 
         // Only ask
         let book2 = OrderBook::<()>::new("TEST2");
-        let ask_id = OrderId::from_u64(2);
+        let ask_id = Id::from_u64(2);
         let _ = book2.add_limit_order(ask_id, 200, 10, Side::Sell, TimeInForce::Gtc, None);
         assert_eq!(book2.spread(), None);
 
         // Both - normal case
-        let ask_id2 = OrderId::from_u64(3);
+        let ask_id2 = Id::from_u64(3);
         let _ = book.add_limit_order(ask_id2, 200, 10, Side::Sell, TimeInForce::Gtc, None);
         assert_eq!(book.spread(), Some(100));
 
         // Edge case: ask lower than bid (should use saturating_sub)
         let book3 = OrderBook::<()>::new("TEST3");
-        let bid_id3 = OrderId::from_u64(4);
-        let ask_id3 = OrderId::from_u64(5);
+        let bid_id3 = Id::from_u64(4);
+        let ask_id3 = Id::from_u64(5);
         let _ = book3.add_limit_order(bid_id3, 200, 10, Side::Buy, TimeInForce::Gtc, None);
         let _ = book3.add_limit_order(ask_id3, 100, 10, Side::Sell, TimeInForce::Gtc, None);
         // This should execute immediately, but if it didn't, saturating_sub would handle it
@@ -171,14 +173,14 @@ mod tests {
         let book = OrderBook::<()>::new("TEST");
 
         // Non-existent order ID
-        let non_existent_id = OrderId::from_u64(999);
+        let non_existent_id = Id::from_u64(999);
         assert_eq!(book.get_order(non_existent_id), None);
 
         // Add an order, then test with different ID
-        let order_id = OrderId::from_u64(1);
+        let order_id = Id::from_u64(1);
         let _ = book.add_limit_order(order_id, 100, 10, Side::Buy, TimeInForce::Gtc, None);
 
-        let different_id = OrderId::from_u64(2);
+        let different_id = Id::from_u64(2);
         assert_eq!(book.get_order(different_id), None);
     }
 
@@ -189,12 +191,12 @@ mod tests {
 
         // Test Standard order conversion
         let standard_order = OrderType::Standard {
-            id: OrderId::from_u64(1),
-            price: 100,
-            quantity: 10,
+            id: Id::from_u64(1),
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 1000,
+            timestamp: TimestampMs::new(1000),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -211,11 +213,11 @@ mod tests {
                 time_in_force,
                 extra_fields,
             } => {
-                assert_eq!(id, OrderId::from_u64(1));
-                assert_eq!(price, 100);
-                assert_eq!(quantity, 10);
+                assert_eq!(id, Id::from_u64(1));
+                assert_eq!(price, Price::new(100));
+                assert_eq!(quantity, Quantity::new(10));
                 assert_eq!(side, Side::Buy);
-                assert_eq!(timestamp, 1000);
+                assert_eq!(timestamp, TimestampMs::new(1000));
                 assert_eq!(time_in_force, TimeInForce::Gtc);
                 assert_eq!(extra_fields, TestExtraFields::default());
             }
@@ -224,13 +226,13 @@ mod tests {
 
         // Test IcebergOrder conversion
         let iceberg_order = OrderType::IcebergOrder {
-            id: OrderId::from_u64(2),
-            price: 200,
-            visible_quantity: 5,
-            hidden_quantity: 15,
+            id: Id::from_u64(2),
+            price: Price::new(200),
+            visible_quantity: Quantity::new(5),
+            hidden_quantity: Quantity::new(15),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp: 2000,
+            timestamp: TimestampMs::new(2000),
             time_in_force: TimeInForce::Ioc,
             extra_fields: (),
         };
@@ -248,12 +250,12 @@ mod tests {
                 time_in_force,
                 extra_fields,
             } => {
-                assert_eq!(id, OrderId::from_u64(2));
-                assert_eq!(price, 200);
-                assert_eq!(visible_quantity, 5);
-                assert_eq!(hidden_quantity, 15);
+                assert_eq!(id, Id::from_u64(2));
+                assert_eq!(price, Price::new(200));
+                assert_eq!(visible_quantity, Quantity::new(5));
+                assert_eq!(hidden_quantity, Quantity::new(15));
                 assert_eq!(side, Side::Sell);
-                assert_eq!(timestamp, 2000);
+                assert_eq!(timestamp, TimestampMs::new(2000));
                 assert_eq!(time_in_force, TimeInForce::Ioc);
                 assert_eq!(extra_fields, TestExtraFields::default());
             }
@@ -262,12 +264,12 @@ mod tests {
 
         // Test PostOnly conversion
         let post_only_order = OrderType::PostOnly {
-            id: OrderId::from_u64(3),
-            price: 300,
-            quantity: 20,
+            id: Id::from_u64(3),
+            price: Price::new(300),
+            quantity: Quantity::new(20),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 3000,
+            timestamp: TimestampMs::new(3000),
             time_in_force: TimeInForce::Fok,
             extra_fields: (),
         };
@@ -284,11 +286,11 @@ mod tests {
                 time_in_force,
                 extra_fields,
             } => {
-                assert_eq!(id, OrderId::from_u64(3));
-                assert_eq!(price, 300);
-                assert_eq!(quantity, 20);
+                assert_eq!(id, Id::from_u64(3));
+                assert_eq!(price, Price::new(300));
+                assert_eq!(quantity, Quantity::new(20));
                 assert_eq!(side, Side::Buy);
-                assert_eq!(timestamp, 3000);
+                assert_eq!(timestamp, TimestampMs::new(3000));
                 assert_eq!(time_in_force, TimeInForce::Fok);
                 assert_eq!(extra_fields, TestExtraFields::default());
             }
@@ -302,15 +304,15 @@ mod tests {
         let book = OrderBook::<TestExtraFields>::new("TEST");
 
         let trailing_stop_order = OrderType::TrailingStop {
-            id: OrderId::from_u64(4),
-            price: 400,
-            quantity: 25,
+            id: Id::from_u64(4),
+            price: Price::new(400),
+            quantity: Quantity::new(25),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp: 4000,
+            timestamp: TimestampMs::new(4000),
             time_in_force: TimeInForce::Gtc,
-            trail_amount: 10,
-            last_reference_price: 390,
+            trail_amount: Quantity::new(10),
+            last_reference_price: Price::new(390),
             extra_fields: (),
         };
 
@@ -328,14 +330,14 @@ mod tests {
                 last_reference_price,
                 extra_fields,
             } => {
-                assert_eq!(id, OrderId::from_u64(4));
-                assert_eq!(price, 400);
-                assert_eq!(quantity, 25);
+                assert_eq!(id, Id::from_u64(4));
+                assert_eq!(price, Price::new(400));
+                assert_eq!(quantity, Quantity::new(25));
                 assert_eq!(side, Side::Sell);
-                assert_eq!(timestamp, 4000);
+                assert_eq!(timestamp, TimestampMs::new(4000));
                 assert_eq!(time_in_force, TimeInForce::Gtc);
-                assert_eq!(trail_amount, 10);
-                assert_eq!(last_reference_price, 390);
+                assert_eq!(trail_amount, Quantity::new(10));
+                assert_eq!(last_reference_price, Price::new(390));
                 assert_eq!(extra_fields, TestExtraFields::default());
             }
             _ => panic!("Expected TrailingStop order"),
@@ -348,12 +350,12 @@ mod tests {
         let book = OrderBook::<TestExtraFields>::new("TEST");
 
         let pegged_order = OrderType::PeggedOrder {
-            id: OrderId::from_u64(5),
-            price: 500,
-            quantity: 30,
+            id: Id::from_u64(5),
+            price: Price::new(500),
+            quantity: Quantity::new(30),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 5000,
+            timestamp: TimestampMs::new(5000),
             time_in_force: TimeInForce::Ioc,
             reference_price_offset: 5,
             reference_price_type: PegReferenceType::BestBid,
@@ -374,11 +376,11 @@ mod tests {
                 reference_price_type,
                 extra_fields,
             } => {
-                assert_eq!(id, OrderId::from_u64(5));
-                assert_eq!(price, 500);
-                assert_eq!(quantity, 30);
+                assert_eq!(id, Id::from_u64(5));
+                assert_eq!(price, Price::new(500));
+                assert_eq!(quantity, Quantity::new(30));
                 assert_eq!(side, Side::Buy);
-                assert_eq!(timestamp, 5000);
+                assert_eq!(timestamp, TimestampMs::new(5000));
                 assert_eq!(time_in_force, TimeInForce::Ioc);
                 assert_eq!(reference_price_offset, 5);
                 assert_eq!(reference_price_type, PegReferenceType::BestBid);
@@ -394,12 +396,12 @@ mod tests {
         let book = OrderBook::<TestExtraFields>::new("TEST");
 
         let market_to_limit_order = OrderType::MarketToLimit {
-            id: OrderId::from_u64(6),
-            price: 600,
-            quantity: 35,
+            id: Id::from_u64(6),
+            price: Price::new(600),
+            quantity: Quantity::new(35),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp: 6000,
+            timestamp: TimestampMs::new(6000),
             time_in_force: TimeInForce::Fok,
             extra_fields: (),
         };
@@ -416,11 +418,11 @@ mod tests {
                 time_in_force,
                 extra_fields,
             } => {
-                assert_eq!(id, OrderId::from_u64(6));
-                assert_eq!(price, 600);
-                assert_eq!(quantity, 35);
+                assert_eq!(id, Id::from_u64(6));
+                assert_eq!(price, Price::new(600));
+                assert_eq!(quantity, Quantity::new(35));
                 assert_eq!(side, Side::Sell);
-                assert_eq!(timestamp, 6000);
+                assert_eq!(timestamp, TimestampMs::new(6000));
                 assert_eq!(time_in_force, TimeInForce::Fok);
                 assert_eq!(extra_fields, TestExtraFields::default());
             }
@@ -434,16 +436,16 @@ mod tests {
         let book = OrderBook::<TestExtraFields>::new("TEST");
 
         let reserve_order = OrderType::ReserveOrder {
-            id: OrderId::from_u64(7),
-            price: 700,
-            visible_quantity: 10,
-            hidden_quantity: 40,
+            id: Id::from_u64(7),
+            price: Price::new(700),
+            visible_quantity: Quantity::new(10),
+            hidden_quantity: Quantity::new(40),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 7000,
+            timestamp: TimestampMs::new(7000),
             time_in_force: TimeInForce::Gtc,
-            replenish_threshold: 5,
-            replenish_amount: Some(15),
+            replenish_threshold: Quantity::new(5),
+            replenish_amount: Some(Quantity::new(15)),
             auto_replenish: true,
             extra_fields: (),
         };
@@ -464,14 +466,14 @@ mod tests {
                 auto_replenish,
                 extra_fields,
             } => {
-                assert_eq!(id, OrderId::from_u64(7));
-                assert_eq!(price, 700);
-                assert_eq!(visible_quantity, 10);
-                assert_eq!(hidden_quantity, 40);
+                assert_eq!(id, Id::from_u64(7));
+                assert_eq!(price, Price::new(700));
+                assert_eq!(visible_quantity, Quantity::new(10));
+                assert_eq!(hidden_quantity, Quantity::new(40));
                 assert_eq!(side, Side::Buy);
-                assert_eq!(timestamp, 7000);
+                assert_eq!(timestamp, TimestampMs::new(7000));
                 assert_eq!(time_in_force, TimeInForce::Gtc);
-                assert_eq!(replenish_threshold, 5);
+                assert_eq!(replenish_threshold, Quantity::new(5));
                 assert!(auto_replenish);
                 assert_eq!(extra_fields, TestExtraFields::default());
             }
@@ -485,16 +487,16 @@ mod tests {
         let book = OrderBook::<()>::new("TEST");
 
         // Add some liquidity first
-        let ask_id = OrderId::from_u64(1);
+        let ask_id = Id::from_u64(1);
         let _ = book.add_limit_order(ask_id, 100, 10, Side::Sell, TimeInForce::Gtc, None);
 
         // Test market order matching
-        let market_id = OrderId::from_u64(2);
+        let market_id = Id::from_u64(2);
         let result = book.match_market_order(market_id, 5, Side::Buy);
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.executed_quantity(), 5);
+        assert_eq!(match_result.executed_quantity().unwrap(), 5);
     }
 
     #[test]
@@ -503,16 +505,16 @@ mod tests {
         let book = OrderBook::<()>::new("TEST");
 
         // Add some liquidity first
-        let ask_id = OrderId::from_u64(1);
+        let ask_id = Id::from_u64(1);
         let _ = book.add_limit_order(ask_id, 100, 10, Side::Sell, TimeInForce::Gtc, None);
 
         // Test limit order matching
-        let limit_id = OrderId::from_u64(2);
+        let limit_id = Id::from_u64(2);
         let result = book.match_limit_order(limit_id, 5, Side::Buy, 100);
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.executed_quantity(), 5);
+        assert_eq!(match_result.executed_quantity().unwrap(), 5);
     }
 
     #[test]
@@ -564,11 +566,11 @@ mod tests {
         let book = OrderBook::<()>::with_trade_listener("BTC/USD", trade_listener);
 
         // Add liquidity
-        let ask_id = OrderId::from_u64(1);
+        let ask_id = Id::from_u64(1);
         let _ = book.add_limit_order(ask_id, 50000, 100, Side::Sell, TimeInForce::Gtc, None);
 
         // Execute a trade
-        let buy_id = OrderId::from_u64(2);
+        let buy_id = Id::from_u64(2);
         let _ = book.add_limit_order(buy_id, 50000, 50, Side::Buy, TimeInForce::Gtc, None);
 
         // Verify the trade listener was called with correct symbol
@@ -581,11 +583,11 @@ mod tests {
             "Symbol should match the order book symbol"
         );
         assert!(
-            !trade.match_result.transactions.transactions.is_empty(),
+            !trade.match_result.trades().as_vec().is_empty(),
             "Should have transactions"
         );
         assert_eq!(
-            trade.match_result.executed_quantity(),
+            trade.match_result.executed_quantity().unwrap(),
             50,
             "Should have executed 50 units"
         );

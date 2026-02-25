@@ -2,13 +2,13 @@
 mod tests_snapshot_restore {
     use orderbook_rs::orderbook::ORDERBOOK_SNAPSHOT_FORMAT_VERSION;
     use orderbook_rs::{DefaultOrderBook, OrderBook, OrderBookError};
-    use pricelevel::{OrderId, Side, TimeInForce};
+    use pricelevel::{Id, Side, TimeInForce};
 
-    fn populate_order_book(book: &OrderBook<()>) -> Vec<OrderId> {
-        let first = OrderId::from_u64(1);
-        let second = OrderId::from_u64(2);
-        let third = OrderId::from_u64(3);
-        let fourth = OrderId::from_u64(4);
+    fn populate_order_book(book: &OrderBook<()>) -> Vec<Id> {
+        let first = Id::from_u64(1);
+        let second = Id::from_u64(2);
+        let third = Id::from_u64(3);
+        let fourth = Id::from_u64(4);
 
         book.add_limit_order(first, 10_000, 5, Side::Buy, TimeInForce::Gtc, None)
             .expect("add bid");

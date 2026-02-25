@@ -8,7 +8,7 @@ use crate::orderbook::book_change_event::PriceLevelChangedEvent;
 use crate::orderbook::pool::MatchingPool;
 use crate::orderbook::stp::{STPAction, check_stp_at_level};
 use crate::{OrderBook, OrderBookError};
-use pricelevel::{Hash32, MatchResult, OrderId, OrderUpdate, Side};
+use pricelevel::{Hash32, Id, MatchResult, OrderUpdate, Side};
 use std::sync::atomic::Ordering;
 
 impl<T> OrderBook<T>
@@ -30,7 +30,7 @@ where
     /// In the happy case (single price level fill), complexity is O(log N).
     pub fn match_order(
         &self,
-        order_id: OrderId,
+        order_id: Id,
         side: Side,
         quantity: u64,
         limit_price: Option<u128>,
@@ -56,7 +56,7 @@ where
     /// when STP in `CancelTaker` or `CancelBoth` mode cancels the entire taker.
     pub fn match_order_with_user(
         &self,
-        order_id: OrderId,
+        order_id: Id,
         side: Side,
         quantity: u64,
         limit_price: Option<u128>,
@@ -84,7 +84,7 @@ where
                     available: 0,
                 });
             }
-            match_result.remaining_quantity = remaining_quantity;
+            // remaining_quantity is managed by add_trade(); no manual update needed
             return Ok(match_result);
         }
 
@@ -130,7 +130,7 @@ where
             // When STP is active, check for self-trade conflicts before matching.
             // This is done per-price-level to handle partial fills correctly.
             if stp_active {
-                let orders = price_level.iter_orders();
+                let orders: Vec<_> = price_level.iter_orders().collect();
                 let action = check_stp_at_level(&orders, taker_user_id, self.stp_mode);
 
                 match action {
@@ -150,7 +150,7 @@ where
                             );
                             // Compute actual executed from the sub-match
                             let executed =
-                                match_qty.saturating_sub(price_level_match.remaining_quantity);
+                                match_qty.saturating_sub(price_level_match.remaining_quantity());
                             Self::process_level_match(
                                 &mut match_result,
                                 &price_level_match,
@@ -210,7 +210,7 @@ where
                                 &self.transaction_id_generator,
                             );
                             let executed =
-                                match_qty.saturating_sub(price_level_match.remaining_quantity);
+                                match_qty.saturating_sub(price_level_match.remaining_quantity());
                             Self::process_level_match(
                                 &mut match_result,
                                 &price_level_match,
@@ -313,10 +313,7 @@ where
             });
         }
 
-        // Set final result properties
-        match_result.remaining_quantity = remaining_quantity;
-        match_result.is_complete = remaining_quantity == 0;
-
+        // remaining_quantity is managed by add_trade(); no manual update needed
         Ok(match_result)
     }
 
@@ -329,7 +326,7 @@ where
     fn process_level_match(
         match_result: &mut MatchResult,
         price_level_match: &MatchResult,
-        filled_orders: &mut Vec<OrderId>,
+        filled_orders: &mut Vec<Id>,
         remaining_quantity: &mut u64,
         price: u128,
         price_level: &std::sync::Arc<pricelevel::PriceLevel>,
@@ -341,15 +338,17 @@ where
         >,
         empty_price_levels: &mut Vec<u128>,
     ) {
-        // Process transactions if any occurred
-        if !price_level_match.transactions.as_vec().is_empty() {
+        // Process trades if any occurred
+        if !price_level_match.trades().as_vec().is_empty() {
             // Update last trade price atomically
             last_trade_price.store(price);
             has_traded.store(true, Ordering::Relaxed);
 
-            // Add transactions to result
-            for transaction in price_level_match.transactions.as_vec() {
-                match_result.add_transaction(*transaction);
+            // Add trades to result
+            for trade in price_level_match.trades().as_vec() {
+                // add_trade returns Result in v0.7; ignore error since
+                // pricelevel already validated the quantities during matching
+                let _ = match_result.add_trade(*trade);
             }
 
             // Notify price level changes
@@ -363,13 +362,13 @@ where
         }
 
         // Collect filled orders for batch removal
-        for &filled_order_id in &price_level_match.filled_order_ids {
+        for &filled_order_id in price_level_match.filled_order_ids() {
             match_result.add_filled_order_id(filled_order_id);
             filled_orders.push(filled_order_id);
         }
 
         // Update remaining quantity
-        *remaining_quantity = price_level_match.remaining_quantity;
+        *remaining_quantity = price_level_match.remaining_quantity();
 
         // Check if price level is empty and mark for removal
         if price_level.order_count() == 0 {
@@ -420,7 +419,7 @@ where
 
             // Get available quantity at this level
             let price_level = entry.value();
-            let available_quantity = price_level.total_quantity();
+            let available_quantity = price_level.total_quantity().unwrap_or(0);
             let needed_quantity = quantity.saturating_sub(matched_quantity);
             let quantity_to_match = needed_quantity.min(available_quantity);
             matched_quantity = matched_quantity.saturating_add(quantity_to_match);
@@ -432,7 +431,7 @@ where
     /// Batch operation for multiple order matches (additional optimization)
     pub fn match_orders_batch(
         &self,
-        orders: &[(OrderId, Side, u64, Option<u128>)],
+        orders: &[(Id, Side, u64, Option<u128>)],
     ) -> Vec<Result<MatchResult, OrderBookError>> {
         let mut results = Vec::with_capacity(orders.len());
 

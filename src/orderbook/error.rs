@@ -93,7 +93,7 @@ pub enum OrderBookError {
     /// `user_id` when STP mode is active.
     MissingUserId {
         /// The order ID that was rejected
-        order_id: pricelevel::OrderId,
+        order_id: pricelevel::Id,
     },
 
     /// Self-trade prevention triggered: the incoming order would have
@@ -102,7 +102,7 @@ pub enum OrderBookError {
         /// The STP mode that was active
         mode: crate::orderbook::stp::STPMode,
         /// The taker (incoming) order ID
-        taker_order_id: pricelevel::OrderId,
+        taker_order_id: pricelevel::Id,
         /// The user ID that triggered the STP check
         user_id: pricelevel::Hash32,
     },

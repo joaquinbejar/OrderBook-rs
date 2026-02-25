@@ -23,16 +23,16 @@
 
 use crate::orderbook::error::OrderBookError;
 use dashmap::DashSet;
-use pricelevel::{OrderId, OrderType, PegReferenceType, Side};
+use pricelevel::{Id, OrderType, PegReferenceType, Side};
 use tracing::trace;
 
 /// Tracks special orders that require re-pricing
 #[derive(Debug, Default)]
 pub struct SpecialOrderTracker {
     /// Order IDs of pegged orders that need re-pricing when reference prices change
-    pegged_orders: DashSet<OrderId>,
+    pegged_orders: DashSet<Id>,
     /// Order IDs of trailing stop orders that need re-pricing when market moves
-    trailing_stop_orders: DashSet<OrderId>,
+    trailing_stop_orders: DashSet<Id>,
 }
 
 impl SpecialOrderTracker {
@@ -45,25 +45,25 @@ impl SpecialOrderTracker {
     }
 
     /// Registers a pegged order for tracking
-    pub fn register_pegged_order(&self, order_id: OrderId) {
+    pub fn register_pegged_order(&self, order_id: Id) {
         self.pegged_orders.insert(order_id);
         trace!("Registered pegged order {} for re-pricing", order_id);
     }
 
     /// Registers a trailing stop order for tracking
-    pub fn register_trailing_stop(&self, order_id: OrderId) {
+    pub fn register_trailing_stop(&self, order_id: Id) {
         self.trailing_stop_orders.insert(order_id);
         trace!("Registered trailing stop order {} for re-pricing", order_id);
     }
 
     /// Unregisters a pegged order (e.g., when cancelled or filled)
-    pub fn unregister_pegged_order(&self, order_id: &OrderId) {
+    pub fn unregister_pegged_order(&self, order_id: &Id) {
         self.pegged_orders.remove(order_id);
         trace!("Unregistered pegged order {} from re-pricing", order_id);
     }
 
     /// Unregisters a trailing stop order (e.g., when cancelled or filled)
-    pub fn unregister_trailing_stop(&self, order_id: &OrderId) {
+    pub fn unregister_trailing_stop(&self, order_id: &Id) {
         self.trailing_stop_orders.remove(order_id);
         trace!(
             "Unregistered trailing stop order {} from re-pricing",
@@ -82,12 +82,12 @@ impl SpecialOrderTracker {
     }
 
     /// Returns all tracked pegged order IDs
-    pub fn pegged_order_ids(&self) -> Vec<OrderId> {
+    pub fn pegged_order_ids(&self) -> Vec<Id> {
         self.pegged_orders.iter().map(|r| *r).collect()
     }
 
     /// Returns all tracked trailing stop order IDs
-    pub fn trailing_stop_ids(&self) -> Vec<OrderId> {
+    pub fn trailing_stop_ids(&self) -> Vec<Id> {
         self.trailing_stop_orders.iter().map(|r| *r).collect()
     }
 
@@ -106,7 +106,7 @@ pub struct RepricingResult {
     /// Number of trailing stops that were re-priced
     pub trailing_stops_repriced: usize,
     /// Order IDs that failed to re-price
-    pub failed_orders: Vec<(OrderId, String)>,
+    pub failed_orders: Vec<(Id, String)>,
 }
 
 /// Calculates the new price for a pegged order based on reference price
@@ -395,9 +395,9 @@ mod tests {
     fn test_special_order_tracker() {
         let tracker = SpecialOrderTracker::new();
 
-        let id1 = OrderId::from_u64(1);
-        let id2 = OrderId::from_u64(2);
-        let id3 = OrderId::from_u64(3);
+        let id1 = Id::from_u64(1);
+        let id2 = Id::from_u64(2);
+        let id3 = Id::from_u64(3);
 
         // Register orders
         tracker.register_pegged_order(id1);

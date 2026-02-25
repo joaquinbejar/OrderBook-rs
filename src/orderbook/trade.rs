@@ -59,8 +59,11 @@ impl TradeResult {
             Some(schedule) if !schedule.is_zero_fee() => {
                 let mut maker_sum: i128 = 0;
                 let mut taker_sum: i128 = 0;
-                for tx in match_result.transactions.as_vec() {
-                    let notional = tx.price.saturating_mul(tx.quantity as u128);
+                for tx in match_result.trades().as_vec() {
+                    let notional = tx
+                        .price()
+                        .as_u128()
+                        .saturating_mul(tx.quantity().as_u64() as u128);
                     maker_sum = maker_sum
                         .checked_add(schedule.calculate_fee(notional, true))
                         .unwrap_or(maker_sum);
@@ -152,34 +155,33 @@ pub struct TransactionInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pricelevel::{MatchResult, OrderId, Transaction};
-    use uuid::Uuid;
+    use pricelevel::{Id, MatchResult, Price, Quantity, Trade};
 
-    fn make_match_result_with_transactions(txs: Vec<Transaction>) -> MatchResult {
-        let order_id = OrderId::new_uuid();
-        let mut mr = MatchResult::new(order_id, 100);
-        for tx in txs {
-            mr.add_transaction(tx);
+    fn make_match_result_with_trades(trades: Vec<Trade>) -> MatchResult {
+        let order_id = Id::new_uuid();
+        let total_qty: u64 = trades.iter().map(|t| t.quantity().as_u64()).sum();
+        let initial_qty = if trades.is_empty() { 100 } else { total_qty };
+        let mut mr = MatchResult::new(order_id, initial_qty);
+        for trade in trades {
+            let _ = mr.add_trade(trade);
         }
-        mr.remaining_quantity = 0;
-        mr.is_complete = true;
         mr
     }
 
-    fn make_transaction(price: u128, quantity: u64) -> Transaction {
-        Transaction::new(
-            Uuid::new_v4(),
-            OrderId::new_uuid(),
-            OrderId::new_uuid(),
-            price,
-            quantity,
+    fn make_trade(price: u128, quantity: u64) -> Trade {
+        Trade::new(
+            Id::new_uuid(),
+            Id::new_uuid(),
+            Id::new_uuid(),
+            Price::new(price),
+            Quantity::new(quantity),
             pricelevel::Side::Buy,
         )
     }
 
     #[test]
     fn test_trade_result_new_has_zero_fees() {
-        let mr = make_match_result_with_transactions(vec![make_transaction(1000, 10)]);
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
         let tr = TradeResult::new("BTC/USD".to_string(), mr);
 
         assert_eq!(tr.total_maker_fees, 0);
@@ -189,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_trade_result_with_fees_none_schedule() {
-        let mr = make_match_result_with_transactions(vec![make_transaction(1000, 10)]);
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
         let tr = TradeResult::with_fees("BTC/USD".to_string(), mr, None);
 
         assert_eq!(tr.total_maker_fees, 0);
@@ -200,7 +202,7 @@ mod tests {
     #[test]
     fn test_trade_result_with_fees_zero_schedule() {
         let schedule = FeeSchedule::zero_fee();
-        let mr = make_match_result_with_transactions(vec![make_transaction(1000, 10)]);
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
         let tr = TradeResult::with_fees("BTC/USD".to_string(), mr, Some(schedule));
 
         assert_eq!(tr.total_maker_fees, 0);
@@ -213,7 +215,7 @@ mod tests {
         // 5 bps taker, -2 bps maker rebate
         let schedule = FeeSchedule::new(-2, 5);
         // notional = 1000 * 10 = 10_000
-        let mr = make_match_result_with_transactions(vec![make_transaction(1000, 10)]);
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
         let tr = TradeResult::with_fees("BTC/USD".to_string(), mr, Some(schedule));
 
         // maker fee: 10_000 * -2 / 10_000 = -2
@@ -227,9 +229,9 @@ mod tests {
     #[test]
     fn test_trade_result_with_fees_multiple_transactions() {
         let schedule = FeeSchedule::new(-2, 5);
-        let mr = make_match_result_with_transactions(vec![
-            make_transaction(1000, 10), // notional = 10_000
-            make_transaction(2000, 20), // notional = 40_000
+        let mr = make_match_result_with_trades(vec![
+            make_trade(1000, 10), // notional = 10_000
+            make_trade(2000, 20), // notional = 40_000
         ]);
         let tr = TradeResult::with_fees("BTC/USD".to_string(), mr, Some(schedule));
 
@@ -243,7 +245,7 @@ mod tests {
     #[test]
     fn test_trade_result_with_fees_no_transactions() {
         let schedule = FeeSchedule::new(-2, 5);
-        let mr = make_match_result_with_transactions(vec![]);
+        let mr = make_match_result_with_trades(vec![]);
         let tr = TradeResult::with_fees("BTC/USD".to_string(), mr, Some(schedule));
 
         assert_eq!(tr.total_maker_fees, 0);
@@ -255,7 +257,7 @@ mod tests {
     fn test_trade_result_with_maker_rebate() {
         let schedule = FeeSchedule::with_maker_rebate(5, 10);
         // notional = 100_000 * 50 = 5_000_000
-        let mr = make_match_result_with_transactions(vec![make_transaction(100_000, 50)]);
+        let mr = make_match_result_with_trades(vec![make_trade(100_000, 50)]);
         let tr = TradeResult::with_fees("BTC/USD".to_string(), mr, Some(schedule));
 
         // maker: -5 * 5_000_000 / 10_000 = -2_500
@@ -268,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_trade_result_symbol_preserved() {
-        let mr = make_match_result_with_transactions(vec![]);
+        let mr = make_match_result_with_trades(vec![]);
         let tr = TradeResult::with_fees("ETH/USDT".to_string(), mr, None);
         assert_eq!(tr.symbol, "ETH/USDT");
     }

@@ -247,7 +247,7 @@ where
 
         price_levels
             .get(&price)
-            .map(|entry| entry.value().total_quantity())
+            .and_then(|entry| entry.value().total_quantity().ok())
             .unwrap_or(0)
     }
 
@@ -335,14 +335,14 @@ fn spread_to_quality(spread_bps: f64) -> IVQuality {
 mod tests {
     use super::*;
 
-    use pricelevel::{OrderId, TimeInForce};
+    use pricelevel::{Id, TimeInForce};
 
     fn create_test_book() -> OrderBook<()> {
         let book = OrderBook::<()>::new("TEST-OPT");
 
         // Add bid orders
         let _ = book.add_limit_order(
-            OrderId::new(),
+            Id::new(),
             450, // $4.50
             100,
             Side::Buy,
@@ -352,7 +352,7 @@ mod tests {
 
         // Add ask orders
         let _ = book.add_limit_order(
-            OrderId::new(),
+            Id::new(),
             470, // $4.70
             100,
             Side::Sell,
@@ -383,10 +383,10 @@ mod tests {
         let book = OrderBook::<()>::new("TEST-OPT");
 
         // Add bid with large quantity
-        let _ = book.add_limit_order(OrderId::new(), 450, 1000, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 450, 1000, Side::Buy, TimeInForce::Gtc, None);
 
         // Add ask with small quantity
-        let _ = book.add_limit_order(OrderId::new(), 470, 100, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 470, 100, Side::Sell, TimeInForce::Gtc, None);
 
         let config = IVConfig::default().with_price_scale(100.0);
 
@@ -406,7 +406,7 @@ mod tests {
         let book = create_test_book();
 
         // Execute a trade to set last trade price
-        let _ = book.match_market_order(OrderId::new(), 50, Side::Buy);
+        let _ = book.match_market_order(Id::new(), 50, Side::Buy);
 
         let config = IVConfig::default().with_price_scale(100.0);
 
@@ -433,8 +433,8 @@ mod tests {
         // Create a book with prices that correspond to ~25% IV
         // For ATM option with S=100, K=100, T=0.25, r=0.05, σ=0.25
         // BS price ≈ 5.45
-        let _ = book.add_limit_order(OrderId::new(), 540, 100, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 550, 100, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 540, 100, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 550, 100, Side::Sell, TimeInForce::Gtc, None);
 
         let params = IVParams::call(100.0, 100.0, 0.25, 0.05);
         let config = IVConfig::default().with_price_scale(100.0);
@@ -453,8 +453,8 @@ mod tests {
         let book = OrderBook::<()>::new("TEST-OPT");
 
         // Create a book with very wide spread
-        let _ = book.add_limit_order(OrderId::new(), 100, 100, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 500, 100, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 100, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 500, 100, Side::Sell, TimeInForce::Gtc, None);
 
         let params = IVParams::call(100.0, 100.0, 0.25, 0.05);
         let config = IVConfig::default()
@@ -523,7 +523,7 @@ mod tests {
         let book = OrderBook::<()>::new("TEST-OPT");
 
         // Only bid, no ask
-        let _ = book.add_limit_order(OrderId::new(), 450, 100, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 450, 100, Side::Buy, TimeInForce::Gtc, None);
 
         let (price, spread_bps) = book
             .extract_price_for_iv(PriceSource::MidPrice, 100.0)
@@ -538,7 +538,7 @@ mod tests {
         let book = OrderBook::<()>::new("TEST-OPT");
 
         // Only ask, no bid
-        let _ = book.add_limit_order(OrderId::new(), 470, 100, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 470, 100, Side::Sell, TimeInForce::Gtc, None);
 
         let (price, spread_bps) = book
             .extract_price_for_iv(PriceSource::MidPrice, 100.0)

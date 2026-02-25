@@ -196,8 +196,8 @@
 //! - **Previous Bottleneck:** The original implementation relied on a `crossbeam::queue::SegQueue` for storing orders. While the queue itself is lock-free, operations like finding or removing a specific order required draining the entire queue into a temporary list, performing the action, and then pushing all elements back. This process was inefficient and created a major point of contention, leading to deadlocks under heavy multi-threaded load.
 //!
 //! - **New Implementation:** The `OrderQueue` was re-designed to use a combination of:
-//!   1. A `dashmap::DashMap` for storing orders, allowing for highly concurrent, O(1) average-case time complexity for insertions, lookups, and removals by `OrderId`.
-//!   2. A `crossbeam::queue::SegQueue` that now only stores `OrderId`s to maintain the crucial First-In-First-Out (FIFO) order for matching.
+//!   1. A `dashmap::DashMap` for storing orders, allowing for highly concurrent, O(1) average-case time complexity for insertions, lookups, and removals by `Id`.
+//!   2. A `crossbeam::queue::SegQueue` that now only stores `Id`s to maintain the crucial First-In-First-Out (FIFO) order for matching.
 //!
 //! This hybrid approach eliminates the previous bottleneck, allowing threads to operate on the order collection with minimal contention, which is reflected in the massive throughput increase in the hot spot tests.
 //!
@@ -267,7 +267,10 @@ pub type LegacyOrderBook = OrderBook<()>;
 pub type DefaultOrderBook = OrderBook<()>;
 
 // Re-export tipos de pricelevel con alias
-pub use pricelevel::{OrderId, OrderType, Side, TimeInForce};
+pub use pricelevel::{Id, OrderType, Side, TimeInForce};
+
+/// Legacy type alias for backward compatibility with code using `OrderId`.
+pub type OrderId = Id;
 
 /// Legacy type alias for `OrderType<()>` to maintain backward compatibility.
 ///

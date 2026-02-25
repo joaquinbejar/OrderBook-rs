@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::orderbook::OrderBook;
-    use pricelevel::{OrderId, Side, TimeInForce};
+    use pricelevel::{Id, Side, TimeInForce};
     use serde_json;
 
     #[test]
@@ -34,8 +34,8 @@ mod tests {
         let orderbook: OrderBook<String> = OrderBook::new("ETHUSD");
 
         // Add some orders using the add_limit_order method
-        let buy_order_id = OrderId::new_uuid();
-        let sell_order_id = OrderId::new_uuid();
+        let buy_order_id = Id::new_uuid();
+        let sell_order_id = Id::new_uuid();
 
         let _ = orderbook.add_limit_order(
             buy_order_id,

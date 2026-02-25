@@ -1,5 +1,5 @@
 use orderbook_rs::OrderBook;
-use pricelevel::{Hash32, OrderId, OrderType, Side, TimeInForce};
+use pricelevel::{Hash32, Id, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs};
 
 #[cfg(test)]
 mod tests {
@@ -7,12 +7,12 @@ mod tests {
 
     fn make_standard_order(price: u128, quantity: u64, side: Side) -> OrderType<()> {
         OrderType::Standard {
-            id: OrderId::new_uuid(),
-            price,
-            quantity,
+            id: Id::new_uuid(),
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
             side,
             user_id: Hash32::zero(),
-            timestamp: 0,
+            timestamp: TimestampMs::new(0),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         }
@@ -29,13 +29,13 @@ mod tests {
         side: Side,
     ) -> OrderType<()> {
         OrderType::IcebergOrder {
-            id: OrderId::new_uuid(),
-            price,
-            visible_quantity: visible,
-            hidden_quantity: hidden,
+            id: Id::new_uuid(),
+            price: Price::new(price),
+            visible_quantity: Quantity::new(visible),
+            hidden_quantity: Quantity::new(hidden),
             side,
             user_id: Hash32::zero(),
-            timestamp: 0,
+            timestamp: TimestampMs::new(0),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         }
@@ -43,12 +43,12 @@ mod tests {
 
     fn make_post_only_order(price: u128, side: Side) -> OrderType<()> {
         OrderType::PostOnly {
-            id: OrderId::new_uuid(),
-            price,
-            quantity: 100,
+            id: Id::new_uuid(),
+            price: Price::new(price),
+            quantity: Quantity::new(100),
             side,
             user_id: Hash32::zero(),
-            timestamp: 0,
+            timestamp: TimestampMs::new(0),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         }
@@ -227,28 +227,16 @@ mod tests {
     #[test]
     fn test_add_limit_order_respects_tick_size() {
         let book: OrderBook<()> = OrderBook::with_tick_size("BTC/USD", 100);
-        let result = book.add_limit_order(
-            OrderId::new_uuid(),
-            150,
-            100,
-            Side::Buy,
-            TimeInForce::Gtc,
-            None,
-        );
+        let result =
+            book.add_limit_order(Id::new_uuid(), 150, 100, Side::Buy, TimeInForce::Gtc, None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_add_limit_order_valid_tick_size() {
         let book: OrderBook<()> = OrderBook::with_tick_size("BTC/USD", 100);
-        let result = book.add_limit_order(
-            OrderId::new_uuid(),
-            200,
-            100,
-            Side::Buy,
-            TimeInForce::Gtc,
-            None,
-        );
+        let result =
+            book.add_limit_order(Id::new_uuid(), 200, 100, Side::Buy, TimeInForce::Gtc, None);
         assert!(result.is_ok());
     }
 
@@ -396,12 +384,12 @@ mod tests {
         // make_post_only_order uses quantity=100, which is valid for lot=10
         // Create one with invalid quantity
         let order = OrderType::PostOnly {
-            id: OrderId::new_uuid(),
-            price: 1000,
-            quantity: 15,
+            id: Id::new_uuid(),
+            price: Price::new(1000),
+            quantity: Quantity::new(15),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 0,
+            timestamp: TimestampMs::new(0),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -456,28 +444,16 @@ mod tests {
     #[test]
     fn test_add_limit_order_respects_lot_size() {
         let book: OrderBook<()> = OrderBook::with_lot_size("BTC/USD", 10);
-        let result = book.add_limit_order(
-            OrderId::new_uuid(),
-            1000,
-            15,
-            Side::Buy,
-            TimeInForce::Gtc,
-            None,
-        );
+        let result =
+            book.add_limit_order(Id::new_uuid(), 1000, 15, Side::Buy, TimeInForce::Gtc, None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_add_limit_order_valid_lot_size() {
         let book: OrderBook<()> = OrderBook::with_lot_size("BTC/USD", 10);
-        let result = book.add_limit_order(
-            OrderId::new_uuid(),
-            1000,
-            20,
-            Side::Buy,
-            TimeInForce::Gtc,
-            None,
-        );
+        let result =
+            book.add_limit_order(Id::new_uuid(), 1000, 20, Side::Buy, TimeInForce::Gtc, None);
         assert!(result.is_ok());
     }
 
@@ -744,14 +720,8 @@ mod tests {
     fn test_add_limit_order_respects_min_order_size() {
         let mut book: OrderBook<()> = OrderBook::new("BTC/USD");
         book.set_min_order_size(10);
-        let result = book.add_limit_order(
-            OrderId::new_uuid(),
-            1000,
-            5,
-            Side::Buy,
-            TimeInForce::Gtc,
-            None,
-        );
+        let result =
+            book.add_limit_order(Id::new_uuid(), 1000, 5, Side::Buy, TimeInForce::Gtc, None);
         assert!(result.is_err());
     }
 
@@ -759,14 +729,8 @@ mod tests {
     fn test_add_limit_order_respects_max_order_size() {
         let mut book: OrderBook<()> = OrderBook::new("BTC/USD");
         book.set_max_order_size(100);
-        let result = book.add_limit_order(
-            OrderId::new_uuid(),
-            1000,
-            150,
-            Side::Buy,
-            TimeInForce::Gtc,
-            None,
-        );
+        let result =
+            book.add_limit_order(Id::new_uuid(), 1000, 150, Side::Buy, TimeInForce::Gtc, None);
         assert!(result.is_err());
     }
 

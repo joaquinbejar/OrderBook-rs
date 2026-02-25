@@ -2,7 +2,9 @@
 
 use super::book::OrderBook;
 use super::error::OrderBookError;
-use pricelevel::{Hash32, MatchResult, OrderId, OrderType, Side, TimeInForce};
+use pricelevel::{
+    Hash32, Id, MatchResult, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs,
+};
 use std::sync::Arc;
 use tracing::trace;
 
@@ -20,7 +22,7 @@ where
     /// Returns [`OrderBookError::MissingUserId`] when STP is enabled.
     pub fn add_limit_order(
         &self,
-        id: OrderId,
+        id: Id,
         price: u128,
         quantity: u64,
         side: Side,
@@ -58,7 +60,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn add_limit_order_with_user(
         &self,
-        id: OrderId,
+        id: Id,
         price: u128,
         quantity: u64,
         side: Side,
@@ -69,11 +71,11 @@ where
         let extra_fields: T = extra_fields.unwrap_or_default();
         let order = OrderType::Standard {
             id,
-            price,
-            quantity,
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
             side,
             user_id,
-            timestamp: crate::utils::current_time_millis(),
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
             time_in_force,
             extra_fields,
         };
@@ -94,7 +96,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn add_iceberg_order(
         &self,
-        id: OrderId,
+        id: Id,
         price: u128,
         visible_quantity: u64,
         hidden_quantity: u64,
@@ -132,7 +134,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn add_iceberg_order_with_user(
         &self,
-        id: OrderId,
+        id: Id,
         price: u128,
         visible_quantity: u64,
         hidden_quantity: u64,
@@ -144,12 +146,12 @@ where
         let extra_fields: T = extra_fields.unwrap_or_default();
         let order = OrderType::IcebergOrder {
             id,
-            price,
-            visible_quantity,
-            hidden_quantity,
+            price: Price::new(price),
+            visible_quantity: Quantity::new(visible_quantity),
+            hidden_quantity: Quantity::new(hidden_quantity),
             side,
             user_id,
-            timestamp: crate::utils::current_time_millis(),
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
             time_in_force,
             extra_fields,
         };
@@ -169,7 +171,7 @@ where
     /// Returns [`OrderBookError::MissingUserId`] when STP is enabled.
     pub fn add_post_only_order(
         &self,
-        id: OrderId,
+        id: Id,
         price: u128,
         quantity: u64,
         side: Side,
@@ -204,7 +206,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn add_post_only_order_with_user(
         &self,
-        id: OrderId,
+        id: Id,
         price: u128,
         quantity: u64,
         side: Side,
@@ -215,11 +217,11 @@ where
         let extra_fields: T = extra_fields.unwrap_or_default();
         let order = OrderType::PostOnly {
             id,
-            price,
-            quantity,
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
             side,
             user_id,
-            timestamp: crate::utils::current_time_millis(),
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
             time_in_force,
             extra_fields,
         };
@@ -236,7 +238,7 @@ where
     /// Use [`Self::submit_market_order_with_user`] when STP is needed.
     pub fn submit_market_order(
         &self,
-        id: OrderId,
+        id: Id,
         quantity: u64,
         side: Side,
     ) -> Result<MatchResult, OrderBookError> {
@@ -261,7 +263,7 @@ where
     /// taker before any fills occur.
     pub fn submit_market_order_with_user(
         &self,
-        id: OrderId,
+        id: Id,
         quantity: u64,
         side: Side,
         user_id: Hash32,
