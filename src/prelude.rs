@@ -52,6 +52,14 @@ pub use crate::orderbook::nats_book_change::{
     BookChangeBatch, BookChangeEntry, NatsBookChangePublisher,
 };
 
+// Sequencer types and journal
+#[cfg(feature = "journal")]
+pub use crate::orderbook::sequencer::FileJournal;
+pub use crate::orderbook::sequencer::journal::{Journal, JournalEntry};
+pub use crate::orderbook::sequencer::{
+    JournalError, JournalReadIter, SequencerCommand, SequencerEvent, SequencerResult,
+};
+
 // Utility functions
 pub use crate::utils::current_time_millis;
 

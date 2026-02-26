@@ -237,6 +237,8 @@ pub mod orderbook;
 pub mod prelude;
 mod utils;
 
+#[cfg(feature = "journal")]
+pub use orderbook::FileJournal;
 #[cfg(feature = "nats")]
 pub use orderbook::NatsTradePublisher;
 pub use orderbook::implied_volatility::{
@@ -246,6 +248,10 @@ pub use orderbook::implied_volatility::{
 pub use orderbook::iterators::LevelInfo;
 pub use orderbook::manager::{BookManager, BookManagerStd, BookManagerTokio};
 pub use orderbook::market_impact::{MarketImpact, OrderSimulation};
+pub use orderbook::sequencer::{
+    Journal, JournalEntry, JournalError, JournalReadIter, SequencerCommand, SequencerEvent,
+    SequencerResult,
+};
 pub use orderbook::snapshot::{EnrichedSnapshot, MetricFlags};
 pub use orderbook::statistics::{DepthStats, DistributionBin};
 pub use orderbook::stp::STPMode;

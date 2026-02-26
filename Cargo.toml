@@ -41,14 +41,18 @@ tokio = { workspace = true, features = ["sync", "rt"] }
 bitflags = { workspace = true }
 async-nats = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
+crc32fast = { workspace = true, optional = true }
+memmap2 = { workspace = true, optional = true }
 
 [features]
 default = []
 special_orders = []
 nats = ["dep:async-nats", "dep:bytes"]
+journal = ["dep:crc32fast", "dep:memmap2"]
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
+tempfile = "3"
 
 [[bench]]
 name = "benches"
@@ -86,3 +90,5 @@ bitflags = { version = "2.11", features = ["serde"] }
 tracing-subscriber = "0.3"
 async-nats = "0.46"
 bytes = "1"
+crc32fast = "1"
+memmap2 = "0.9"

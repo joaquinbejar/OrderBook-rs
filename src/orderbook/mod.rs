@@ -48,6 +48,9 @@ pub mod nats_book_change;
 #[cfg(feature = "special_orders")]
 pub mod repricing;
 
+/// Sequencer subsystem: types, journal trait, and file-based journal.
+pub mod sequencer;
+
 pub use book::OrderBook;
 pub use error::OrderBookError;
 pub use fees::FeeSchedule;
@@ -64,6 +67,10 @@ pub use nats::NatsTradePublisher;
 pub use nats_book_change::{BookChangeBatch, BookChangeEntry, NatsBookChangePublisher};
 #[cfg(feature = "special_orders")]
 pub use repricing::{RepricingOperations, RepricingResult, SpecialOrderTracker};
+#[cfg(feature = "journal")]
+pub use sequencer::FileJournal;
+pub use sequencer::journal::{Journal, JournalEntry};
+pub use sequencer::{JournalError, SequencerCommand, SequencerEvent, SequencerResult};
 pub use snapshot::{
     EnrichedSnapshot, MetricFlags, ORDERBOOK_SNAPSHOT_FORMAT_VERSION, OrderBookSnapshot,
     OrderBookSnapshotPackage,
