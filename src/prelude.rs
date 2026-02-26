@@ -44,6 +44,10 @@ pub use pricelevel::{OrderId, OrderType, Side, TimeInForce};
 // NATS integration types
 #[cfg(feature = "nats")]
 pub use crate::orderbook::nats::NatsTradePublisher;
+#[cfg(feature = "nats")]
+pub use crate::orderbook::nats_book_change::{
+    BookChangeBatch, BookChangeEntry, NatsBookChangePublisher,
+};
 
 // Utility functions
 pub use crate::utils::current_time_millis;
