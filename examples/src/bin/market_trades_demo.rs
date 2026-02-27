@@ -7,7 +7,7 @@
 //! 4. Use TradeListener to capture trades in real-time
 
 use orderbook_rs::prelude::{
-    OrderBook, OrderId, Side, TimeInForce, TradeInfo, TradeListener, TradeResult, TransactionInfo,
+    Id, OrderBook, Side, TimeInForce, TradeInfo, TradeListener, TradeResult, TransactionInfo,
 };
 use pricelevel::setup_logger;
 use std::sync::{Arc, Mutex};
@@ -75,7 +75,7 @@ fn add_bid_orders(book: &OrderBook) {
     ];
 
     for (i, (price, quantity)) in bid_levels.iter().enumerate() {
-        let order_id = OrderId::from_u64(1000 + i as u64);
+        let order_id = Id::from_u64(1000 + i as u64);
 
         match book.add_limit_order(
             order_id,
@@ -108,7 +108,7 @@ fn add_ask_orders(book: &OrderBook) {
     ];
 
     for (i, (price, quantity)) in ask_levels.iter().enumerate() {
-        let order_id = OrderId::from_u64(2000 + i as u64);
+        let order_id = Id::from_u64(2000 + i as u64);
 
         match book.add_limit_order(
             order_id,
@@ -134,14 +134,14 @@ fn add_ask_orders(book: &OrderBook) {
 fn execute_market_orders(book: &OrderBook) {
     // Market buy order - will match against asks
     info!("  Executing MARKET BUY order for 250 units...");
-    let buy_order_id = OrderId::from_u64(3000);
+    let buy_order_id = Id::from_u64(3000);
 
     match book.submit_market_order(buy_order_id, 250, Side::Buy) {
         Ok(match_result) => {
             info!(
                 "  ✓ Market BUY executed: {} units filled, {} transactions",
-                match_result.executed_quantity(),
-                match_result.transactions.transactions.len()
+                match_result.executed_quantity().unwrap_or(0),
+                match_result.trades().len()
             );
         }
         Err(e) => info!("  ✗ Market BUY failed: {}", e),
@@ -149,14 +149,14 @@ fn execute_market_orders(book: &OrderBook) {
 
     // Market sell order - will match against bids
     info!("\n  Executing MARKET SELL order for 300 units...");
-    let sell_order_id = OrderId::from_u64(3001);
+    let sell_order_id = Id::from_u64(3001);
 
     match book.submit_market_order(sell_order_id, 300, Side::Sell) {
         Ok(match_result) => {
             info!(
                 "  ✓ Market SELL executed: {} units filled, {} transactions",
-                match_result.executed_quantity(),
-                match_result.transactions.transactions.len()
+                match_result.executed_quantity().unwrap_or(0),
+                match_result.trades().len()
             );
         }
         Err(e) => info!("  ✗ Market SELL failed: {}", e),
@@ -164,14 +164,14 @@ fn execute_market_orders(book: &OrderBook) {
 
     // Another market buy order
     info!("\n  Executing MARKET BUY order for 180 units...");
-    let buy_order_id_2 = OrderId::from_u64(3002);
+    let buy_order_id_2 = Id::from_u64(3002);
 
     match book.submit_market_order(buy_order_id_2, 180, Side::Buy) {
         Ok(match_result) => {
             info!(
                 "  ✓ Market BUY executed: {} units filled, {} transactions",
-                match_result.executed_quantity(),
-                match_result.transactions.transactions.len()
+                match_result.executed_quantity().unwrap_or(0),
+                match_result.trades().len()
             );
         }
         Err(e) => info!("  ✗ Market BUY failed: {}", e),
@@ -183,15 +183,15 @@ fn create_trade_info_from_result(trade_result: &TradeResult) -> TradeInfo {
     let match_result = &trade_result.match_result;
 
     let transactions: Vec<TransactionInfo> = match_result
-        .transactions
+        .trades()
         .as_vec()
         .iter()
         .map(|tx| TransactionInfo {
-            price: tx.price,
-            quantity: tx.quantity,
-            transaction_id: tx.transaction_id.to_string(),
-            maker_order_id: tx.maker_order_id.to_string(),
-            taker_order_id: tx.taker_order_id.to_string(),
+            price: tx.price().as_u128(),
+            quantity: tx.quantity().as_u64(),
+            transaction_id: tx.trade_id().to_string(),
+            maker_order_id: tx.maker_order_id().to_string(),
+            taker_order_id: tx.taker_order_id().to_string(),
             maker_fee: 0,
             taker_fee: 0,
         })
@@ -199,12 +199,12 @@ fn create_trade_info_from_result(trade_result: &TradeResult) -> TradeInfo {
 
     TradeInfo {
         symbol: trade_result.symbol.clone(),
-        order_id: match_result.order_id.to_string(),
-        executed_quantity: match_result.executed_quantity(),
-        remaining_quantity: match_result.remaining_quantity,
-        is_complete: match_result.is_complete,
-        transaction_count: match_result.transactions.transactions.len(),
-        transactions: transactions,
+        order_id: match_result.order_id().to_string(),
+        executed_quantity: match_result.executed_quantity().unwrap_or(0),
+        remaining_quantity: match_result.remaining_quantity(),
+        is_complete: match_result.is_complete(),
+        transaction_count: match_result.trades().len(),
+        transactions,
     }
 }
 

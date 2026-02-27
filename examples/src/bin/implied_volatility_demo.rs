@@ -19,7 +19,7 @@
 use orderbook_rs::{
     BlackScholes, IVConfig, IVError, IVParams, IVQuality, OrderBook, PriceSource, SolverConfig,
 };
-use pricelevel::{OrderId, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Side, TimeInForce, setup_logger};
 use tracing::info;
 
 fn main() {
@@ -60,7 +60,7 @@ fn demo_basic_iv_calculation() {
 
     // Add bid orders (buyers willing to pay)
     let _ = book.add_limit_order(
-        OrderId::new(),
+        Id::new(),
         920, // $9.20 (prices in cents)
         100,
         Side::Buy,
@@ -68,7 +68,7 @@ fn demo_basic_iv_calculation() {
         None,
     );
     let _ = book.add_limit_order(
-        OrderId::new(),
+        Id::new(),
         915, // $9.15
         50,
         Side::Buy,
@@ -78,7 +78,7 @@ fn demo_basic_iv_calculation() {
 
     // Add ask orders (sellers asking price)
     let _ = book.add_limit_order(
-        OrderId::new(),
+        Id::new(),
         930, // $9.30
         80,
         Side::Sell,
@@ -86,7 +86,7 @@ fn demo_basic_iv_calculation() {
         None,
     );
     let _ = book.add_limit_order(
-        OrderId::new(),
+        Id::new(),
         935, // $9.35
         120,
         Side::Sell,
@@ -149,13 +149,13 @@ fn demo_price_sources() {
     let book = OrderBook::<()>::new("AAPL-C-180-2024-04-19");
 
     // Create asymmetric liquidity (more on bid side)
-    let _ = book.add_limit_order(OrderId::new(), 550, 500, Side::Buy, TimeInForce::Gtc, None);
-    let _ = book.add_limit_order(OrderId::new(), 545, 300, Side::Buy, TimeInForce::Gtc, None);
-    let _ = book.add_limit_order(OrderId::new(), 570, 100, Side::Sell, TimeInForce::Gtc, None);
-    let _ = book.add_limit_order(OrderId::new(), 575, 150, Side::Sell, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 550, 500, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 545, 300, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 570, 100, Side::Sell, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 575, 150, Side::Sell, TimeInForce::Gtc, None);
 
     // Execute a trade to set last trade price
-    let _ = book.match_market_order(OrderId::new(), 50, Side::Buy);
+    let _ = book.match_market_order(Id::new(), 50, Side::Buy);
 
     let params = IVParams::call(180.0, 180.0, 60.0 / 365.0, 0.05);
     let config = IVConfig::default().with_price_scale(100.0);
@@ -209,8 +209,8 @@ fn demo_iv_quality() {
 
     for (name, bid, ask, expected_quality) in scenarios {
         let book = OrderBook::<()>::new("TEST-OPT");
-        let _ = book.add_limit_order(OrderId::new(), bid, 100, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), ask, 100, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), bid, 100, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), ask, 100, Side::Sell, TimeInForce::Gtc, None);
 
         let config = IVConfig::default()
             .with_price_scale(100.0)
@@ -312,15 +312,8 @@ fn demo_custom_solver() {
     info!("--- Demo 5: Custom Solver Configuration ---\n");
 
     let book = OrderBook::<()>::new("NVDA-C-500-2024-06-21");
-    let _ = book.add_limit_order(OrderId::new(), 4500, 100, Side::Buy, TimeInForce::Gtc, None);
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        4550,
-        100,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
+    let _ = book.add_limit_order(Id::new(), 4500, 100, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 4550, 100, Side::Sell, TimeInForce::Gtc, None);
 
     let params = IVParams::call(500.0, 500.0, 180.0 / 365.0, 0.05);
 
@@ -396,8 +389,8 @@ fn demo_error_handling() {
     info!("");
     info!("2. Spread Too Wide:");
     let wide_book = OrderBook::<()>::new("WIDE");
-    let _ = wide_book.add_limit_order(OrderId::new(), 100, 100, Side::Buy, TimeInForce::Gtc, None);
-    let _ = wide_book.add_limit_order(OrderId::new(), 500, 100, Side::Sell, TimeInForce::Gtc, None);
+    let _ = wide_book.add_limit_order(Id::new(), 100, 100, Side::Buy, TimeInForce::Gtc, None);
+    let _ = wide_book.add_limit_order(Id::new(), 500, 100, Side::Sell, TimeInForce::Gtc, None);
 
     let strict_config = IVConfig::default()
         .with_price_scale(100.0)
@@ -422,8 +415,8 @@ fn demo_error_handling() {
     info!("3. Price Below Intrinsic Value:");
     let arb_book = OrderBook::<()>::new("ARB");
     // ITM call with intrinsic value of $10, but market price is $5
-    let _ = arb_book.add_limit_order(OrderId::new(), 490, 100, Side::Buy, TimeInForce::Gtc, None);
-    let _ = arb_book.add_limit_order(OrderId::new(), 510, 100, Side::Sell, TimeInForce::Gtc, None);
+    let _ = arb_book.add_limit_order(Id::new(), 490, 100, Side::Buy, TimeInForce::Gtc, None);
+    let _ = arb_book.add_limit_order(Id::new(), 510, 100, Side::Sell, TimeInForce::Gtc, None);
 
     let itm_params = IVParams::call(110.0, 100.0, 0.25, 0.0); // Intrinsic = $10
     let config = IVConfig::default().with_price_scale(100.0);
@@ -490,7 +483,7 @@ fn demo_iv_surface() {
             let spread: u128 = (price_cents / 50).max(1); // ~2% spread
 
             let _ = book.add_limit_order(
-                OrderId::new(),
+                Id::new(),
                 price_cents.saturating_sub(spread),
                 100,
                 Side::Buy,
@@ -498,7 +491,7 @@ fn demo_iv_surface() {
                 None,
             );
             let _ = book.add_limit_order(
-                OrderId::new(),
+                Id::new(),
                 price_cents + spread,
                 100,
                 Side::Sell,

@@ -3,16 +3,16 @@
 #[cfg(test)]
 mod tests {
     use crate::OrderBook;
-    use pricelevel::{OrderId, Side, TimeInForce};
+    use pricelevel::{Id, Side, TimeInForce};
 
     #[test]
     fn test_market_impact_basic() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Add ask orders
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 110, 20, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 110, 20, Side::Sell, TimeInForce::Gtc, None);
 
         // Buy 20 units (will consume 2 levels)
         let impact = book.market_impact(20, Side::Buy);
@@ -30,7 +30,7 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Add limited ask orders
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
 
         // Request more than available
         let impact = book.market_impact(50, Side::Buy);
@@ -57,7 +57,7 @@ mod tests {
     fn test_market_impact_zero_quantity() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
 
         let impact = book.market_impact(0, Side::Buy);
 
@@ -70,9 +70,9 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Add bid orders
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 95, 15, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 90, 20, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 95, 15, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 90, 20, Side::Buy, TimeInForce::Gtc, None);
 
         // Sell 20 units (will consume 2 levels)
         let impact = book.market_impact(20, Side::Sell);
@@ -90,22 +90,8 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Add ask orders at 10000 and 10100
-        let _ = book.add_limit_order(
-            OrderId::new(),
-            10000,
-            10,
-            Side::Sell,
-            TimeInForce::Gtc,
-            None,
-        );
-        let _ = book.add_limit_order(
-            OrderId::new(),
-            10100,
-            10,
-            Side::Sell,
-            TimeInForce::Gtc,
-            None,
-        );
+        let _ = book.add_limit_order(Id::new(), 10000, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 10100, 10, Side::Sell, TimeInForce::Gtc, None);
 
         // Buy 15 units (will go into second level)
         let impact = book.market_impact(15, Side::Buy);
@@ -120,8 +106,8 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Add ask orders
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
 
         // Buy 20 units
         let simulation = book.simulate_market_order(20, Side::Buy);
@@ -141,8 +127,8 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Add limited ask orders
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
 
         // Request more than available
         let simulation = book.simulate_market_order(50, Side::Buy);
@@ -168,8 +154,8 @@ mod tests {
     fn test_simulate_market_order_total_cost() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 105, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 105, 10, Side::Sell, TimeInForce::Gtc, None);
 
         let simulation = book.simulate_market_order(20, Side::Buy);
 
@@ -182,10 +168,10 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Add buy orders at different prices
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 110, 20, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 115, 25, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 105, 15, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 110, 20, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 115, 25, Side::Buy, TimeInForce::Gtc, None);
 
         // Get liquidity between 105 and 110 (inclusive)
         let liquidity = book.liquidity_in_range(105, 110, Side::Buy);
@@ -197,9 +183,9 @@ mod tests {
     fn test_liquidity_in_range_full_range() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 110, 20, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 105, 15, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 110, 20, Side::Buy, TimeInForce::Gtc, None);
 
         // Get all liquidity
         let liquidity = book.liquidity_in_range(0, u128::MAX, Side::Buy);
@@ -211,8 +197,8 @@ mod tests {
     fn test_liquidity_in_range_no_overlap() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 105, 15, Side::Buy, TimeInForce::Gtc, None);
 
         // Range outside of available prices
         let liquidity = book.liquidity_in_range(200, 300, Side::Buy);
@@ -224,7 +210,7 @@ mod tests {
     fn test_liquidity_in_range_invalid_range() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
 
         // min_price > max_price
         let liquidity = book.liquidity_in_range(200, 100, Side::Buy);
@@ -246,9 +232,9 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Add sell orders
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 110, 20, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 110, 20, Side::Sell, TimeInForce::Gtc, None);
 
         let liquidity = book.liquidity_in_range(100, 105, Side::Sell);
 
@@ -260,10 +246,10 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Setup order book
-        let _ = book.add_limit_order(OrderId::new(), 99, 20, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 100, 30, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 101, 25, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 102, 35, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 99, 20, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 30, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 101, 25, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 102, 35, Side::Sell, TimeInForce::Gtc, None);
 
         // Test market impact
         let impact = book.market_impact(50, Side::Buy);

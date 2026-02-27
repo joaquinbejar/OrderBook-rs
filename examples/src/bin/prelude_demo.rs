@@ -19,7 +19,7 @@ fn main() {
     println!("✓ Created OrderBook for {}", book.symbol());
 
     // Add some orders using types imported via prelude
-    let order_id_1 = OrderId::from_u64(1);
+    let order_id_1 = Id::from_u64(1);
     let result = book.add_limit_order(order_id_1, 3000, 100, Side::Buy, TimeInForce::Gtc, None);
 
     match result {
@@ -27,7 +27,7 @@ fn main() {
         Err(e) => println!("✗ Failed to add order: {}", e),
     }
 
-    let order_id_2 = OrderId::from_u64(2);
+    let order_id_2 = Id::from_u64(2);
     let result = book.add_limit_order(order_id_2, 3100, 100, Side::Sell, TimeInForce::Gtc, None);
 
     match result {
@@ -53,7 +53,7 @@ fn main() {
     println!("\n=== All types imported via prelude! ===");
     println!("\nThe following types were available without explicit imports:");
     println!("  - OrderBook");
-    println!("  - OrderId");
+    println!("  - Id");
     println!("  - Side");
     println!("  - TimeInForce");
     println!("  - DefaultOrderBook");

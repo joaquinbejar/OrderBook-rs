@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod test_order_modifications {
-    use crate::orderbook::modifications::OrderQuantity;
+
     use crate::{OrderBook, OrderBookError};
-    use pricelevel::{OrderId, OrderType, OrderUpdate, Side, TimeInForce};
+    use pricelevel::{Id, OrderType, OrderUpdate, Price, Quantity, Side, TimeInForce};
 
     // Helper function to create a unique order ID
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     #[test]
@@ -25,7 +25,7 @@ mod test_order_modifications {
         // Try to update to the same price
         let update = OrderUpdate::UpdatePrice {
             order_id: id,
-            new_price: price,
+            new_price: Price::new(price),
         };
 
         let result = book.update_order(update);
@@ -56,8 +56,8 @@ mod test_order_modifications {
         let new_quantity = 15;
         let update = OrderUpdate::UpdatePriceAndQuantity {
             order_id: id,
-            new_price,
-            new_quantity,
+            new_price: Price::new(new_price),
+            new_quantity: Quantity::new(new_quantity),
         };
 
         let result = book.update_order(update);
@@ -67,8 +67,8 @@ mod test_order_modifications {
         let updated_order = book.get_order(id);
         assert!(updated_order.is_some());
         let updated_order = updated_order.unwrap();
-        assert_eq!(updated_order.price(), new_price);
-        assert_eq!(updated_order.quantity(), new_quantity);
+        assert_eq!(updated_order.price().as_u128(), new_price);
+        assert_eq!(updated_order.visible_quantity(), new_quantity);
     }
 
     #[test]
@@ -126,8 +126,8 @@ mod test_order_modifications {
         let new_quantity = 15;
         let update = OrderUpdate::Replace {
             order_id: id,
-            price: new_price,
-            quantity: new_quantity,
+            price: Price::new(new_price),
+            quantity: Quantity::new(new_quantity),
             side: Side::Buy,
         };
 
@@ -138,7 +138,7 @@ mod test_order_modifications {
         let replaced_order = book.get_order(id);
         assert!(replaced_order.is_some());
         let replaced_order = replaced_order.unwrap();
-        assert_eq!(replaced_order.price(), new_price);
+        assert_eq!(replaced_order.price().as_u128(), new_price);
         assert_eq!(replaced_order.visible_quantity(), new_quantity);
     }
 
@@ -158,8 +158,8 @@ mod test_order_modifications {
         // Replace with different side
         let update = OrderUpdate::Replace {
             order_id: id,
-            price: 1100,
-            quantity: 15,
+            price: Price::new(1100),
+            quantity: Quantity::new(15),
             side: Side::Sell, // Different side
         };
 
@@ -191,7 +191,7 @@ mod test_order_modifications {
         let new_quantity = 15;
         let update = OrderUpdate::UpdateQuantity {
             order_id: id,
-            new_quantity,
+            new_quantity: Quantity::new(new_quantity),
         };
 
         let result = book.update_order(update);
@@ -201,14 +201,14 @@ mod test_order_modifications {
         let updated_order = book.get_order(id);
         assert!(updated_order.is_some());
         let updated_order = updated_order.unwrap();
-        assert_eq!(updated_order.quantity(), new_quantity);
+        assert_eq!(updated_order.visible_quantity(), new_quantity);
 
         // Hidden quantity should remain the same
         match &*updated_order {
             OrderType::IcebergOrder {
                 hidden_quantity, ..
             } => {
-                assert_eq!(*hidden_quantity, hidden);
+                assert_eq!(hidden_quantity.as_u64(), hidden);
             }
             _ => panic!("Expected IcebergOrder"),
         }
@@ -220,11 +220,12 @@ mod test_modifications_remaining {
     use crate::OrderBook;
 
     use pricelevel::{
-        Hash32, OrderId, OrderType, OrderUpdate, PegReferenceType, Side, TimeInForce,
+        Hash32, Id, OrderType, OrderUpdate, PegReferenceType, Price, Quantity, Side, TimeInForce,
+        TimestampMs,
     };
 
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     #[test]
@@ -235,7 +236,7 @@ mod test_modifications_remaining {
         let id = create_order_id();
         let update = OrderUpdate::UpdatePrice {
             order_id: id,
-            new_price: 1000,
+            new_price: Price::new(1000),
         };
 
         let result = book.update_order(update);
@@ -251,8 +252,8 @@ mod test_modifications_remaining {
         let id = create_order_id();
         let update = OrderUpdate::UpdatePriceAndQuantity {
             order_id: id,
-            new_price: 1000,
-            new_quantity: 10,
+            new_price: Price::new(1000),
+            new_quantity: Quantity::new(10),
         };
 
         let result = book.update_order(update);
@@ -271,14 +272,14 @@ mod test_modifications_remaining {
         let timestamp = crate::utils::current_time_millis();
         let trail_order = OrderType::TrailingStop {
             id: id1,
-            price: 1000,
-            quantity: 10,
+            price: Price::new(1000),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
-            trail_amount: 5,
-            last_reference_price: 995,
+            trail_amount: Quantity::new(5),
+            last_reference_price: Price::new(995),
             extra_fields: (),
         };
 
@@ -286,11 +287,11 @@ mod test_modifications_remaining {
         let id2 = create_order_id();
         let peg_order = OrderType::PeggedOrder {
             id: id2,
-            price: 1000,
-            quantity: 10,
+            price: Price::new(1000),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
             reference_price_offset: 5,
             reference_price_type: PegReferenceType::BestBid,
@@ -301,11 +302,11 @@ mod test_modifications_remaining {
         let id3 = create_order_id();
         let mtl_order = OrderType::MarketToLimit {
             id: id3,
-            price: 1000,
-            quantity: 10,
+            price: Price::new(1000),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -314,15 +315,15 @@ mod test_modifications_remaining {
         let id4 = create_order_id();
         let reserve_order = OrderType::ReserveOrder {
             id: id4,
-            price: 1000,
-            visible_quantity: 5,
-            hidden_quantity: 5,
+            price: Price::new(1000),
+            visible_quantity: Quantity::new(5),
+            hidden_quantity: Quantity::new(5),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
-            replenish_threshold: 2,
-            replenish_amount: Some(3),
+            replenish_threshold: Quantity::new(2),
+            replenish_amount: Some(Quantity::new(3)),
             auto_replenish: true,
             extra_fields: (),
         };
@@ -338,29 +339,29 @@ mod test_modifications_remaining {
         // 1. Update trailing stop
         let update1 = OrderUpdate::UpdatePriceAndQuantity {
             order_id: id1,
-            new_price: 1010,
-            new_quantity: 15,
+            new_price: Price::new(1010),
+            new_quantity: Quantity::new(15),
         };
 
         // 2. Update pegged order
         let update2 = OrderUpdate::UpdatePriceAndQuantity {
             order_id: id2,
-            new_price: 1010,
-            new_quantity: 15,
+            new_price: Price::new(1010),
+            new_quantity: Quantity::new(15),
         };
 
         // 3. Update market to limit
         let update3 = OrderUpdate::UpdatePriceAndQuantity {
             order_id: id3,
-            new_price: 1010,
-            new_quantity: 15,
+            new_price: Price::new(1010),
+            new_quantity: Quantity::new(15),
         };
 
         // 4. Update reserve order
         let update4 = OrderUpdate::UpdatePriceAndQuantity {
             order_id: id4,
-            new_price: 1010,
-            new_quantity: 15,
+            new_price: Price::new(1010),
+            new_quantity: Quantity::new(15),
         };
 
         // Execute all updates
@@ -385,10 +386,10 @@ mod test_modifications_remaining {
         assert!(order3.is_some());
         assert!(order4.is_some());
 
-        assert_eq!(order1.unwrap().price(), 1010);
-        assert_eq!(order2.unwrap().price(), 1010);
-        assert_eq!(order3.unwrap().price(), 1010);
-        assert_eq!(order4.unwrap().price(), 1010);
+        assert_eq!(order1.unwrap().price().as_u128(), 1010);
+        assert_eq!(order2.unwrap().price().as_u128(), 1010);
+        assert_eq!(order3.unwrap().price().as_u128(), 1010);
+        assert_eq!(order4.unwrap().price().as_u128(), 1010);
     }
 
     #[test]
@@ -400,15 +401,15 @@ mod test_modifications_remaining {
         let timestamp = crate::utils::current_time_millis();
         let reserve_order = OrderType::ReserveOrder {
             id,
-            price: 1000,
-            visible_quantity: 5,
-            hidden_quantity: 5,
+            price: Price::new(1000),
+            visible_quantity: Quantity::new(5),
+            hidden_quantity: Quantity::new(5),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
-            replenish_threshold: 2,
-            replenish_amount: Some(3),
+            replenish_threshold: Quantity::new(2),
+            replenish_amount: Some(Quantity::new(3)),
             auto_replenish: true,
             extra_fields: (),
         };
@@ -418,8 +419,8 @@ mod test_modifications_remaining {
         // Try to replace with an unsupported type via Replace operation
         let update = OrderUpdate::Replace {
             order_id: id,
-            price: 1010,
-            quantity: 15,
+            price: Price::new(1010),
+            quantity: Quantity::new(15),
             side: Side::Buy,
         };
 
@@ -431,7 +432,7 @@ mod test_modifications_remaining {
         // Verify the order was updated
         let updated_order = book.get_order(id);
         assert!(updated_order.is_some());
-        assert_eq!(updated_order.clone().unwrap().price(), 1010);
+        assert_eq!(updated_order.clone().unwrap().price().as_u128(), 1010);
         assert_eq!(updated_order.unwrap().visible_quantity(), 15);
     }
 
@@ -461,11 +462,12 @@ mod test_modifications_remaining {
 mod test_modifications_specific {
     use crate::{OrderBook, OrderBookError};
     use pricelevel::{
-        Hash32, OrderId, OrderType, OrderUpdate, PegReferenceType, Side, TimeInForce,
+        Hash32, Id, OrderType, OrderUpdate, PegReferenceType, Price, Quantity, Side, TimeInForce,
+        TimestampMs,
     };
 
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     #[test]
@@ -476,7 +478,7 @@ mod test_modifications_specific {
         let id = create_order_id();
         let update = OrderUpdate::UpdatePrice {
             order_id: id,
-            new_price: 1000,
+            new_price: Price::new(1000),
         };
 
         // Should return Ok(None) for non-existent order
@@ -510,15 +512,15 @@ mod test_modifications_specific {
         let timestamp = crate::utils::current_time_millis();
         let reserve_order = OrderType::ReserveOrder {
             id,
-            price: 1000,
-            visible_quantity: 5,
-            hidden_quantity: 5,
+            price: Price::new(1000),
+            visible_quantity: Quantity::new(5),
+            hidden_quantity: Quantity::new(5),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
-            replenish_threshold: 2,
-            replenish_amount: Some(3),
+            replenish_threshold: Quantity::new(2),
+            replenish_amount: Some(Quantity::new(3)),
             auto_replenish: true,
             extra_fields: (),
         };
@@ -532,7 +534,7 @@ mod test_modifications_specific {
         // Test UpdatePrice
         let update = OrderUpdate::UpdatePrice {
             order_id: nonexistent_id,
-            new_price: 1100,
+            new_price: Price::new(1100),
         };
         let result = book.update_order(update);
         assert!(result.is_ok());
@@ -541,7 +543,7 @@ mod test_modifications_specific {
         // Test UpdateQuantity
         let update = OrderUpdate::UpdateQuantity {
             order_id: nonexistent_id,
-            new_quantity: 20,
+            new_quantity: Quantity::new(20),
         };
         let result = book.update_order(update);
         assert!(result.is_ok());
@@ -550,8 +552,8 @@ mod test_modifications_specific {
         // Test PriceAndQuantity
         let update = OrderUpdate::UpdatePriceAndQuantity {
             order_id: nonexistent_id,
-            new_price: 1100,
-            new_quantity: 20,
+            new_price: Price::new(1100),
+            new_quantity: Quantity::new(20),
         };
         let result = book.update_order(update);
         assert!(result.is_ok());
@@ -560,8 +562,8 @@ mod test_modifications_specific {
         // Test Replace
         let update = OrderUpdate::Replace {
             order_id: nonexistent_id,
-            price: 1100,
-            quantity: 20,
+            price: Price::new(1100),
+            quantity: Quantity::new(20),
             side: Side::Buy,
         };
         let result = book.update_order(update);
@@ -580,11 +582,11 @@ mod test_modifications_specific {
         // Use a PeggedOrder as an example
         let peg_order = OrderType::PeggedOrder {
             id,
-            price: 1000,
-            quantity: 10,
+            price: Price::new(1000),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
             reference_price_offset: 5,
             reference_price_type: PegReferenceType::BestBid,
@@ -596,8 +598,8 @@ mod test_modifications_specific {
         // Try to replace it
         let update = OrderUpdate::Replace {
             order_id: id,
-            price: 1100,
-            quantity: 20,
+            price: Price::new(1100),
+            quantity: Quantity::new(20),
             side: Side::Buy,
         };
 
@@ -623,30 +625,32 @@ mod tests {
     use crate::orderbook::OrderBookError;
     use crate::orderbook::book::OrderBook;
     use crate::orderbook::modifications::OrderQuantity;
-    use pricelevel::{Hash32, OrderId, OrderType, OrderUpdate, Side, TimeInForce};
+    use pricelevel::{
+        Hash32, Id, OrderType, OrderUpdate, Price, Quantity, Side, TimeInForce, TimestampMs,
+    };
 
     fn setup_book_with_orders() -> OrderBook<()> {
         let book: OrderBook<()> = OrderBook::new("TEST");
         let sell_order = OrderType::Standard {
-            id: OrderId::new(),
+            id: Id::new(),
             side: Side::Sell,
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             user_id: Hash32::zero(),
             time_in_force: TimeInForce::Gtc,
-            timestamp: 0,
+            timestamp: TimestampMs::new(0),
             extra_fields: (),
         };
         book.add_order(sell_order).unwrap();
 
         let buy_order = OrderType::Standard {
-            id: OrderId::new(),
+            id: Id::new(),
             side: Side::Buy,
-            price: 90,
-            quantity: 10,
+            price: Price::new(90),
+            quantity: Quantity::new(10),
             user_id: Hash32::zero(),
             time_in_force: TimeInForce::Gtc,
-            timestamp: 0,
+            timestamp: TimestampMs::new(0),
             extra_fields: (),
         };
         book.add_order(buy_order).unwrap();
@@ -657,13 +661,13 @@ mod tests {
     fn test_add_post_only_order_crossing_market() {
         let book = setup_book_with_orders();
         let post_only_order = OrderType::PostOnly {
-            id: OrderId::new(),
+            id: Id::new(),
             side: Side::Buy,
-            price: 100, // This price crosses the best ask (100)
-            quantity: 5,
+            price: Price::new(100), // This price crosses the best ask (100)
+            quantity: Quantity::new(5),
             user_id: Hash32::zero(),
             time_in_force: TimeInForce::Gtc,
-            timestamp: 0,
+            timestamp: TimestampMs::new(0),
             extra_fields: (),
         };
 
@@ -677,13 +681,13 @@ mod tests {
         book.set_market_close_timestamp(100); // Market closed at timestamp 100
 
         let expired_order = OrderType::Standard {
-            id: OrderId::new(),
+            id: Id::new(),
             side: Side::Buy,
-            price: 95,
-            quantity: 10,
+            price: Price::new(95),
+            quantity: Quantity::new(10),
             user_id: Hash32::zero(),
-            time_in_force: TimeInForce::Day, // Day order
-            timestamp: 101,                  // Submitted after market close
+            time_in_force: TimeInForce::Day,  // Day order
+            timestamp: TimestampMs::new(101), // Submitted after market close
             extra_fields: (),
         };
 
@@ -697,15 +701,15 @@ mod tests {
     #[test]
     fn test_successful_cancel_order_removes_level() {
         let book: OrderBook<()> = OrderBook::new("TEST");
-        let order_id = OrderId::new();
+        let order_id = Id::new();
         let order = OrderType::Standard {
             id: order_id,
             side: Side::Sell,
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             user_id: Hash32::zero(),
             time_in_force: TimeInForce::Gtc,
-            timestamp: 0,
+            timestamp: TimestampMs::new(0),
             extra_fields: (),
         };
         book.add_order(order).unwrap();
@@ -719,7 +723,7 @@ mod tests {
     #[test]
     fn test_update_order_not_found() {
         let book: OrderBook<()> = OrderBook::new("TEST");
-        let non_existent_id = OrderId::new();
+        let non_existent_id = Id::new();
         let result = book.update_order(OrderUpdate::Cancel {
             order_id: non_existent_id,
         });
@@ -729,18 +733,19 @@ mod tests {
     #[test]
     fn test_update_price_and_quantity() {
         let book = setup_book_with_orders();
-        let original_order_id = book.bids.get(&90).unwrap().value().iter_orders()[0].id();
+        let orders: Vec<_> = book.bids.get(&90).unwrap().value().iter_orders().collect();
+        let original_order_id = orders[0].id();
 
         let result = book.update_order(OrderUpdate::UpdatePriceAndQuantity {
             order_id: original_order_id,
-            new_price: 92,
-            new_quantity: 12,
+            new_price: Price::new(92),
+            new_quantity: Quantity::new(12),
         });
 
         assert!(result.is_ok());
         let updated_order = book.get_order(original_order_id).unwrap();
-        assert_eq!(updated_order.price(), 92);
-        assert_eq!(updated_order.quantity(), 12);
+        assert_eq!(updated_order.price().as_u128(), 92);
+        assert_eq!(updated_order.visible_quantity(), 12);
         assert!(book.bids.contains_key(&92));
         assert!(!book.bids.contains_key(&90));
     }
@@ -748,17 +753,17 @@ mod tests {
     #[test]
     fn test_set_quantity_for_reserve_order() {
         let mut order = OrderType::ReserveOrder {
-            id: OrderId::new(),
+            id: Id::new(),
             side: Side::Buy,
-            price: 100,
-            visible_quantity: 10,
-            hidden_quantity: 90,
-            replenish_amount: Some(10),
+            price: Price::new(100),
+            visible_quantity: Quantity::new(10),
+            hidden_quantity: Quantity::new(90),
+            replenish_amount: Some(Quantity::new(10)),
             auto_replenish: true,
-            replenish_threshold: 0,
+            replenish_threshold: Quantity::new(0),
             user_id: Hash32::zero(),
             time_in_force: TimeInForce::Gtc,
-            timestamp: 0,
+            timestamp: TimestampMs::new(0),
             extra_fields: (),
         };
 
@@ -776,8 +781,8 @@ mod tests {
             ..
         } = order
         {
-            assert_eq!(visible_quantity, 10);
-            assert_eq!(hidden_quantity, 75);
+            assert_eq!(visible_quantity, Quantity::new(10));
+            assert_eq!(hidden_quantity, Quantity::new(75));
         }
     }
 }

@@ -1,47 +1,19 @@
 //! Integration tests for implied volatility calculation.
 
 use orderbook_rs::{IVConfig, IVParams, IVQuality, OrderBook, PriceSource, SolverConfig};
-use pricelevel::{OrderId, Side, TimeInForce};
+use pricelevel::{Id, Side, TimeInForce};
 
 /// Creates a test order book with realistic option prices.
 fn create_option_book(bid_price: u128, ask_price: u128) -> OrderBook<()> {
     let book = OrderBook::<()>::new("SPY-C-450-2024-03-15");
 
     // Add multiple bid orders at different quantities
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        bid_price,
-        50,
-        Side::Buy,
-        TimeInForce::Gtc,
-        None,
-    );
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        bid_price,
-        30,
-        Side::Buy,
-        TimeInForce::Gtc,
-        None,
-    );
+    let _ = book.add_limit_order(Id::new(), bid_price, 50, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), bid_price, 30, Side::Buy, TimeInForce::Gtc, None);
 
     // Add multiple ask orders
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        ask_price,
-        40,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        ask_price,
-        60,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
+    let _ = book.add_limit_order(Id::new(), ask_price, 40, Side::Sell, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), ask_price, 60, Side::Sell, TimeInForce::Gtc, None);
 
     book
 }
@@ -140,8 +112,8 @@ fn test_iv_with_different_price_sources() {
     let book = OrderBook::<()>::new("TEST-OPT");
 
     // Asymmetric liquidity: more on bid side
-    let _ = book.add_limit_order(OrderId::new(), 500, 1000, Side::Buy, TimeInForce::Gtc, None);
-    let _ = book.add_limit_order(OrderId::new(), 520, 100, Side::Sell, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 500, 1000, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 520, 100, Side::Sell, TimeInForce::Gtc, None);
 
     let params = IVParams::call(100.0, 100.0, 0.25, 0.05);
     let config = IVConfig::default().with_price_scale(100.0);

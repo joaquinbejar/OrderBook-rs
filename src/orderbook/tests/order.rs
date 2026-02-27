@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use pricelevel::{Hash32, OrderId, OrderType, Side, TimeInForce};
+    use pricelevel::{Hash32, Id, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs};
 
-    fn create_sample_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_sample_order_id() -> Id {
+        Id::new_uuid()
     }
 
     #[test]
@@ -17,18 +17,18 @@ mod tests {
 
         let order = OrderType::Standard {
             id,
-            price,
-            quantity,
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
             side,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force,
             extra_fields: (),
         };
 
         // Test property getters
         assert_eq!(order.id(), id);
-        assert_eq!(order.price(), price);
+        assert_eq!(order.price().as_u128(), price);
         assert_eq!(order.visible_quantity(), quantity);
         assert_eq!(order.hidden_quantity(), 0); // Standard orders have no hidden quantity
         assert_eq!(order.side(), side);
@@ -53,19 +53,19 @@ mod tests {
 
         let order = OrderType::IcebergOrder {
             id,
-            price,
-            visible_quantity,
-            hidden_quantity,
+            price: Price::new(price),
+            visible_quantity: Quantity::new(visible_quantity),
+            hidden_quantity: Quantity::new(hidden_quantity),
             side,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force,
             extra_fields: (),
         };
 
         // Test property getters
         assert_eq!(order.id(), id);
-        assert_eq!(order.price(), price);
+        assert_eq!(order.price().as_u128(), price);
         assert_eq!(order.visible_quantity(), visible_quantity);
         assert_eq!(order.hidden_quantity(), hidden_quantity);
         assert_eq!(order.side(), side);
@@ -84,18 +84,18 @@ mod tests {
 
         let order = OrderType::PostOnly {
             id,
-            price,
-            quantity,
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
             side,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force,
             extra_fields: (),
         };
 
         // Test property getters
         assert_eq!(order.id(), id);
-        assert_eq!(order.price(), price);
+        assert_eq!(order.price().as_u128(), price);
         assert_eq!(order.visible_quantity(), quantity);
         assert_eq!(order.hidden_quantity(), 0);
         assert_eq!(order.side(), side);
@@ -112,11 +112,11 @@ mod tests {
 
         let ioc_order = OrderType::Standard {
             id,
-            price: 1000,
-            quantity: 10,
+            price: Price::new(1000),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 12345678,
+            timestamp: TimestampMs::new(12345678),
             time_in_force: TimeInForce::Ioc,
             extra_fields: (),
         };
@@ -134,11 +134,11 @@ mod tests {
 
         let fok_order = OrderType::Standard {
             id,
-            price: 1000,
-            quantity: 10,
+            price: Price::new(1000),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 12345678,
+            timestamp: TimestampMs::new(12345678),
             time_in_force: TimeInForce::Fok,
             extra_fields: (),
         };
@@ -153,17 +153,17 @@ mod tests {
     #[test]
     fn test_with_reduced_quantity() {
         let id = create_sample_order_id();
-        let original_quantity = 100;
+        let original_quantity = Quantity::new(100);
         let new_quantity = 50;
 
         // Test standard order
         let standard_order = OrderType::Standard {
             id,
-            price: 1000,
+            price: Price::new(1000),
             quantity: original_quantity,
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 12345678,
+            timestamp: TimestampMs::new(12345678),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -172,7 +172,11 @@ mod tests {
 
         match reduced_standard {
             OrderType::Standard { quantity, .. } => {
-                assert_eq!(quantity, new_quantity, "Quantity should be reduced");
+                assert_eq!(
+                    quantity,
+                    Quantity::new(new_quantity),
+                    "Quantity should be reduced"
+                );
             }
             _ => panic!("Expected Standard order"),
         }
@@ -180,12 +184,12 @@ mod tests {
         // Test iceberg order
         let iceberg_order = OrderType::IcebergOrder {
             id,
-            price: 1000,
+            price: Price::new(1000),
             visible_quantity: original_quantity,
-            hidden_quantity: 200,
+            hidden_quantity: Quantity::new(200),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 12345678,
+            timestamp: TimestampMs::new(12345678),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -199,11 +203,13 @@ mod tests {
                 ..
             } => {
                 assert_eq!(
-                    visible_quantity, new_quantity,
+                    visible_quantity,
+                    Quantity::new(new_quantity),
                     "Visible quantity should be reduced"
                 );
                 assert_eq!(
-                    hidden_quantity, 200,
+                    hidden_quantity,
+                    Quantity::new(200),
                     "Hidden quantity should remain unchanged"
                 );
             }
@@ -220,12 +226,12 @@ mod tests {
 
         let iceberg_order = OrderType::IcebergOrder {
             id,
-            price: 1000,
-            visible_quantity,
-            hidden_quantity,
+            price: Price::new(1000),
+            visible_quantity: Quantity::new(visible_quantity),
+            hidden_quantity: Quantity::new(hidden_quantity),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 12345678,
+            timestamp: TimestampMs::new(12345678),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -239,12 +245,13 @@ mod tests {
                 ..
             } => {
                 assert_eq!(
-                    new_visible, refresh_amount,
+                    new_visible,
+                    Quantity::new(refresh_amount),
                     "Visible quantity should be refreshed to requested amount"
                 );
                 assert_eq!(
                     new_hidden,
-                    hidden_quantity - refresh_amount,
+                    Quantity::new(hidden_quantity - refresh_amount),
                     "Hidden quantity should be reduced by refresh amount"
                 );
                 assert_eq!(
@@ -259,16 +266,16 @@ mod tests {
     #[test]
     fn test_match_against_standard_full_match() {
         let id = create_sample_order_id();
-        let order_quantity = 10;
+        let order_quantity = Quantity::new(10);
         let incoming_quantity = 10; // Equal to order quantity, so full match
 
         let order = OrderType::Standard {
             id,
-            price: 1000,
+            price: Price::new(1000),
             quantity: order_quantity,
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 12345678,
+            timestamp: TimestampMs::new(12345678),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -277,7 +284,8 @@ mod tests {
             order.match_against(incoming_quantity);
 
         assert_eq!(
-            consumed, order_quantity,
+            Quantity::new(consumed),
+            order_quantity,
             "All of order quantity should be consumed"
         );
         assert!(
@@ -291,16 +299,16 @@ mod tests {
     #[test]
     fn test_match_against_standard_partial_match() {
         let id = create_sample_order_id();
-        let order_quantity = 20;
+        let order_quantity = Quantity::new(20);
         let incoming_quantity = 10; // Less than order quantity, so partial match
 
         let order = OrderType::Standard {
             id,
-            price: 1000,
+            price: Price::new(1000),
             quantity: order_quantity,
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 12345678,
+            timestamp: TimestampMs::new(12345678),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -317,7 +325,7 @@ mod tests {
             Some(OrderType::Standard { quantity, .. }) => {
                 assert_eq!(
                     quantity,
-                    order_quantity - incoming_quantity,
+                    Quantity::new(order_quantity.as_u64() - incoming_quantity),
                     "Remaining quantity should be reduced"
                 );
             }
@@ -331,18 +339,18 @@ mod tests {
     #[test]
     fn test_match_against_iceberg_full_visible_with_refresh() {
         let id = create_sample_order_id();
-        let visible_quantity = 10;
+        let visible_quantity = Quantity::new(10);
         let hidden_quantity = 20;
         let incoming_quantity = 10; // Equal to visible, so full visible match with refresh
 
         let order = OrderType::IcebergOrder {
             id,
-            price: 1000,
+            price: Price::new(1000),
             visible_quantity,
-            hidden_quantity,
+            hidden_quantity: Quantity::new(hidden_quantity),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: 12345678,
+            timestamp: TimestampMs::new(12345678),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -351,7 +359,8 @@ mod tests {
             order.match_against(incoming_quantity);
 
         assert_eq!(
-            consumed, visible_quantity,
+            Quantity::new(consumed),
+            visible_quantity,
             "All of visible quantity should be consumed"
         );
 
@@ -367,11 +376,12 @@ mod tests {
                 );
                 assert_eq!(
                     new_hidden,
-                    hidden_quantity - visible_quantity,
+                    Quantity::new(hidden_quantity - visible_quantity.as_u64()),
                     "Hidden quantity should be reduced by refresh"
                 );
                 assert_eq!(
-                    hidden_reduced, visible_quantity,
+                    Quantity::new(hidden_reduced),
+                    visible_quantity,
                     "Hidden reduced should equal visible quantity"
                 );
             }

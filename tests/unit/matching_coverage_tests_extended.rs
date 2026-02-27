@@ -1,5 +1,5 @@
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce};
+use pricelevel::{Id, Side, TimeInForce};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 struct TestExtraFields {
@@ -16,9 +16,9 @@ mod tests {
         let book: OrderBook<TestExtraFields> = OrderBook::new("TEST");
 
         // Add sell orders at different prices
-        let sell_id1 = OrderId::new_uuid();
-        let sell_id2 = OrderId::new_uuid();
-        let sell_id3 = OrderId::new_uuid();
+        let sell_id1 = Id::new_uuid();
+        let sell_id2 = Id::new_uuid();
+        let sell_id3 = Id::new_uuid();
 
         book.add_limit_order(sell_id1, 1000, 10, Side::Sell, TimeInForce::Gtc, None)
             .unwrap();
@@ -28,13 +28,13 @@ mod tests {
             .unwrap();
 
         // Match with price limit - should only match orders at or below limit
-        let buy_id = OrderId::new_uuid();
+        let buy_id = Id::new_uuid();
         let result = book.match_order(buy_id, Side::Buy, 25, Some(1010));
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity, 5); // 25 - 20 = 5 (only first two orders matched)
-        assert!(!match_result.is_complete);
+        assert_eq!(match_result.remaining_quantity(), 5); // 25 - 20 = 5 (only first two orders matched)
+        assert!(!match_result.is_complete());
 
         // Verify the third order (at 1020) was not matched
         assert!(book.get_order(sell_id3).is_some());
@@ -45,9 +45,9 @@ mod tests {
         let book: OrderBook<TestExtraFields> = OrderBook::new("TEST");
 
         // Add buy orders at different prices
-        let buy_id1 = OrderId::new_uuid();
-        let buy_id2 = OrderId::new_uuid();
-        let buy_id3 = OrderId::new_uuid();
+        let buy_id1 = Id::new_uuid();
+        let buy_id2 = Id::new_uuid();
+        let buy_id3 = Id::new_uuid();
 
         book.add_limit_order(buy_id1, 1020, 10, Side::Buy, TimeInForce::Gtc, None)
             .unwrap();
@@ -57,13 +57,13 @@ mod tests {
             .unwrap();
 
         // Match with price limit - should only match orders at or above limit
-        let sell_id = OrderId::new_uuid();
+        let sell_id = Id::new_uuid();
         let result = book.match_order(sell_id, Side::Sell, 25, Some(1010));
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity, 5); // 25 - 20 = 5 (only first two orders matched)
-        assert!(!match_result.is_complete);
+        assert_eq!(match_result.remaining_quantity(), 5); // 25 - 20 = 5 (only first two orders matched)
+        assert!(!match_result.is_complete());
 
         // Verify the third order (at 1000) was not matched
         assert!(book.get_order(buy_id3).is_some());
@@ -74,7 +74,7 @@ mod tests {
         let book: OrderBook<TestExtraFields> = OrderBook::new("TEST");
 
         // Empty order book - no liquidity
-        let buy_id = OrderId::new_uuid();
+        let buy_id = Id::new_uuid();
         let result = book.match_order(buy_id, Side::Buy, 100, None); // Market order
 
         // Test that insufficient liquidity is handled properly
@@ -92,12 +92,12 @@ mod tests {
         let book: OrderBook<TestExtraFields> = OrderBook::new("TEST");
 
         // Add sell order at high price
-        let sell_id = OrderId::new_uuid();
+        let sell_id = Id::new_uuid();
         book.add_limit_order(sell_id, 2000, 10, Side::Sell, TimeInForce::Gtc, None)
             .unwrap();
 
         // Try to buy with low limit price - no match should occur
-        let buy_id = OrderId::new_uuid();
+        let buy_id = Id::new_uuid();
         let result = book.match_order(buy_id, Side::Buy, 100, Some(1000));
 
         assert!(result.is_ok());
@@ -111,9 +111,9 @@ mod tests {
         let book: OrderBook<TestExtraFields> = OrderBook::new("TEST");
 
         // Add sell orders at different prices
-        let sell_id1 = OrderId::new_uuid();
-        let sell_id2 = OrderId::new_uuid();
-        let sell_id3 = OrderId::new_uuid();
+        let sell_id1 = Id::new_uuid();
+        let sell_id2 = Id::new_uuid();
+        let sell_id3 = Id::new_uuid();
 
         book.add_limit_order(sell_id1, 1000, 10, Side::Sell, TimeInForce::Gtc, None)
             .unwrap();
@@ -148,7 +148,7 @@ mod tests {
         let book: OrderBook<TestExtraFields> = OrderBook::new("TEST");
 
         // Add limited liquidity
-        let sell_id = OrderId::new_uuid();
+        let sell_id = Id::new_uuid();
         book.add_limit_order(sell_id, 1000, 20, Side::Sell, TimeInForce::Gtc, None)
             .unwrap();
 
@@ -162,17 +162,17 @@ mod tests {
         let book: OrderBook<TestExtraFields> = OrderBook::new("TEST");
 
         // Add some liquidity
-        let sell_id1 = OrderId::new_uuid();
-        let sell_id2 = OrderId::new_uuid();
+        let sell_id1 = Id::new_uuid();
+        let sell_id2 = Id::new_uuid();
         book.add_limit_order(sell_id1, 1000, 50, Side::Sell, TimeInForce::Gtc, None)
             .unwrap();
         book.add_limit_order(sell_id2, 1010, 50, Side::Sell, TimeInForce::Gtc, None)
             .unwrap();
 
         // Prepare batch orders
-        let buy_id1 = OrderId::new_uuid();
-        let buy_id2 = OrderId::new_uuid();
-        let buy_id3 = OrderId::new_uuid();
+        let buy_id1 = Id::new_uuid();
+        let buy_id2 = Id::new_uuid();
+        let buy_id3 = Id::new_uuid();
 
         let batch_orders = vec![
             (buy_id1, Side::Buy, 30, None),
@@ -196,9 +196,9 @@ mod tests {
         let book: OrderBook<TestExtraFields> = OrderBook::new("TEST");
 
         // Add orders at various prices for sell side matching
-        let buy_id1 = OrderId::new_uuid();
-        let buy_id2 = OrderId::new_uuid();
-        let buy_id3 = OrderId::new_uuid();
+        let buy_id1 = Id::new_uuid();
+        let buy_id2 = Id::new_uuid();
+        let buy_id3 = Id::new_uuid();
 
         book.add_limit_order(buy_id1, 1030, 10, Side::Buy, TimeInForce::Gtc, None)
             .unwrap();
@@ -208,7 +208,7 @@ mod tests {
             .unwrap();
 
         // Sell with price limit that should skip some orders
-        let sell_id = OrderId::new_uuid();
+        let sell_id = Id::new_uuid();
         let result = book.match_order(sell_id, Side::Sell, 25, Some(1025));
 
         // Test that price limit matching works
@@ -226,9 +226,9 @@ mod tests {
         let book: OrderBook<TestExtraFields> = OrderBook::new("TEST");
 
         // Add buy orders at different prices
-        let buy_id1 = OrderId::new_uuid();
-        let buy_id2 = OrderId::new_uuid();
-        let buy_id3 = OrderId::new_uuid();
+        let buy_id1 = Id::new_uuid();
+        let buy_id2 = Id::new_uuid();
+        let buy_id3 = Id::new_uuid();
 
         book.add_limit_order(buy_id1, 1030, 15, Side::Buy, TimeInForce::Gtc, None)
             .unwrap();

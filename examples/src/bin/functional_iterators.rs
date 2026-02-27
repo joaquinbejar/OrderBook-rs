@@ -15,7 +15,7 @@
 //   (from the examples directory)
 
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Side, TimeInForce, setup_logger};
 use tracing::info;
 
 fn main() {
@@ -71,7 +71,7 @@ fn create_orderbook_with_depth(symbol: &str) -> OrderBook {
 
     for (price, quantity) in bid_orders {
         let _ = book.add_limit_order(
-            OrderId::new(),
+            Id::new(),
             price,
             quantity,
             Side::Buy,
@@ -98,7 +98,7 @@ fn create_orderbook_with_depth(symbol: &str) -> OrderBook {
 
     for (price, quantity) in ask_orders {
         let _ = book.add_limit_order(
-            OrderId::new(),
+            Id::new(),
             price,
             quantity,
             Side::Sell,

@@ -1,6 +1,6 @@
 use criterion::Criterion;
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce};
+use pricelevel::{Id, Side, TimeInForce};
 use std::hint::black_box;
 
 /// Register benchmarks for mixed/realistic order book operations
@@ -14,8 +14,8 @@ pub fn register_benchmarks(c: &mut Criterion) {
 
             // Phase 1: Add initial orders on both sides of the book
             for i in 0..50 {
-                let bid_id = OrderId::new_uuid();
-                let ask_id = OrderId::new_uuid();
+                let bid_id = Id::new_uuid();
+                let ask_id = Id::new_uuid();
                 let _ = black_box(order_book.add_limit_order(
                     bid_id,
                     990 + i % 10,
@@ -36,8 +36,8 @@ pub fn register_benchmarks(c: &mut Criterion) {
 
             // Phase 2: Add some iceberg orders
             for _i in 0..10 {
-                let bid_id = OrderId::new_uuid();
-                let ask_id = OrderId::new_uuid();
+                let bid_id = Id::new_uuid();
+                let ask_id = Id::new_uuid();
                 let _ = black_box(order_book.add_iceberg_order(
                     bid_id,
                     985,
@@ -60,7 +60,7 @@ pub fn register_benchmarks(c: &mut Criterion) {
 
             // Phase 3: Execute some market orders
             for i in 0..5 {
-                let market_id = OrderId::new_uuid();
+                let market_id = Id::new_uuid();
                 let _ = black_box(order_book.submit_market_order(
                     market_id,
                     50,
@@ -95,7 +95,7 @@ pub fn register_benchmarks(c: &mut Criterion) {
                     1001 + (i / 2)
                 };
 
-                let id = OrderId::new_uuid();
+                let id = Id::new_uuid();
                 let _ = black_box(order_book.add_limit_order(
                     id,
                     price,
@@ -108,14 +108,14 @@ pub fn register_benchmarks(c: &mut Criterion) {
 
             // Execute many small orders and modifications
             for i in 0..100 {
-                let market_id = OrderId::new_uuid();
+                let market_id = Id::new_uuid();
                 let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
 
                 // Submit small market order
                 let _ = black_box(order_book.submit_market_order(market_id, 2, side));
 
                 // Add new limit order
-                let limit_id = OrderId::new_uuid();
+                let limit_id = Id::new_uuid();
                 let price = if side == Side::Buy {
                     999 - (i % 10)
                 } else {

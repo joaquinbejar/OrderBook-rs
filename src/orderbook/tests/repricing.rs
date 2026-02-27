@@ -4,10 +4,12 @@
 mod tests {
     use crate::OrderBook;
     use crate::orderbook::repricing::RepricingOperations;
-    use pricelevel::{Hash32, OrderId, OrderType, PegReferenceType, Side, TimeInForce};
+    use pricelevel::{
+        Hash32, Id, OrderType, PegReferenceType, Price, Quantity, Side, TimeInForce, TimestampMs,
+    };
 
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     fn current_time_millis() -> u64 {
@@ -28,11 +30,11 @@ mod tests {
         let id = create_order_id();
         let pegged_order = OrderType::PeggedOrder {
             id,
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             reference_price_offset: 5,
             reference_price_type: PegReferenceType::BestBid,
@@ -58,14 +60,14 @@ mod tests {
         let id = create_order_id();
         let trailing_order = OrderType::TrailingStop {
             id,
-            price: 95,
-            quantity: 10,
+            price: Price::new(95),
+            quantity: Quantity::new(10),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
-            trail_amount: 5,
-            last_reference_price: 100,
+            trail_amount: Quantity::new(5),
+            last_reference_price: Price::new(100),
             extra_fields: (),
         };
 
@@ -85,11 +87,11 @@ mod tests {
         let pegged_id = create_order_id();
         let pegged_order = OrderType::PeggedOrder {
             id: pegged_id,
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             reference_price_offset: 5,
             reference_price_type: PegReferenceType::BestBid,
@@ -102,14 +104,14 @@ mod tests {
         let trailing_id = create_order_id();
         let trailing_order = OrderType::TrailingStop {
             id: trailing_id,
-            price: 110, // Higher than buy price, won't match
-            quantity: 10,
+            price: Price::new(110), // Higher than buy price, won't match
+            quantity: Quantity::new(10),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
-            trail_amount: 5,
-            last_reference_price: 115,
+            trail_amount: Quantity::new(5),
+            last_reference_price: Price::new(115),
             extra_fields: (),
         };
         book.add_order(trailing_order).unwrap();
@@ -136,11 +138,11 @@ mod tests {
         let liquidity_id = create_order_id();
         let liquidity_order = OrderType::Standard {
             id: liquidity_id,
-            price: 100,
-            quantity: 100,
+            price: Price::new(100),
+            quantity: Quantity::new(100),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -150,11 +152,11 @@ mod tests {
         let pegged_id = create_order_id();
         let pegged_order = OrderType::PeggedOrder {
             id: pegged_id,
-            price: 90, // Initial price (will be re-priced)
-            quantity: 10,
+            price: Price::new(90), // Initial price (will be re-priced)
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             reference_price_offset: 5,
             reference_price_type: PegReferenceType::BestBid,
@@ -168,7 +170,7 @@ mod tests {
 
         // Verify the order was re-priced
         let order = book.get_order(pegged_id).unwrap();
-        assert_eq!(order.price(), 105);
+        assert_eq!(order.price().as_u128(), 105);
     }
 
     #[test]
@@ -179,11 +181,11 @@ mod tests {
         let liquidity_id = create_order_id();
         let liquidity_order = OrderType::Standard {
             id: liquidity_id,
-            price: 110,
-            quantity: 100,
+            price: Price::new(110),
+            quantity: Quantity::new(100),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };
@@ -193,11 +195,11 @@ mod tests {
         let pegged_id = create_order_id();
         let pegged_order = OrderType::PeggedOrder {
             id: pegged_id,
-            price: 120, // Initial price (will be re-priced)
-            quantity: 10,
+            price: Price::new(120), // Initial price (will be re-priced)
+            quantity: Quantity::new(10),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             reference_price_offset: -3,
             reference_price_type: PegReferenceType::BestAsk,
@@ -211,7 +213,7 @@ mod tests {
 
         // Verify the order was re-priced
         let order = book.get_order(pegged_id).unwrap();
-        assert_eq!(order.price(), 107);
+        assert_eq!(order.price().as_u128(), 107);
     }
 
     #[test]
@@ -285,14 +287,14 @@ mod tests {
 
         let order = OrderType::TrailingStop::<()> {
             id: create_order_id(),
-            price: 95,
-            quantity: 10,
+            price: Price::new(95),
+            quantity: Quantity::new(10),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
-            trail_amount: 5,
-            last_reference_price: 100,
+            trail_amount: Quantity::new(5),
+            last_reference_price: Price::new(100),
             extra_fields: (),
         };
 
@@ -309,14 +311,14 @@ mod tests {
 
         let order = OrderType::TrailingStop::<()> {
             id: create_order_id(),
-            price: 105,
-            quantity: 10,
+            price: Price::new(105),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
-            trail_amount: 5,
-            last_reference_price: 100,
+            trail_amount: Quantity::new(5),
+            last_reference_price: Price::new(100),
             extra_fields: (),
         };
 
@@ -358,11 +360,11 @@ mod tests {
         // Add a standard order
         let standard = OrderType::Standard {
             id: create_order_id(),
-            price: 100,
-            quantity: 100,
+            price: Price::new(100),
+            quantity: Quantity::new(100),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         };

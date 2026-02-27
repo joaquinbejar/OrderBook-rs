@@ -1,7 +1,7 @@
 // examples/src/bin/basic_orderbook.rs
 
 use orderbook_rs::{OrderBook, current_time_millis};
-use pricelevel::{OrderId, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Side, TimeInForce, setup_logger};
 use tracing::info;
 
 fn main() {
@@ -230,17 +230,21 @@ fn demo_market_orders(book: &crate::OrderBook) {
         Ok(match_result) => {
             info!(
                 "Market BUY result: executed={}, remaining={}, complete={}, transactions={}",
-                match_result.executed_quantity(),
-                match_result.remaining_quantity,
-                match_result.is_complete,
-                match_result.transactions.len()
+                match_result.executed_quantity().unwrap_or(0),
+                match_result.remaining_quantity(),
+                match_result.is_complete(),
+                match_result.trades().as_vec().len()
             );
 
             // Display transaction details
-            for (i, tx) in match_result.transactions.as_vec().iter().enumerate() {
+            for (i, tx) in match_result.trades().as_vec().iter().enumerate() {
                 info!(
                     "  Transaction {}: price={}, qty={}, taker={}, maker={}",
-                    i, tx.price, tx.quantity, tx.taker_order_id, tx.maker_order_id
+                    i,
+                    tx.price(),
+                    tx.quantity(),
+                    tx.taker_order_id(),
+                    tx.maker_order_id()
                 );
             }
         }
@@ -255,10 +259,10 @@ fn demo_market_orders(book: &crate::OrderBook) {
         Ok(match_result) => {
             info!(
                 "Market SELL result: executed={}, remaining={}, complete={}, transactions={}",
-                match_result.executed_quantity(),
-                match_result.remaining_quantity,
-                match_result.is_complete,
-                match_result.transactions.len()
+                match_result.executed_quantity().unwrap_or(0),
+                match_result.remaining_quantity(),
+                match_result.is_complete(),
+                match_result.trades().as_vec().len()
             );
         }
         Err(e) => info!("Market SELL failed: {}", e),
@@ -272,9 +276,9 @@ fn demo_market_orders(book: &crate::OrderBook) {
         Ok(match_result) => {
             info!(
                 "Large market BUY result: executed={}, remaining={}, complete={}",
-                match_result.executed_quantity(),
-                match_result.remaining_quantity,
-                match_result.is_complete
+                match_result.executed_quantity().unwrap_or(0),
+                match_result.remaining_quantity(),
+                match_result.is_complete()
             );
         }
         Err(e) => info!("Large market BUY failed as expected: {}", e),
@@ -425,7 +429,11 @@ fn display_orderbook_state(book: &crate::OrderBook) {
     for (i, level) in snapshot.bids.iter().enumerate() {
         info!(
             "  Level {}: price={}, visible={}, hidden={}, orders={}",
-            i, level.price, level.visible_quantity, level.hidden_quantity, level.order_count
+            i,
+            level.price(),
+            level.visible_quantity(),
+            level.hidden_quantity(),
+            level.order_count()
         );
     }
 
@@ -433,11 +441,15 @@ fn display_orderbook_state(book: &crate::OrderBook) {
     for (i, level) in snapshot.asks.iter().enumerate() {
         info!(
             "  Level {}: price={}, visible={}, hidden={}, orders={}",
-            i, level.price, level.visible_quantity, level.hidden_quantity, level.order_count
+            i,
+            level.price(),
+            level.visible_quantity(),
+            level.hidden_quantity(),
+            level.order_count()
         );
     }
 }
 
-fn new_order_id() -> OrderId {
-    OrderId::new_uuid()
+fn new_order_id() -> Id {
+    Id::new_uuid()
 }

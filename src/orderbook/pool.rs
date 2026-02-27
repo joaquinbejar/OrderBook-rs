@@ -1,10 +1,10 @@
-use pricelevel::OrderId;
+use pricelevel::Id;
 use std::cell::RefCell;
 
 /// A memory pool for reusing vectors to reduce allocations in hot paths.
 #[derive(Debug)]
 pub struct MatchingPool {
-    filled_orders_pool: RefCell<Vec<Vec<OrderId>>>,
+    filled_orders_pool: RefCell<Vec<Vec<Id>>>,
     price_vec_pool: RefCell<Vec<Vec<u128>>>,
 }
 
@@ -18,7 +18,7 @@ impl MatchingPool {
     }
 
     /// Retrieves a vector for filled orders from the pool.
-    pub fn get_filled_orders_vec(&self) -> Vec<OrderId> {
+    pub fn get_filled_orders_vec(&self) -> Vec<Id> {
         self.filled_orders_pool
             .borrow_mut()
             .pop()
@@ -26,7 +26,7 @@ impl MatchingPool {
     }
 
     /// Returns a filled orders vector to the pool for reuse.
-    pub fn return_filled_orders_vec(&self, mut vec: Vec<OrderId>) {
+    pub fn return_filled_orders_vec(&self, mut vec: Vec<Id>) {
         vec.clear();
         self.filled_orders_pool.borrow_mut().push(vec);
     }

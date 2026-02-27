@@ -6,7 +6,7 @@
 //! 3. Use BookManager to handle trades from multiple symbols
 //! 4. Demonstrate real-world patterns for trading systems
 
-use orderbook_rs::prelude::{BookManager, BookManagerStd, OrderId, Side, TimeInForce};
+use orderbook_rs::prelude::{BookManager, BookManagerStd, Id, Side, TimeInForce};
 use std::thread;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -17,7 +17,7 @@ fn add_liquidity(book: &orderbook_rs::OrderBook<()>, symbol: &str) {
 
     // Add some ask orders (sell side)
     for i in 1u64..=5 {
-        let order_id = OrderId::from_u64(1000 + i);
+        let order_id = Id::from_u64(1000 + i);
         let price: u128 = 50000 + (i as u128 * 10); // Prices: 50010, 50020, 50030, etc.
         let quantity = 100;
 
@@ -35,7 +35,7 @@ fn add_liquidity(book: &orderbook_rs::OrderBook<()>, symbol: &str) {
 
     // Add some bid orders (buy side)
     for i in 1u64..=5 {
-        let order_id = OrderId::from_u64(2000 + i);
+        let order_id = Id::from_u64(2000 + i);
         let price: u128 = 49990 - (i as u128 * 10); // Prices: 49980, 49970, 49960, etc.
         let quantity = 100;
 
@@ -52,7 +52,7 @@ fn execute_trades(book: &orderbook_rs::OrderBook<()>, symbol: &str) {
     info!("Executing trades on {}", symbol);
 
     // Execute a buy market order that will match against asks
-    let buy_order_id = OrderId::from_u64(3001);
+    let buy_order_id = Id::from_u64(3001);
     if let Err(e) =
         book.add_limit_order(buy_order_id, 50020, 150, Side::Buy, TimeInForce::Gtc, None)
     {
@@ -62,7 +62,7 @@ fn execute_trades(book: &orderbook_rs::OrderBook<()>, symbol: &str) {
     thread::sleep(Duration::from_millis(100)); // Allow processing
 
     // Execute a sell market order that will match against bids
-    let sell_order_id = OrderId::from_u64(3002);
+    let sell_order_id = Id::from_u64(3002);
     if let Err(e) = book.add_limit_order(
         sell_order_id,
         49980,
@@ -169,18 +169,21 @@ mod tests {
         let book = OrderBook::<()>::with_trade_listener("TEST/USD", trade_listener);
 
         // Add liquidity
-        let ask_id = OrderId::from_u64(1);
+        let ask_id = Id::from_u64(1);
         book.add_limit_order(ask_id, 100, 50, Side::Sell, TimeInForce::Gtc, None)
             .unwrap();
 
         // Execute a trade
-        let buy_id = OrderId::from_u64(2);
+        let buy_id = Id::from_u64(2);
         book.add_limit_order(buy_id, 100, 30, Side::Buy, TimeInForce::Gtc, None)
             .unwrap();
 
         // Verify we received the trade event
         let trade_result = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
         assert_eq!(trade_result.symbol, "TEST/USD");
-        assert_eq!(trade_result.match_result.executed_quantity(), 30);
+        assert_eq!(
+            trade_result.match_result.executed_quantity().unwrap_or(0),
+            30
+        );
     }
 }

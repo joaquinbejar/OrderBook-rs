@@ -18,7 +18,7 @@ use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
 #[cfg(feature = "special_orders")]
 use pricelevel::OrderUpdate;
-use pricelevel::{Hash32, MatchResult, OrderId, OrderType, PriceLevel, Side, UuidGenerator};
+use pricelevel::{Hash32, Id, MatchResult, OrderType, PriceLevel, Side, UuidGenerator};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
@@ -51,12 +51,12 @@ pub struct OrderBook<T = ()> {
 
     /// A concurrent map from order ID to (price, side) for fast lookups
     /// This avoids having to search through all price levels to find an order
-    pub(super) order_locations: DashMap<OrderId, (u128, Side)>,
+    pub(super) order_locations: DashMap<Id, (u128, Side)>,
 
     /// A concurrent map from user ID to their order IDs for fast lookup.
     /// Maintained by `add_order`, `cancel_order`, and the matching engine
     /// to enable O(1) user-based mass cancellation.
-    pub(super) user_orders: DashMap<Hash32, Vec<OrderId>>,
+    pub(super) user_orders: DashMap<Hash32, Vec<Id>>,
 
     /// Generator for unique transaction IDs
     pub(super) transaction_id_generator: UuidGenerator,
@@ -153,7 +153,7 @@ where
         state.serialize_field("asks", &asks)?;
 
         // Serialize order_locations as HashMap
-        let order_locations: HashMap<OrderId, (u128, Side)> = self
+        let order_locations: HashMap<Id, (u128, Side)> = self
             .order_locations
             .iter()
             .map(|entry| (*entry.key(), *entry.value()))
@@ -796,7 +796,7 @@ where
         for entry in iter {
             let price = *entry.key();
             let price_level = entry.value();
-            cumulative = cumulative.saturating_add(price_level.total_quantity());
+            cumulative = cumulative.saturating_add(price_level.total_quantity().unwrap_or(0));
 
             if cumulative >= target_depth {
                 return Some(price);
@@ -852,7 +852,7 @@ where
         for entry in iter {
             let price = *entry.key();
             let price_level = entry.value();
-            cumulative = cumulative.saturating_add(price_level.total_quantity());
+            cumulative = cumulative.saturating_add(price_level.total_quantity().unwrap_or(0));
 
             if cumulative >= target_depth {
                 return Some((price, cumulative));
@@ -914,7 +914,7 @@ where
             }
 
             let price_level = entry.value();
-            total = total.saturating_add(price_level.total_quantity());
+            total = total.saturating_add(price_level.total_quantity().unwrap_or(0));
         }
 
         total
@@ -931,11 +931,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 105, 10, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 105, 10, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// if let Some(spread) = book.spread_absolute() {
     ///     println!("Absolute spread: {}", spread); // 5
@@ -963,11 +963,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 10000, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 10010, 10, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 10000, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 10010, 10, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// // Using default 10,000 multiplier
     /// if let Some(spread_bps) = book.spread_bps(None) {
@@ -1011,11 +1011,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// // Calculate VWAP for buying 20 units
     /// if let Some(vwap) = book.vwap(20, Side::Buy) {
@@ -1056,7 +1056,7 @@ where
 
             let price = *entry.key();
             let price_level = entry.value();
-            let available = price_level.total_quantity();
+            let available = price_level.total_quantity().unwrap_or(0);
 
             if available == 0 {
                 continue;
@@ -1090,11 +1090,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 105, 30, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 105, 30, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// if let Some(micro) = book.micro_price() {
     ///     println!("Micro price: {:.2}", micro);
@@ -1106,8 +1106,18 @@ where
         let best_ask_price = self.best_ask()?;
 
         // Get volumes at best levels
-        let bid_volume = self.bids.get(&best_bid_price)?.value().total_quantity();
-        let ask_volume = self.asks.get(&best_ask_price)?.value().total_quantity();
+        let bid_volume = self
+            .bids
+            .get(&best_bid_price)?
+            .value()
+            .total_quantity()
+            .unwrap_or(0);
+        let ask_volume = self
+            .asks
+            .get(&best_ask_price)?
+            .value()
+            .total_quantity()
+            .unwrap_or(0);
 
         let total_volume = bid_volume.saturating_add(ask_volume);
 
@@ -1144,11 +1154,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 60, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 105, 40, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 60, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 105, 40, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// let imbalance = book.order_book_imbalance(5);
     /// if imbalance > 0.0 {
@@ -1201,11 +1211,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// let impact = book.market_impact(20, Side::Buy);
     /// println!("Average price: {}", impact.avg_price);
@@ -1258,7 +1268,7 @@ where
 
             let price = *entry.key();
             let price_level = entry.value();
-            let available = price_level.total_quantity();
+            let available = price_level.total_quantity().unwrap_or(0);
 
             if available == 0 {
                 continue;
@@ -1321,11 +1331,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// let simulation = book.simulate_market_order(20, Side::Buy);
     /// for (price, qty) in &simulation.fills {
@@ -1370,7 +1380,7 @@ where
 
             let price = *entry.key();
             let price_level = entry.value();
-            let available = price_level.total_quantity();
+            let available = price_level.total_quantity().unwrap_or(0);
 
             if available == 0 {
                 continue;
@@ -1416,12 +1426,12 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 105, 15, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 110, 20, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 105, 15, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 110, 20, Side::Buy, TimeInForce::Gtc, None);
     ///
     /// // Get liquidity between 100 and 105 (inclusive)
     /// let liquidity = book.liquidity_in_range(100, 105, Side::Buy);
@@ -1456,7 +1466,7 @@ where
             }
 
             let price_level = entry.value();
-            let quantity = price_level.total_quantity();
+            let quantity = price_level.total_quantity().unwrap_or(0);
             total_liquidity = total_liquidity.saturating_add(quantity);
         }
 
@@ -1481,11 +1491,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 20, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 20, Side::Buy, TimeInForce::Gtc, None);
     ///
     /// let orders_ahead = book.queue_ahead_at_price(100, Side::Buy);
     /// assert_eq!(orders_ahead, 2);
@@ -1498,7 +1508,7 @@ where
         };
 
         if let Some(entry) = price_levels.get(&price) {
-            entry.value().iter_orders().len()
+            entry.value().iter_orders().count()
         } else {
             0
         }
@@ -1525,11 +1535,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 105, 10, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 105, 10, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// // Buy side: best bid is 100, 1 tick inside = 99 (if tick_size = 1)
     /// if let Some(price) = book.price_n_ticks_inside(1, 1, Side::Buy) {
@@ -1585,12 +1595,12 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 99, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 98, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 99, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 98, 10, Side::Buy, TimeInForce::Gtc, None);
     ///
     /// // Position 1 should be best bid (100)
     /// assert_eq!(book.price_for_queue_position(1, Side::Buy), Some(100));
@@ -1652,12 +1662,12 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 99, 60, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 98, 70, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 99, 60, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 98, 70, Side::Buy, TimeInForce::Gtc, None);
     ///
     /// // Want to be just inside 100 units of depth
     /// // Depth at 100: 50, at 99: 110, so we want to be at 100 (just inside 110)
@@ -1697,7 +1707,7 @@ where
 
         for entry in iter {
             let price = *entry.key();
-            let quantity = entry.value().total_quantity();
+            let quantity = entry.value().total_quantity().unwrap_or(0);
             cumulative_depth = cumulative_depth.saturating_add(quantity);
 
             if cumulative_depth >= target_depth {
@@ -1735,12 +1745,12 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 99, 15, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 98, 20, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 99, 15, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 98, 20, Side::Buy, TimeInForce::Gtc, None);
     ///
     /// // Functional-style analysis
     /// for level in book.levels_with_cumulative_depth(Side::Buy).take(5) {
@@ -1781,12 +1791,12 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 99, 15, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 98, 20, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 99, 15, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 98, 20, Side::Buy, TimeInForce::Gtc, None);
     ///
     /// // Collect levels needed for 30 units
     /// let levels: Vec<_> = book.levels_until_depth(30, Side::Buy).collect();
@@ -1821,12 +1831,12 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 95, 15, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 90, 20, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 95, 15, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 90, 20, Side::Buy, TimeInForce::Gtc, None);
     ///
     /// // Analyze levels between 90 and 100
     /// let total_qty: u64 = book
@@ -1869,12 +1879,12 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 5, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 99, 15, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 98, 25, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 5, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 99, 15, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 98, 25, Side::Buy, TimeInForce::Gtc, None);
     ///
     /// // Find first level with quantity > 10
     /// if let Some(level) = book.find_level(Side::Buy, |info| info.quantity > 10) {
@@ -1912,7 +1922,6 @@ where
             entry
                 .value()
                 .iter_orders()
-                .into_iter()
                 .map(|order| Arc::new(self.convert_from_unit_type(&order)))
                 .collect()
         } else {
@@ -1933,7 +1942,6 @@ where
             let price_level = item.value();
             let converted_orders: Vec<Arc<OrderType<T>>> = price_level
                 .iter_orders()
-                .into_iter()
                 .map(|order| Arc::new(self.convert_from_unit_type(&order)))
                 .collect();
             result.extend(converted_orders);
@@ -1944,7 +1952,6 @@ where
             let price_level = item.value();
             let converted_orders: Vec<Arc<OrderType<T>>> = price_level
                 .iter_orders()
-                .into_iter()
                 .map(|order| Arc::new(self.convert_from_unit_type(&order)))
                 .collect();
             result.extend(converted_orders);
@@ -1954,7 +1961,7 @@ where
     }
 
     /// Get an order by its ID
-    pub fn get_order(&self, order_id: OrderId) -> Option<Arc<OrderType<T>>>
+    pub fn get_order(&self, order_id: Id) -> Option<Arc<OrderType<T>>>
     where
         T: Default,
     {
@@ -1988,7 +1995,7 @@ where
     /// Use [`Self::match_market_order_with_user`] when STP is needed.
     pub fn match_market_order(
         &self,
-        order_id: OrderId,
+        order_id: Id,
         quantity: u64,
         side: Side,
     ) -> Result<MatchResult, OrderBookError> {
@@ -2013,7 +2020,7 @@ where
     /// cancels the taker before any fills occur.
     pub fn match_market_order_with_user(
         &self,
-        order_id: OrderId,
+        order_id: Id,
         quantity: u64,
         side: Side,
         user_id: Hash32,
@@ -2026,7 +2033,7 @@ where
             OrderBook::<T>::match_order_with_user(self, order_id, side, quantity, None, user_id)?;
 
         // Trigger trade listener if there are transactions
-        if !match_result.transactions.transactions.is_empty()
+        if !match_result.trades().as_vec().is_empty()
             && let Some(ref listener) = self.trade_listener
         {
             let trade_result = TradeResult::with_fees(
@@ -2058,7 +2065,7 @@ where
     /// - `Err(OrderBookError)`: If the order cannot be matched due to an error.
     pub fn match_limit_order(
         &self,
-        order_id: OrderId,
+        order_id: Id,
         quantity: u64,
         side: Side,
         limit_price: u128,
@@ -2081,7 +2088,7 @@ where
     /// taker before any fills occur.
     pub fn match_limit_order_with_user(
         &self,
-        order_id: OrderId,
+        order_id: Id,
         quantity: u64,
         side: Side,
         limit_price: u128,
@@ -2101,7 +2108,7 @@ where
         )?;
 
         // Trigger trade listener if there are transactions
-        if !match_result.transactions.transactions.is_empty()
+        if !match_result.trades().as_vec().is_empty()
             && let Some(ref listener) = self.trade_listener
         {
             let trade_result = TradeResult::with_fees(
@@ -2208,15 +2215,17 @@ where
         self.market_close_timestamp.store(0, Ordering::Relaxed);
 
         for level_snapshot in snapshot.bids {
-            let price = level_snapshot.price;
-            let price_level: PriceLevel = PriceLevel::from(&level_snapshot);
+            let price = level_snapshot.price();
+            let price_level = PriceLevel::from_snapshot(level_snapshot)
+                .map_err(OrderBookError::PriceLevelError)?;
             let arc_level = Arc::new(price_level);
             self.bids.insert(price, arc_level);
         }
 
         for level_snapshot in snapshot.asks {
-            let price = level_snapshot.price;
-            let price_level: PriceLevel = PriceLevel::from(&level_snapshot);
+            let price = level_snapshot.price();
+            let price_level = PriceLevel::from_snapshot(level_snapshot)
+                .map_err(OrderBookError::PriceLevelError)?;
             let arc_level = Arc::new(price_level);
             self.asks.insert(price, arc_level);
         }
@@ -2261,11 +2270,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 101, 10, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 101, 10, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// let snapshot = book.enriched_snapshot(10);
     ///
@@ -2301,11 +2310,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::{OrderBook, MetricFlags};
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 101, 10, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 101, 10, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// // Calculate only mid price and spread for performance
     /// let snapshot = book.enriched_snapshot_with_metrics(
@@ -2370,14 +2379,14 @@ where
         for item in self.bids.iter() {
             let price = *item.key();
             let price_level = item.value();
-            bid_volumes.insert(price, price_level.total_quantity());
+            bid_volumes.insert(price, price_level.total_quantity().unwrap_or(0));
         }
 
         // Calculate ask volumes
         for item in self.asks.iter() {
             let price = *item.key();
             let price_level = item.value();
-            ask_volumes.insert(price, price_level.total_quantity());
+            ask_volumes.insert(price, price_level.total_quantity().unwrap_or(0));
         }
 
         (bid_volumes, ask_volumes)
@@ -2434,7 +2443,7 @@ where
     }
 
     /// Get an Arc reference to the order_locations DashMap
-    pub fn get_order_locations_arc(&self) -> Arc<DashMap<OrderId, (u128, Side)>> {
+    pub fn get_order_locations_arc(&self) -> Arc<DashMap<Id, (u128, Side)>> {
         Arc::new(self.order_locations.clone())
     }
 
@@ -2457,12 +2466,12 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 99, 20, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 98, 30, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 99, 20, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 98, 30, Side::Buy, TimeInForce::Gtc, None);
     ///
     /// let stats = book.depth_statistics(Side::Buy, 10);
     /// println!("Total volume: {}", stats.total_volume);
@@ -2498,7 +2507,7 @@ where
             }
 
             let price = *entry.key();
-            let quantity = entry.value().total_quantity();
+            let quantity = entry.value().total_quantity().unwrap_or(0);
 
             if quantity == 0 {
                 continue;
@@ -2557,11 +2566,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 101, 30, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 101, 30, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// let (buy_pressure, sell_pressure) = book.buy_sell_pressure();
     /// println!("Buy: {}, Sell: {}", buy_pressure, sell_pressure);
@@ -2575,13 +2584,13 @@ where
         let buy_pressure: u64 = self
             .bids
             .iter()
-            .map(|entry| entry.value().total_quantity())
+            .map(|entry| entry.value().total_quantity().unwrap_or(0))
             .sum();
 
         let sell_pressure: u64 = self
             .asks
             .iter()
-            .map(|entry| entry.value().total_quantity())
+            .map(|entry| entry.value().total_quantity().unwrap_or(0))
             .sum();
 
         (buy_pressure, sell_pressure)
@@ -2606,11 +2615,11 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
-    /// let _ = book.add_limit_order(OrderId::new(), 100, 5, Side::Buy, TimeInForce::Gtc, None);
-    /// let _ = book.add_limit_order(OrderId::new(), 101, 5, Side::Sell, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 100, 5, Side::Buy, TimeInForce::Gtc, None);
+    /// let _ = book.add_limit_order(Id::new(), 101, 5, Side::Sell, TimeInForce::Gtc, None);
     ///
     /// if book.is_thin_book(100, 5) {
     ///     println!("Warning: Thin book detected - high slippage risk!");
@@ -2644,12 +2653,12 @@ where
     /// # Examples
     /// ```
     /// use orderbook_rs::OrderBook;
-    /// use pricelevel::{OrderId, Side, TimeInForce};
+    /// use pricelevel::{Id, Side, TimeInForce};
     ///
     /// let book = OrderBook::<()>::new("BTC/USD");
     /// for i in 0..10 {
     ///     let price = 100 - i;
-    ///     let _ = book.add_limit_order(OrderId::new(), price, 10, Side::Buy, TimeInForce::Gtc, None);
+    ///     let _ = book.add_limit_order(Id::new(), price, 10, Side::Buy, TimeInForce::Gtc, None);
     /// }
     ///
     /// let distribution = book.depth_distribution(Side::Buy, 5);
@@ -2716,7 +2725,7 @@ where
         // Fill bins with data
         for entry in price_levels.iter() {
             let price = *entry.key();
-            let quantity = entry.value().total_quantity();
+            let quantity = entry.value().total_quantity().unwrap_or(0);
 
             if quantity == 0 {
                 continue;
@@ -2785,11 +2794,11 @@ where
                         mid_price,
                         last_trade,
                     )
-                    && new_price != *current_price
+                    && new_price != current_price.as_u128()
                 {
                     let update = OrderUpdate::UpdatePrice {
                         order_id,
-                        new_price,
+                        new_price: pricelevel::Price::new(new_price),
                     };
                     if self.update_order(update).is_ok() {
                         repriced_count += 1;
@@ -2837,9 +2846,9 @@ where
                     if let Some(market_price) = current_market_price
                         && let Some((new_stop_price, new_reference)) = calculate_trailing_stop_price(
                             *side,
-                            *current_stop_price,
-                            *trail_amount,
-                            *last_reference_price,
+                            current_stop_price.as_u128(),
+                            trail_amount.as_u64(),
+                            last_reference_price.as_u128(),
                             market_price,
                         )
                     {
@@ -2849,7 +2858,7 @@ where
                         // requires modifying the order directly
                         let update = OrderUpdate::UpdatePrice {
                             order_id,
-                            new_price: new_stop_price,
+                            new_price: pricelevel::Price::new(new_stop_price),
                         };
                         if self.update_order(update).is_ok() {
                             repriced_count += 1;
@@ -2900,9 +2909,9 @@ where
         {
             match side {
                 // Sell trailing stop triggers when market falls to or below stop price
-                Side::Sell => current_market_price <= *stop_price,
+                Side::Sell => current_market_price <= stop_price.as_u128(),
                 // Buy trailing stop triggers when market rises to or above stop price
-                Side::Buy => current_market_price >= *stop_price,
+                Side::Buy => current_market_price >= stop_price.as_u128(),
             }
         } else {
             false
@@ -2926,12 +2935,12 @@ where
     }
 
     /// Returns all tracked pegged order IDs
-    pub fn pegged_order_ids(&self) -> Vec<OrderId> {
+    pub fn pegged_order_ids(&self) -> Vec<Id> {
         self.special_order_tracker.pegged_order_ids()
     }
 
     /// Returns all tracked trailing stop order IDs
-    pub fn trailing_stop_ids(&self) -> Vec<OrderId> {
+    pub fn trailing_stop_ids(&self) -> Vec<Id> {
         self.special_order_tracker.trailing_stop_ids()
     }
 }

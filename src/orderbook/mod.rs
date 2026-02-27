@@ -36,9 +36,23 @@ pub mod fees;
 /// Mass cancel operations for bulk order removal.
 pub mod mass_cancel;
 
+/// Pluggable event serialization for NATS publishers and consumers.
+pub mod serialization;
+
+/// NATS JetStream trade event publisher.
+#[cfg(feature = "nats")]
+pub mod nats;
+
+/// NATS JetStream order book change publisher with batching and throttling.
+#[cfg(feature = "nats")]
+pub mod nats_book_change;
+
 /// Re-pricing logic for special order types (PeggedOrder and TrailingStop).
 #[cfg(feature = "special_orders")]
 pub mod repricing;
+
+/// Sequencer subsystem: types, journal trait, and file-based journal.
+pub mod sequencer;
 
 pub use book::OrderBook;
 pub use error::OrderBookError;
@@ -50,8 +64,19 @@ pub use implied_volatility::{
 pub use iterators::LevelInfo;
 pub use market_impact::{MarketImpact, OrderSimulation};
 pub use mass_cancel::MassCancelResult;
+#[cfg(feature = "nats")]
+pub use nats::NatsTradePublisher;
+#[cfg(feature = "nats")]
+pub use nats_book_change::{BookChangeBatch, BookChangeEntry, NatsBookChangePublisher};
 #[cfg(feature = "special_orders")]
 pub use repricing::{RepricingOperations, RepricingResult, SpecialOrderTracker};
+#[cfg(feature = "journal")]
+pub use sequencer::FileJournal;
+pub use sequencer::journal::{Journal, JournalEntry};
+pub use sequencer::{JournalError, SequencerCommand, SequencerEvent, SequencerResult};
+#[cfg(feature = "bincode")]
+pub use serialization::BincodeEventSerializer;
+pub use serialization::{EventSerializer, JsonEventSerializer, SerializationError};
 pub use snapshot::{
     EnrichedSnapshot, MetricFlags, ORDERBOOK_SNAPSHOT_FORMAT_VERSION, OrderBookSnapshot,
     OrderBookSnapshotPackage,

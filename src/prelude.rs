@@ -39,7 +39,33 @@ pub use crate::orderbook::trade::{
 };
 
 // Order types and enums from pricelevel
-pub use pricelevel::{OrderId, OrderType, Side, TimeInForce};
+pub use pricelevel::{Id, OrderType, Side, TimeInForce};
+
+// Legacy alias for backward compatibility
+pub use crate::OrderId;
+
+// Event serialization types
+#[cfg(feature = "bincode")]
+pub use crate::orderbook::serialization::BincodeEventSerializer;
+pub use crate::orderbook::serialization::{
+    EventSerializer, JsonEventSerializer, SerializationError,
+};
+
+// NATS integration types
+#[cfg(feature = "nats")]
+pub use crate::orderbook::nats::NatsTradePublisher;
+#[cfg(feature = "nats")]
+pub use crate::orderbook::nats_book_change::{
+    BookChangeBatch, BookChangeEntry, NatsBookChangePublisher,
+};
+
+// Sequencer types and journal
+#[cfg(feature = "journal")]
+pub use crate::orderbook::sequencer::FileJournal;
+pub use crate::orderbook::sequencer::journal::{Journal, JournalEntry};
+pub use crate::orderbook::sequencer::{
+    JournalError, JournalReadIter, SequencerCommand, SequencerEvent, SequencerResult,
+};
 
 // Utility functions
 pub use crate::utils::current_time_millis;

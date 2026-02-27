@@ -6,7 +6,7 @@
 //! 3. Execute limit orders that cross the market and generate trades
 //! 4. Display trade information in real-time as matches occur
 
-use orderbook_rs::{OrderBook, OrderId, Side, TimeInForce, TradeListener, TradeResult};
+use orderbook_rs::{Id, OrderBook, Side, TimeInForce, TradeListener, TradeResult};
 use pricelevel::setup_logger;
 use std::sync::Arc;
 use tracing::info;
@@ -65,7 +65,7 @@ fn fill_orderbook_with_liquidity(book: &OrderBook) {
     ];
 
     for (i, (price, quantity)) in bid_orders.iter().enumerate() {
-        let order_id = OrderId::from_u64(1000 + i as u64);
+        let order_id = Id::from_u64(1000 + i as u64);
         match book.add_limit_order(
             order_id,
             *price,
@@ -89,7 +89,7 @@ fn fill_orderbook_with_liquidity(book: &OrderBook) {
     ];
 
     for (i, (price, quantity)) in ask_orders.iter().enumerate() {
-        let order_id = OrderId::from_u64(2000 + i as u64);
+        let order_id = Id::from_u64(2000 + i as u64);
         match book.add_limit_order(
             order_id,
             *price,
@@ -110,7 +110,7 @@ fn execute_crossing_limit_orders(book: &OrderBook) {
     info!("🔵 Adding aggressive BUY limit order @ $3050 for 100 units");
     info!("   (This will match against ASK orders at $3020 and $3040)\n");
 
-    let buy_order_id = OrderId::from_u64(5000);
+    let buy_order_id = Id::from_u64(5000);
     match book.add_limit_order(
         buy_order_id,
         3050, // Price above best ask - will match
@@ -135,7 +135,7 @@ fn execute_crossing_limit_orders(book: &OrderBook) {
     info!("\n🔴 Adding aggressive SELL limit order @ $2970 for 120 units");
     info!("   (This will match against BID orders at $3000 and $2980)\n");
 
-    let sell_order_id = OrderId::from_u64(5001);
+    let sell_order_id = Id::from_u64(5001);
     match book.add_limit_order(
         sell_order_id,
         2970, // Price below best bid - will match
@@ -160,7 +160,7 @@ fn execute_additional_orders(book: &OrderBook) {
     info!("🔵 Adding large BUY limit order @ $3100 for 200 units");
     info!("   (This will sweep through multiple ASK levels)\n");
 
-    let buy_order_id = OrderId::from_u64(5002);
+    let buy_order_id = Id::from_u64(5002);
     match book.add_limit_order(
         buy_order_id,
         3100, // High price - will match multiple levels
@@ -185,7 +185,7 @@ fn execute_additional_orders(book: &OrderBook) {
     info!("\n🔴 Adding SELL limit order @ $2900 for 180 units");
     info!("   (This will match against remaining BID orders)\n");
 
-    let sell_order_id = OrderId::from_u64(5003);
+    let sell_order_id = Id::from_u64(5003);
     match book.add_limit_order(
         sell_order_id,
         2900, // Low price - will match
@@ -215,43 +215,43 @@ fn display_trade_event(trade_result: &TradeResult) {
         trade_result.symbol
     );
     info!("├─────────────────────────────────────────────────────────────┤");
-    info!("│ Order ID:           {}        │", match_result.order_id);
+    info!("│ Order ID:           {}        │", match_result.order_id());
     info!(
         "│ Executed Quantity:  {} units                              │",
-        match_result.executed_quantity()
+        match_result.executed_quantity().unwrap_or(0)
     );
     info!(
         "│ Remaining Quantity: {} units                               │",
-        match_result.remaining_quantity
+        match_result.remaining_quantity()
     );
     info!(
         "│ Complete:           {}                                   │",
-        match_result.is_complete
+        match_result.is_complete()
     );
     info!(
         "│ Transactions:       {}                                     │",
-        match_result.transactions.transactions.len()
+        match_result.trades().as_vec().len()
     );
     info!("├─────────────────────────────────────────────────────────────┤");
 
-    if !match_result.transactions.as_vec().is_empty() {
+    if !match_result.trades().as_vec().is_empty() {
         info!("│ Transaction Details:                                        │");
-        for (idx, tx) in match_result.transactions.as_vec().iter().enumerate() {
+        for (idx, tx) in match_result.trades().as_vec().iter().enumerate() {
             info!(
                 "│   [{}] Price: ${:<6} | Quantity: {:<4} units              │",
                 idx + 1,
-                tx.price,
-                tx.quantity
+                tx.price(),
+                tx.quantity()
             );
             info!(
                 "│       Maker: {} │",
-                format_order_id(&tx.maker_order_id.to_string())
+                format_order_id(&tx.maker_order_id().to_string())
             );
             info!(
                 "│       Taker: {} │",
-                format_order_id(&tx.taker_order_id.to_string())
+                format_order_id(&tx.taker_order_id().to_string())
             );
-            if idx < match_result.transactions.as_vec().len() - 1 {
+            if idx < match_result.trades().as_vec().len() - 1 {
                 info!("│       ─────────────────────────────────────────────────     │");
             }
         }

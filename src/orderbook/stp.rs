@@ -16,7 +16,7 @@
 //! Orders with `user_id == Hash32::zero()` (anonymous) always bypass STP checks,
 //! regardless of the configured mode.
 
-use pricelevel::{Hash32, OrderId};
+use pricelevel::{Hash32, Id};
 use serde::{Deserialize, Serialize};
 
 /// Self-Trade Prevention mode for the order book.
@@ -91,7 +91,7 @@ pub(crate) enum STPAction {
     /// before matching proceeds at this level.
     CancelMaker {
         /// Order IDs of same-user resting orders to cancel.
-        maker_order_ids: Vec<OrderId>,
+        maker_order_ids: Vec<Id>,
     },
 
     /// CancelBoth triggered: match up to `safe_quantity`, then cancel
@@ -101,7 +101,7 @@ pub(crate) enum STPAction {
         /// a same-user order.
         safe_quantity: u64,
         /// The first same-user maker order ID to cancel.
-        maker_order_id: OrderId,
+        maker_order_id: Id,
     },
 }
 
@@ -143,7 +143,7 @@ pub(crate) fn check_stp_at_level(
 
         STPMode::CancelMaker => {
             // Collect all same-user order IDs for cancellation
-            let maker_order_ids: Vec<OrderId> = orders
+            let maker_order_ids: Vec<Id> = orders
                 .iter()
                 .filter(|o| o.user_id() == taker_user_id)
                 .map(|o| o.id())
@@ -209,12 +209,12 @@ mod tests {
     fn test_check_stp_zero_user_bypasses() {
         let user = Hash32::zero();
         let order = std::sync::Arc::new(pricelevel::OrderType::Standard {
-            id: OrderId::new(),
-            price: 100,
-            quantity: 10,
+            id: Id::new(),
+            price: pricelevel::Price::new(100),
+            quantity: pricelevel::Quantity::new(10),
             side: pricelevel::Side::Sell,
             user_id: user,
-            timestamp: 0,
+            timestamp: pricelevel::TimestampMs::new(0),
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });
@@ -227,12 +227,12 @@ mod tests {
     fn test_check_stp_cancel_taker_detects_same_user() {
         let user = Hash32::new([1u8; 32]);
         let order = std::sync::Arc::new(pricelevel::OrderType::Standard {
-            id: OrderId::new(),
-            price: 100,
-            quantity: 10,
+            id: Id::new(),
+            price: pricelevel::Price::new(100),
+            quantity: pricelevel::Quantity::new(10),
             side: pricelevel::Side::Sell,
             user_id: user,
-            timestamp: 0,
+            timestamp: pricelevel::TimestampMs::new(0),
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });
@@ -250,22 +250,22 @@ mod tests {
         let other_user = Hash32::new([2u8; 32]);
 
         let other_order = std::sync::Arc::new(pricelevel::OrderType::Standard {
-            id: OrderId::new(),
-            price: 100,
-            quantity: 5,
+            id: Id::new(),
+            price: pricelevel::Price::new(100),
+            quantity: pricelevel::Quantity::new(5),
             side: pricelevel::Side::Sell,
             user_id: other_user,
-            timestamp: 0,
+            timestamp: pricelevel::TimestampMs::new(0),
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });
         let same_order = std::sync::Arc::new(pricelevel::OrderType::Standard {
-            id: OrderId::new(),
-            price: 100,
-            quantity: 10,
+            id: Id::new(),
+            price: pricelevel::Price::new(100),
+            quantity: pricelevel::Quantity::new(10),
             side: pricelevel::Side::Sell,
             user_id: taker_user,
-            timestamp: 1,
+            timestamp: pricelevel::TimestampMs::new(1),
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });
@@ -283,32 +283,32 @@ mod tests {
         let other_user = Hash32::new([2u8; 32]);
 
         let same1 = std::sync::Arc::new(pricelevel::OrderType::Standard {
-            id: OrderId::new(),
-            price: 100,
-            quantity: 5,
+            id: Id::new(),
+            price: pricelevel::Price::new(100),
+            quantity: pricelevel::Quantity::new(5),
             side: pricelevel::Side::Sell,
             user_id: taker_user,
-            timestamp: 0,
+            timestamp: pricelevel::TimestampMs::new(0),
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });
         let other = std::sync::Arc::new(pricelevel::OrderType::Standard {
-            id: OrderId::new(),
-            price: 100,
-            quantity: 3,
+            id: Id::new(),
+            price: pricelevel::Price::new(100),
+            quantity: pricelevel::Quantity::new(3),
             side: pricelevel::Side::Sell,
             user_id: other_user,
-            timestamp: 1,
+            timestamp: pricelevel::TimestampMs::new(1),
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });
         let same2 = std::sync::Arc::new(pricelevel::OrderType::Standard {
-            id: OrderId::new(),
-            price: 100,
-            quantity: 7,
+            id: Id::new(),
+            price: pricelevel::Price::new(100),
+            quantity: pricelevel::Quantity::new(7),
             side: pricelevel::Side::Sell,
             user_id: taker_user,
-            timestamp: 2,
+            timestamp: pricelevel::TimestampMs::new(2),
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });
@@ -330,22 +330,22 @@ mod tests {
         let other_user = Hash32::new([2u8; 32]);
 
         let other = std::sync::Arc::new(pricelevel::OrderType::Standard {
-            id: OrderId::new(),
-            price: 100,
-            quantity: 3,
+            id: Id::new(),
+            price: pricelevel::Price::new(100),
+            quantity: pricelevel::Quantity::new(3),
             side: pricelevel::Side::Sell,
             user_id: other_user,
-            timestamp: 0,
+            timestamp: pricelevel::TimestampMs::new(0),
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });
         let same = std::sync::Arc::new(pricelevel::OrderType::Standard {
-            id: OrderId::new(),
-            price: 100,
-            quantity: 10,
+            id: Id::new(),
+            price: pricelevel::Price::new(100),
+            quantity: pricelevel::Quantity::new(10),
             side: pricelevel::Side::Sell,
             user_id: user,
-            timestamp: 1,
+            timestamp: pricelevel::TimestampMs::new(1),
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });
@@ -369,12 +369,12 @@ mod tests {
         let other_user = Hash32::new([2u8; 32]);
 
         let order = std::sync::Arc::new(pricelevel::OrderType::Standard {
-            id: OrderId::new(),
-            price: 100,
-            quantity: 10,
+            id: Id::new(),
+            price: pricelevel::Price::new(100),
+            quantity: pricelevel::Quantity::new(10),
             side: pricelevel::Side::Sell,
             user_id: other_user,
-            timestamp: 0,
+            timestamp: pricelevel::TimestampMs::new(0),
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });

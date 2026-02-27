@@ -1,7 +1,7 @@
 //! Additional unit tests to improve test coverage for operations.rs
 //! These tests target specific uncovered lines and edge cases
 
-use pricelevel::{OrderId, OrderType, Side, TimeInForce};
+use pricelevel::{Id, OrderType, Side, TimeInForce};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct TestExtraFields {
@@ -13,8 +13,8 @@ mod tests {
     use super::*;
     use orderbook_rs::OrderBook;
 
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     #[test]

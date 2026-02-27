@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use orderbook_rs::orderbook::book::OrderBook;
-use pricelevel::{Hash32, OrderId, OrderType, Side, TimeInForce};
+use pricelevel::{Hash32, Id, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs};
 use serde::{Deserialize, Serialize};
 use std::hint::black_box;
 
@@ -23,13 +23,13 @@ fn setup_deep_book() -> OrderBook<OrderMetadata> {
         // Add 10 orders at each price level
         for _ in 0..10 {
             let order = OrderType::Standard {
-                id: OrderId::new(),
+                id: Id::new(),
                 side: Side::Sell,
-                price,
-                quantity: 10,
+                price: Price::new(price),
+                quantity: Quantity::new(10),
                 user_id: Hash32::zero(),
                 time_in_force: TimeInForce::Gtc,
-                timestamp: 0,
+                timestamp: TimestampMs::new(0),
                 extra_fields: OrderMetadata {
                     client_id: Some(1),
                     user_id: Some(2),
@@ -51,7 +51,7 @@ pub fn register_benchmarks(c: &mut Criterion) {
         b.iter(|| {
             // The order to match. Its quantity (505) is chosen to match across
             // multiple price levels (50 levels + 5 from the 51st).
-            let taker_order_id = OrderId::new();
+            let taker_order_id = Id::new();
             book.match_order(
                 black_box(taker_order_id),
                 black_box(Side::Buy),

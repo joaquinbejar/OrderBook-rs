@@ -22,7 +22,7 @@
 
 use orderbook_rs::orderbook::repricing::RepricingOperations;
 use orderbook_rs::prelude::*;
-use pricelevel::{Hash32, OrderType, PegReferenceType, setup_logger};
+use pricelevel::{Hash32, OrderType, PegReferenceType, Price, Quantity, TimestampMs, setup_logger};
 use tracing::info;
 
 type OrderBook = orderbook_rs::OrderBook<()>;
@@ -52,14 +52,14 @@ fn demo_pegged_orders() {
     // Add buy orders (bids)
     for i in 0u64..5 {
         let price: u128 = 50000 - (i as u128 * 100); // 50000, 49900, 49800, ...
-        let id = OrderId::from_u64(i + 1);
+        let id = Id::from_u64(i + 1);
         let _ = book.add_limit_order(id, price, 10, Side::Buy, TimeInForce::Gtc, None);
     }
 
     // Add sell orders (asks)
     for i in 0u64..5 {
         let price: u128 = 50100 + (i as u128 * 100); // 50100, 50200, 50300, ...
-        let id = OrderId::from_u64(i + 100);
+        let id = Id::from_u64(i + 100);
         let _ = book.add_limit_order(id, price, 10, Side::Sell, TimeInForce::Gtc, None);
     }
 
@@ -73,14 +73,14 @@ fn demo_pegged_orders() {
     // Add a pegged order that tracks best bid + 50
     info!("\nStep 2: Adding pegged order (tracks Best Bid + 50)...");
 
-    let pegged_id = OrderId::from_u64(1000);
+    let pegged_id = Id::from_u64(1000);
     let pegged_order = OrderType::PeggedOrder {
         id: pegged_id,
-        price: 49000, // Initial price (will be re-priced)
-        quantity: 5,
+        price: Price::new(49000), // Initial price (will be re-priced)
+        quantity: Quantity::new(5),
         side: Side::Buy,
         user_id: Hash32::zero(),
-        timestamp: current_time_millis(),
+        timestamp: TimestampMs::new(current_time_millis()),
         time_in_force: TimeInForce::Gtc,
         reference_price_offset: 50, // +50 from reference
         reference_price_type: PegReferenceType::BestBid,
@@ -125,7 +125,7 @@ fn demo_trailing_stop_orders() {
         let bid_price: u128 = 3000 - (i as u128 * 10);
         let ask_price: u128 = 3010 + (i as u128 * 10);
         let _ = book.add_limit_order(
-            OrderId::from_u64(i + 1),
+            Id::from_u64(i + 1),
             bid_price,
             100,
             Side::Buy,
@@ -133,7 +133,7 @@ fn demo_trailing_stop_orders() {
             None,
         );
         let _ = book.add_limit_order(
-            OrderId::from_u64(i + 100),
+            Id::from_u64(i + 100),
             ask_price,
             100,
             Side::Sell,
@@ -155,17 +155,17 @@ fn demo_trailing_stop_orders() {
     info!("  This stop trails BELOW the market high.");
     info!("  When market rises, the stop price rises with it.");
 
-    let trailing_sell_id = OrderId::from_u64(2000);
+    let trailing_sell_id = Id::from_u64(2000);
     let trailing_sell = OrderType::TrailingStop {
         id: trailing_sell_id,
-        price: 3050, // Stop price ABOVE best bid (3000), won't match
-        quantity: 10,
+        price: Price::new(3050), // Stop price ABOVE best bid (3000), won't match
+        quantity: Quantity::new(10),
         side: Side::Sell,
         user_id: Hash32::zero(),
-        timestamp: current_time_millis(),
+        timestamp: TimestampMs::new(current_time_millis()),
         time_in_force: TimeInForce::Gtc,
-        trail_amount: 50,
-        last_reference_price: 3100, // Market high was at 3100
+        trail_amount: Quantity::new(50),
+        last_reference_price: Price::new(3100), // Market high was at 3100
         extra_fields: (),
     };
 
@@ -180,7 +180,7 @@ fn demo_trailing_stop_orders() {
     for i in 0u64..5 {
         let price: u128 = 3200 - (i as u128 * 10);
         let _ = book.add_limit_order(
-            OrderId::from_u64(i + 200),
+            Id::from_u64(i + 200),
             price,
             50,
             Side::Buy,
@@ -225,7 +225,7 @@ fn demo_trailing_stop_orders() {
         );
 
         // Check at a lower price (below stop)
-        let lower_price = order.price() - 100;
+        let lower_price = order.price().as_u128() - 100;
         let would_trigger_lower = book.should_trigger_trailing_stop(&order, lower_price);
         info!(
             "  If market falls to {}: Would trigger: {}",
@@ -245,7 +245,7 @@ fn demo_combined_repricing() {
         let bid_price: u128 = 100 - (i as u128 * 5);
         let ask_price: u128 = 105 + (i as u128 * 5);
         let _ = book.add_limit_order(
-            OrderId::from_u64(i + 1),
+            Id::from_u64(i + 1),
             bid_price,
             100,
             Side::Buy,
@@ -253,7 +253,7 @@ fn demo_combined_repricing() {
             None,
         );
         let _ = book.add_limit_order(
-            OrderId::from_u64(i + 100),
+            Id::from_u64(i + 100),
             ask_price,
             100,
             Side::Sell,
@@ -270,12 +270,12 @@ fn demo_combined_repricing() {
 
     // Add multiple special orders
     let pegged1 = OrderType::PeggedOrder {
-        id: OrderId::from_u64(1000),
-        price: 90,
-        quantity: 10,
+        id: Id::from_u64(1000),
+        price: Price::new(90),
+        quantity: Quantity::new(10),
         side: Side::Buy,
         user_id: Hash32::zero(),
-        timestamp: current_time_millis(),
+        timestamp: TimestampMs::new(current_time_millis()),
         time_in_force: TimeInForce::Gtc,
         reference_price_offset: 2,
         reference_price_type: PegReferenceType::BestBid,
@@ -283,12 +283,12 @@ fn demo_combined_repricing() {
     };
 
     let pegged2 = OrderType::PeggedOrder {
-        id: OrderId::from_u64(1001),
-        price: 110,
-        quantity: 10,
+        id: Id::from_u64(1001),
+        price: Price::new(110),
+        quantity: Quantity::new(10),
         side: Side::Sell,
         user_id: Hash32::zero(),
-        timestamp: current_time_millis(),
+        timestamp: TimestampMs::new(current_time_millis()),
         time_in_force: TimeInForce::Gtc,
         reference_price_offset: -2,
         reference_price_type: PegReferenceType::BestAsk,
@@ -296,15 +296,15 @@ fn demo_combined_repricing() {
     };
 
     let trailing = OrderType::TrailingStop {
-        id: OrderId::from_u64(2000),
-        price: 110, // Above best bid (100), won't match
-        quantity: 10,
+        id: Id::from_u64(2000),
+        price: Price::new(110), // Above best bid (100), won't match
+        quantity: Quantity::new(10),
         side: Side::Sell,
         user_id: Hash32::zero(),
-        timestamp: current_time_millis(),
+        timestamp: TimestampMs::new(current_time_millis()),
         time_in_force: TimeInForce::Gtc,
-        trail_amount: 5,
-        last_reference_price: 99, // Market was at 99
+        trail_amount: Quantity::new(5),
+        last_reference_price: Price::new(99), // Market was at 99
         extra_fields: (),
     };
 

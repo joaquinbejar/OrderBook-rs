@@ -18,7 +18,7 @@
 //   (from the examples directory)
 
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Side, TimeInForce, setup_logger};
 use tracing::info;
 
 fn main() {
@@ -58,95 +58,39 @@ fn create_orderbook_with_depth(symbol: &str) -> OrderBook {
     info!("\nAdding buy orders (bids):");
 
     // Best bid level with 3 orders
-    let _ = book.add_limit_order(OrderId::new(), 50000, 10, Side::Buy, TimeInForce::Gtc, None);
-    let _ = book.add_limit_order(OrderId::new(), 50000, 15, Side::Buy, TimeInForce::Gtc, None);
-    let _ = book.add_limit_order(OrderId::new(), 50000, 20, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 50000, 10, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 50000, 15, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 50000, 20, Side::Buy, TimeInForce::Gtc, None);
     info!("  @ 50000: 3 orders (10 + 15 + 20 = 45 total)");
 
     // Second level
-    let _ = book.add_limit_order(OrderId::new(), 49950, 25, Side::Buy, TimeInForce::Gtc, None);
-    let _ = book.add_limit_order(OrderId::new(), 49950, 30, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 49950, 25, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 49950, 30, Side::Buy, TimeInForce::Gtc, None);
     info!("  @ 49950: 2 orders (25 + 30 = 55 total)");
 
     // Deeper levels
-    let _ = book.add_limit_order(OrderId::new(), 49900, 35, Side::Buy, TimeInForce::Gtc, None);
-    let _ = book.add_limit_order(OrderId::new(), 49850, 40, Side::Buy, TimeInForce::Gtc, None);
-    let _ = book.add_limit_order(OrderId::new(), 49800, 45, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 49900, 35, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 49850, 40, Side::Buy, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 49800, 45, Side::Buy, TimeInForce::Gtc, None);
 
     // Add sell orders (asks)
     info!("\nAdding sell orders (asks):");
 
     // Best ask level with 2 orders
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        50100,
-        12,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        50100,
-        18,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
+    let _ = book.add_limit_order(Id::new(), 50100, 12, Side::Sell, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 50100, 18, Side::Sell, TimeInForce::Gtc, None);
     info!("  @ 50100: 2 orders (12 + 18 = 30 total)");
 
     // Second level
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        50150,
-        22,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        50150,
-        28,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        50150,
-        33,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
+    let _ = book.add_limit_order(Id::new(), 50150, 22, Side::Sell, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 50150, 28, Side::Sell, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 50150, 33, Side::Sell, TimeInForce::Gtc, None);
     info!("  @ 50150: 3 orders (22 + 28 + 33 = 83 total)");
 
     // Deeper levels
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        50200,
-        38,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        50250,
-        43,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
-    let _ = book.add_limit_order(
-        OrderId::new(),
-        50300,
-        48,
-        Side::Sell,
-        TimeInForce::Gtc,
-        None,
-    );
+    let _ = book.add_limit_order(Id::new(), 50200, 38, Side::Sell, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 50250, 43, Side::Sell, TimeInForce::Gtc, None);
+    let _ = book.add_limit_order(Id::new(), 50300, 48, Side::Sell, TimeInForce::Gtc, None);
 
     book
 }

@@ -1,22 +1,22 @@
 #[cfg(test)]
 mod tests {
     use crate::{OrderBook, OrderBookError};
-    use pricelevel::{Hash32, OrderId, OrderType, Side, TimeInForce};
+    use pricelevel::{Hash32, Id, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs};
 
     // Helper function to create a unique order ID
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     // Helper to create a standard limit order
     fn create_standard_order(price: u128, quantity: u64, side: Side) -> OrderType<()> {
         OrderType::Standard {
             id: create_order_id(),
-            price,
-            quantity,
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
             side,
             user_id: Hash32::zero(),
-            timestamp: crate::utils::current_time_millis(),
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         }
@@ -26,12 +26,12 @@ mod tests {
     fn create_iceberg_order(price: u128, visible: u64, hidden: u64, side: Side) -> OrderType<()> {
         OrderType::IcebergOrder {
             id: create_order_id(),
-            price,
-            visible_quantity: visible,
-            hidden_quantity: hidden,
+            price: Price::new(price),
+            visible_quantity: Quantity::new(visible),
+            hidden_quantity: Quantity::new(hidden),
             side,
             user_id: Hash32::zero(),
-            timestamp: crate::utils::current_time_millis(),
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         }
@@ -41,11 +41,11 @@ mod tests {
     fn create_post_only_order(price: u128, quantity: u64, side: Side) -> OrderType<()> {
         OrderType::PostOnly {
             id: create_order_id(),
-            price,
-            quantity,
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
             side,
             user_id: Hash32::zero(),
-            timestamp: crate::utils::current_time_millis(),
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         }
@@ -169,7 +169,7 @@ mod tests {
         // Update the quantity
         let update = pricelevel::OrderUpdate::UpdateQuantity {
             order_id,
-            new_quantity: 20,
+            new_quantity: Quantity::new(20),
         };
 
         let result = book.update_order(update);
@@ -195,7 +195,7 @@ mod tests {
         // Update the price
         let update = pricelevel::OrderUpdate::UpdatePrice {
             order_id,
-            new_price: 1010,
+            new_price: Price::new(1010),
         };
 
         let result = book.update_order(update);
@@ -216,7 +216,7 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("BTCUSD");
         let update = pricelevel::OrderUpdate::UpdateQuantity {
             order_id: create_order_id(),
-            new_quantity: 20,
+            new_quantity: Quantity::new(20),
         };
 
         let result = book.update_order(update);
@@ -280,8 +280,8 @@ mod tests {
         let match_result = result.unwrap();
 
         // Should be fully matched (5 from 1000 and 2 from 990)
-        assert!(match_result.is_complete);
-        assert_eq!(match_result.executed_quantity(), 7);
+        assert!(match_result.is_complete());
+        assert_eq!(match_result.executed_quantity().unwrap(), 7);
 
         // Verify the best bid is now 990
         assert_eq!(book.best_bid(), Some(990));
@@ -319,9 +319,9 @@ mod tests {
             // If it doesn't return an error, we verify that it has been executed partially
             #[allow(clippy::unnecessary_unwrap)]
             let match_result = result.unwrap();
-            assert_eq!(match_result.executed_quantity(), 10);
-            assert_eq!(match_result.remaining_quantity, 10);
-            assert!(!match_result.is_complete);
+            assert_eq!(match_result.executed_quantity().unwrap(), 10);
+            assert_eq!(match_result.remaining_quantity(), 10);
+            assert!(!match_result.is_complete());
 
             // The book should now be empty
             assert_eq!(book.best_bid(), None);
@@ -357,8 +357,8 @@ mod tests {
             } => {
                 // The implementation seems to be using visible_quantity=5 after the match
                 // We adapt the test to match the actual behavior
-                assert_eq!(visible_quantity, 5); // Some systems might use refresh_amount = visible_quantity
-                assert_eq!(hidden_quantity, 80); // 90 - 10 consumed = 80
+                assert_eq!(visible_quantity, Quantity::new(5)); // Some systems might use refresh_amount = visible_quantity
+                assert_eq!(hidden_quantity, Quantity::new(80)); // 90 - 10 consumed = 80
             }
             _ => panic!("Expected IcebergOrder"),
         }
@@ -416,11 +416,11 @@ mod tests {
         // Create an IOC buy order
         let order = OrderType::Standard {
             id: create_order_id(),
-            price: 1000,
-            quantity: 5,
+            price: Price::new(1000),
+            quantity: Quantity::new(5),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: crate::utils::current_time_millis(),
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
             time_in_force: TimeInForce::Ioc,
             extra_fields: (),
         };
@@ -444,11 +444,11 @@ mod tests {
         // Create a FOK buy order that can be fully filled
         let order = OrderType::Standard {
             id: create_order_id(),
-            price: 1000,
-            quantity: 5,
+            price: Price::new(1000),
+            quantity: Quantity::new(5),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: crate::utils::current_time_millis(),
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
             time_in_force: TimeInForce::Fok,
             extra_fields: (),
         };
@@ -468,11 +468,11 @@ mod tests {
         // Create a FOK buy order that can only be partially filled
         let order = OrderType::Standard {
             id: create_order_id(),
-            price: 1000,
-            quantity: 10,
+            price: Price::new(1000),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: crate::utils::current_time_millis(),
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
             time_in_force: TimeInForce::Fok,
             extra_fields: (),
         };
@@ -514,10 +514,10 @@ mod tests {
         assert_eq!(snapshot.asks.len(), 2);
 
         // Check prices are in correct order
-        assert_eq!(snapshot.bids[0].price, 1000); // Best bid first
-        assert_eq!(snapshot.bids[1].price, 990);
-        assert_eq!(snapshot.asks[0].price, 1100); // Best ask first
-        assert_eq!(snapshot.asks[1].price, 1110);
+        assert_eq!(snapshot.bids[0].price(), 1000); // Best bid first
+        assert_eq!(snapshot.bids[1].price(), 990);
+        assert_eq!(snapshot.asks[0].price(), 1100); // Best ask first
+        assert_eq!(snapshot.asks[1].price(), 1110);
     }
 
     #[test]
@@ -556,11 +556,11 @@ mod tests {
         // Create a DAY order
         let order = OrderType::Standard {
             id: create_order_id(),
-            price: 1000,
-            quantity: 10,
+            price: Price::new(1000),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: crate::utils::current_time_millis(),
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
             time_in_force: TimeInForce::Day,
             extra_fields: (),
         };
@@ -577,11 +577,11 @@ mod tests {
 #[cfg(test)]
 mod test_orderbook_book {
     use crate::OrderBook;
-    use pricelevel::{OrderId, Side, TimeInForce};
+    use pricelevel::{Id, Side, TimeInForce};
 
     // Helper function to create a unique order ID
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     #[test]
@@ -710,11 +710,11 @@ mod test_orderbook_book {
         assert_eq!(snapshot.asks.len(), 2); // Limited to 2 levels
 
         // Check prices are in correct order
-        assert_eq!(snapshot.bids[0].price, 1000); // Highest bid first
-        assert_eq!(snapshot.bids[1].price, 990); // Second highest
+        assert_eq!(snapshot.bids[0].price(), 1000); // Highest bid first
+        assert_eq!(snapshot.bids[1].price(), 990); // Second highest
 
-        assert_eq!(snapshot.asks[0].price, 1010); // Lowest ask first
-        assert_eq!(snapshot.asks[1].price, 1020); // Second lowest
+        assert_eq!(snapshot.asks[0].price(), 1010); // Lowest ask first
+        assert_eq!(snapshot.asks[1].price(), 1020); // Second lowest
 
         // Create a full depth snapshot
         let full_snapshot = book.create_snapshot(10);
@@ -824,10 +824,10 @@ mod test_orderbook_book {
 #[cfg(test)]
 mod test_book_remaining {
     use crate::OrderBook;
-    use pricelevel::{OrderId, Side, TimeInForce};
+    use pricelevel::{Id, Side, TimeInForce};
 
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     #[test]
@@ -992,10 +992,10 @@ mod test_book_remaining {
 #[cfg(test)]
 mod test_book_specific {
     use crate::OrderBook;
-    use pricelevel::{OrderId, Side, TimeInForce};
+    use pricelevel::{Id, Side, TimeInForce};
 
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     #[test]
@@ -1017,7 +1017,7 @@ mod test_book_specific {
         assert_eq!(orders.len(), 2);
 
         // Check both orders are present
-        let order_ids: Vec<OrderId> = orders.iter().map(|o| o.id()).collect();
+        let order_ids: Vec<Id> = orders.iter().map(|o| o.id()).collect();
         assert!(order_ids.contains(&id1));
         assert!(order_ids.contains(&id2));
 
@@ -1046,7 +1046,7 @@ mod test_book_specific {
         assert_eq!(all_orders.len(), 3);
 
         // Check all orders are present
-        let order_ids: Vec<OrderId> = all_orders.iter().map(|o| o.id()).collect();
+        let order_ids: Vec<Id> = all_orders.iter().map(|o| o.id()).collect();
         assert!(order_ids.contains(&id1));
         assert!(order_ids.contains(&id2));
         assert!(order_ids.contains(&id3));
