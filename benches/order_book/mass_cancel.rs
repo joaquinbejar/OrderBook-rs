@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion};
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce};
+use pricelevel::{Id, Side, TimeInForce};
 use std::hint::black_box;
 
 /// Register all benchmarks for mass cancel operations.
@@ -18,7 +18,7 @@ pub fn register_benchmarks(c: &mut Criterion) {
                         let book: OrderBook<()> = OrderBook::new("BENCH");
                         // Populate the book: half bids, half asks across price levels
                         for i in 0..count {
-                            let id = OrderId::new_uuid();
+                            let id = Id::new_uuid();
                             let price = 1000 + (i % 500) as u128;
                             let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
                             let _ =
@@ -45,7 +45,7 @@ pub fn register_benchmarks(c: &mut Criterion) {
                     || {
                         let book: OrderBook<()> = OrderBook::new("BENCH");
                         for i in 0..count {
-                            let id = OrderId::new_uuid();
+                            let id = Id::new_uuid();
                             let price = 1000 + (i % 500) as u128;
                             let _ = book.add_limit_order(
                                 id,
@@ -78,7 +78,7 @@ pub fn register_benchmarks(c: &mut Criterion) {
                         let book: OrderBook<()> = OrderBook::new("BENCH");
                         let user = pricelevel::Hash32::new([1u8; 32]);
                         for i in 0..count {
-                            let id = OrderId::new_uuid();
+                            let id = Id::new_uuid();
                             let price = 1000 + (i % 500) as u128;
                             let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
                             let _ = book.add_limit_order_with_user(

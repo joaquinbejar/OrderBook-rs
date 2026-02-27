@@ -1,7 +1,7 @@
 mod helpers;
 
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Side, TimeInForce, setup_logger};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
@@ -134,7 +134,7 @@ fn test_read_write_ratio() -> Result<(), String> {
                         match local_counter % 3 {
                             0 => {
                                 // Add a limit order
-                                let id = OrderId::new_uuid();
+                                let id = Id::new_uuid();
                                 let side = if local_counter % 2 == 0 {
                                     Side::Buy
                                 } else {
@@ -152,7 +152,7 @@ fn test_read_write_ratio() -> Result<(), String> {
                             }
                             1 => {
                                 // Submit a market order
-                                let id = OrderId::new_uuid();
+                                let id = Id::new_uuid();
                                 let side = if local_counter % 2 == 0 {
                                     Side::Buy
                                 } else {
@@ -162,7 +162,7 @@ fn test_read_write_ratio() -> Result<(), String> {
                             }
                             _ => {
                                 // Cancel a random order
-                                let id = OrderId::new_uuid();
+                                let id = Id::new_uuid();
                                 let _ = thread_book.cancel_order(id);
                             }
                         }
@@ -297,11 +297,11 @@ fn test_hot_spot_contention() -> Result<(), String> {
                     let order_id = if target_hot_spot {
                         // Target one of the first 20 orders (hot spot)
                         let hot_idx = local_counter % 20;
-                        OrderId::from_u64(hot_idx)
+                        Id::from_u64(hot_idx)
                     } else {
                         // Target one of the remaining orders
                         let cold_idx = 20 + (local_counter % 480);
-                        OrderId::from_u64(cold_idx)
+                        Id::from_u64(cold_idx)
                     };
 
                     // Perform operation on the selected order
@@ -318,7 +318,7 @@ fn test_hot_spot_contention() -> Result<(), String> {
                             // Try to modify the order quantity
                             let update = pricelevel::OrderUpdate::UpdateQuantity {
                                 order_id,
-                                new_quantity: 15,
+                                new_quantity: pricelevel::Quantity::new(15),
                             };
                             let _ = thread_book.update_order(update);
                         }
@@ -493,7 +493,7 @@ fn test_price_level_distribution() -> Result<(), String> {
                                 10100 + (local_counter % max_level as u64) as u128 * 10
                             };
                             let _ = thread_book.add_limit_order(
-                                OrderId::new_uuid(),
+                                Id::new_uuid(),
                                 price,
                                 10,
                                 side,
@@ -505,12 +505,12 @@ fn test_price_level_distribution() -> Result<(), String> {
                         2 | 3 => {
                             // Submit market buy/sell
                             let side = if op_type == 2 { Side::Buy } else { Side::Sell };
-                            let _ = thread_book.submit_market_order(OrderId::new_uuid(), 1, side);
+                            let _ = thread_book.submit_market_order(Id::new_uuid(), 1, side);
                             std::thread::yield_now(); // Aggressively yield after write
                         }
                         4 => {
                             // Cancel order
-                            let id = OrderId::from_u64(local_counter % 1000);
+                            let id = Id::from_u64(local_counter % 1000);
                             let _ = thread_book.cancel_order(id);
                             std::thread::yield_now(); // Aggressively yield after write
                         }

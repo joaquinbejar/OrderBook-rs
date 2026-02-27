@@ -229,10 +229,10 @@ impl EventSerializer for BincodeEventSerializer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pricelevel::{MatchResult, OrderId, Side};
+    use pricelevel::{Id, MatchResult, Side};
 
     fn make_trade_result() -> TradeResult {
-        let order_id = OrderId::new_uuid();
+        let order_id = Id::new_uuid();
         let match_result = MatchResult::new(order_id, 100);
         TradeResult::new("BTC/USD".to_string(), match_result)
     }

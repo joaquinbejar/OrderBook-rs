@@ -17,7 +17,7 @@
 //   (from the examples directory)
 
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Side, TimeInForce, setup_logger};
 use tracing::info;
 
 fn main() {
@@ -62,7 +62,7 @@ fn create_orderbook_with_liquidity(symbol: &str) -> OrderBook {
     ];
 
     for (price, quantity) in bid_orders {
-        let order_id = OrderId::new();
+        let order_id = Id::new();
         let _ = book.add_limit_order(order_id, price, quantity, Side::Buy, TimeInForce::Gtc, None);
         info!(
             "  Added bid: {} @ {} (total: {})",
@@ -82,7 +82,7 @@ fn create_orderbook_with_liquidity(symbol: &str) -> OrderBook {
     ];
 
     for (price, quantity) in ask_orders {
-        let order_id = OrderId::new();
+        let order_id = Id::new();
         let _ = book.add_limit_order(
             order_id,
             price,

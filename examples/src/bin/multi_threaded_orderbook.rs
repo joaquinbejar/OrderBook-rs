@@ -1,5 +1,5 @@
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Side, TimeInForce, setup_logger};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -64,7 +64,7 @@ fn run_performance_test() {
                         let price_offset: u128 = (local_counter as u128 % 10) * 10;
                         let price: u128 = price_base + price_offset;
 
-                        let id = OrderId::new_uuid();
+                        let id = Id::new_uuid();
                         let _ = thread_book.add_limit_order(
                             id,
                             price,
@@ -83,14 +83,14 @@ fn run_performance_test() {
                         };
                         let quantity = 5 + (local_counter % 5); // 5-9 units
 
-                        let id = OrderId::new_uuid();
+                        let id = Id::new_uuid();
                         let _ = thread_book.submit_market_order(id, quantity, side);
                     }
                     2 => {
                         // This thread cancels orders
                         // Use order IDs that have a chance of existing but will often miss
                         // (this simulates a realistic scenario with many cancellations failing)
-                        let target_id = OrderId::new_uuid();
+                        let target_id = Id::new_uuid();
                         let _ = thread_book.cancel_order(target_id);
                     }
                     3 => {
@@ -193,7 +193,7 @@ fn populate_orderbook(book: &OrderBook, order_count: usize) {
     // Add buy orders
     for i in 0..(order_count / 2) {
         let price: u128 = 9900 + (i as u128 % 100) * 10; // 9900-10890
-        let id = OrderId::new_uuid();
+        let id = Id::new_uuid();
         let _ = book.add_limit_order(
             id,
             price,
@@ -207,7 +207,7 @@ fn populate_orderbook(book: &OrderBook, order_count: usize) {
     // Add sell orders
     for i in 0..(order_count / 2) {
         let price: u128 = 10100 + (i as u128 % 100) * 10; // 10100-11090
-        let id = OrderId::new_uuid();
+        let id = Id::new_uuid();
         let _ = book.add_limit_order(
             id,
             price,
@@ -225,7 +225,7 @@ fn populate_orderbook(book: &OrderBook, order_count: usize) {
         let price_base = if is_buy { 9950 } else { 10050 };
         let price = price_base + (i * 5);
 
-        let id = OrderId::new_uuid();
+        let id = Id::new_uuid();
         let _ = book.add_iceberg_order(
             id,
             price,
@@ -291,11 +291,11 @@ fn print_orderbook_state(book: &OrderBook) {
     for level in snapshot.bids {
         info!(
             "Price: {}, Quantity: {} (visible: {}, hidden: {}), Orders: {}",
-            level.price,
-            level.visible_quantity + level.hidden_quantity,
-            level.visible_quantity,
-            level.hidden_quantity,
-            level.order_count
+            level.price(),
+            level.visible_quantity() + level.hidden_quantity(),
+            level.visible_quantity(),
+            level.hidden_quantity(),
+            level.order_count()
         );
     }
 
@@ -303,11 +303,11 @@ fn print_orderbook_state(book: &OrderBook) {
     for level in snapshot.asks {
         info!(
             "Price: {}, Quantity: {} (visible: {}, hidden: {}), Orders: {}",
-            level.price,
-            level.visible_quantity + level.hidden_quantity,
-            level.visible_quantity,
-            level.hidden_quantity,
-            level.order_count
+            level.price(),
+            level.visible_quantity() + level.hidden_quantity(),
+            level.visible_quantity(),
+            level.hidden_quantity(),
+            level.order_count()
         );
     }
 }

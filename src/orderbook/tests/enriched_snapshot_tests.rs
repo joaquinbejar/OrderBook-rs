@@ -4,20 +4,20 @@
 mod tests {
     use crate::OrderBook;
     use crate::orderbook::snapshot::MetricFlags;
-    use pricelevel::{OrderId, Side, TimeInForce};
+    use pricelevel::{Id, Side, TimeInForce};
 
     fn setup_test_book() -> OrderBook<()> {
         let book = OrderBook::<()>::new("BTC/USD");
 
         // Add buy orders
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 99, 20, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 98, 30, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 99, 20, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 98, 30, Side::Buy, TimeInForce::Gtc, None);
 
         // Add sell orders
-        let _ = book.add_limit_order(OrderId::new(), 101, 15, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 102, 25, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 103, 35, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 101, 15, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 102, 25, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 103, 35, Side::Sell, TimeInForce::Gtc, None);
 
         book
     }
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn test_enriched_snapshot_one_sided() {
         let book = OrderBook::<()>::new("ONE_SIDED");
-        let _ = book.add_limit_order(OrderId::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
 
         let snapshot = book.enriched_snapshot(10);
 
@@ -159,8 +159,8 @@ mod tests {
     #[test]
     fn test_enriched_snapshot_mid_price_calculation() {
         let book = OrderBook::<()>::new("MID_TEST");
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 110, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 110, 10, Side::Sell, TimeInForce::Gtc, None);
 
         let snapshot = book.enriched_snapshot(10);
 
@@ -172,15 +172,8 @@ mod tests {
     #[test]
     fn test_enriched_snapshot_spread_bps_calculation() {
         let book = OrderBook::<()>::new("SPREAD_TEST");
-        let _ = book.add_limit_order(OrderId::new(), 10000, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(
-            OrderId::new(),
-            10100,
-            10,
-            Side::Sell,
-            TimeInForce::Gtc,
-            None,
-        );
+        let _ = book.add_limit_order(Id::new(), 10000, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 10100, 10, Side::Sell, TimeInForce::Gtc, None);
 
         let snapshot = book.enriched_snapshot(10);
 
@@ -194,8 +187,8 @@ mod tests {
     #[test]
     fn test_enriched_snapshot_balanced_book() {
         let book = OrderBook::<()>::new("BALANCED");
-        let _ = book.add_limit_order(OrderId::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 101, 50, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 101, 50, Side::Sell, TimeInForce::Gtc, None);
 
         let snapshot = book.enriched_snapshot(10);
 
@@ -206,8 +199,8 @@ mod tests {
     #[test]
     fn test_enriched_snapshot_buy_heavy() {
         let book = OrderBook::<()>::new("BUY_HEAVY");
-        let _ = book.add_limit_order(OrderId::new(), 100, 100, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 101, 50, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 100, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 101, 50, Side::Sell, TimeInForce::Gtc, None);
 
         let snapshot = book.enriched_snapshot(10);
 
@@ -218,8 +211,8 @@ mod tests {
     #[test]
     fn test_enriched_snapshot_sell_heavy() {
         let book = OrderBook::<()>::new("SELL_HEAVY");
-        let _ = book.add_limit_order(OrderId::new(), 100, 30, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 101, 100, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 30, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 101, 100, Side::Sell, TimeInForce::Gtc, None);
 
         let snapshot = book.enriched_snapshot(10);
 

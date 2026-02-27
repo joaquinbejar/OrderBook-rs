@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
     use crate::OrderBookSnapshot;
-    use pricelevel::PriceLevelSnapshot;
 
     // Helper function to create an empty snapshot for testing
     fn create_empty_snapshot() -> OrderBookSnapshot {
@@ -16,38 +15,14 @@ mod tests {
     // Helper function to create a snapshot with sample data
     fn create_sample_snapshot() -> OrderBookSnapshot {
         // Create bid levels
-        let bid1 = PriceLevelSnapshot {
-            price: 1000,
-            visible_quantity: 10,
-            hidden_quantity: 5,
-            order_count: 2,
-            orders: Vec::new(),
-        };
+        let bid1 = crate::orderbook::tests::test_helpers::make_snapshot(1000, 10, 5, 2);
 
-        let bid2 = PriceLevelSnapshot {
-            price: 990,
-            visible_quantity: 20,
-            hidden_quantity: 0,
-            order_count: 1,
-            orders: Vec::new(),
-        };
+        let bid2 = crate::orderbook::tests::test_helpers::make_snapshot(990, 20, 0, 1);
 
         // Create ask levels
-        let ask1 = PriceLevelSnapshot {
-            price: 1010,
-            visible_quantity: 15,
-            hidden_quantity: 0,
-            order_count: 3,
-            orders: Vec::new(),
-        };
+        let ask1 = crate::orderbook::tests::test_helpers::make_snapshot(1010, 15, 0, 3);
 
-        let ask2 = PriceLevelSnapshot {
-            price: 1020,
-            visible_quantity: 25,
-            hidden_quantity: 10,
-            order_count: 2,
-            orders: Vec::new(),
-        };
+        let ask2 = crate::orderbook::tests::test_helpers::make_snapshot(1020, 25, 10, 2);
 
         OrderBookSnapshot {
             symbol: "TEST".to_string(),
@@ -235,37 +210,45 @@ mod tests {
 
         // Check first bid properties
         assert_eq!(
-            snapshot.bids[0].price, 1000,
+            snapshot.bids[0].price(),
+            1000,
             "First bid price should be 1000"
         );
         assert_eq!(
-            snapshot.bids[0].visible_quantity, 10,
+            snapshot.bids[0].visible_quantity(),
+            10,
             "First bid visible quantity should be 10"
         );
         assert_eq!(
-            snapshot.bids[0].hidden_quantity, 5,
+            snapshot.bids[0].hidden_quantity(),
+            5,
             "First bid hidden quantity should be 5"
         );
         assert_eq!(
-            snapshot.bids[0].order_count, 2,
+            snapshot.bids[0].order_count(),
+            2,
             "First bid should have 2 orders"
         );
 
         // Check first ask properties
         assert_eq!(
-            snapshot.asks[0].price, 1010,
+            snapshot.asks[0].price(),
+            1010,
             "First ask price should be 1010"
         );
         assert_eq!(
-            snapshot.asks[0].visible_quantity, 15,
+            snapshot.asks[0].visible_quantity(),
+            15,
             "First ask visible quantity should be 15"
         );
         assert_eq!(
-            snapshot.asks[0].hidden_quantity, 0,
+            snapshot.asks[0].hidden_quantity(),
+            0,
             "First ask hidden quantity should be 0"
         );
         assert_eq!(
-            snapshot.asks[0].order_count, 3,
+            snapshot.asks[0].order_count(),
+            3,
             "First ask should have 3 orders"
         );
     }
@@ -273,21 +256,9 @@ mod tests {
     #[test]
     fn test_bid_ask_with_prices_out_of_order() {
         // Create snapshot with bid prices in ascending order (incorrect order)
-        let bid1 = PriceLevelSnapshot {
-            price: 990,
-            visible_quantity: 20,
-            hidden_quantity: 0,
-            order_count: 1,
-            orders: Vec::new(),
-        };
+        let bid1 = crate::orderbook::tests::test_helpers::make_snapshot(990, 20, 0, 1);
 
-        let bid2 = PriceLevelSnapshot {
-            price: 1000,
-            visible_quantity: 10,
-            hidden_quantity: 5,
-            order_count: 2,
-            orders: Vec::new(),
-        };
+        let bid2 = crate::orderbook::tests::test_helpers::make_snapshot(1000, 10, 5, 2);
 
         let snapshot = OrderBookSnapshot {
             symbol: "TEST".to_string(),
@@ -337,21 +308,25 @@ mod tests {
 
         // Check first bid details
         assert_eq!(
-            deserialized.bids[0].price, original.bids[0].price,
+            deserialized.bids[0].price(),
+            original.bids[0].price(),
             "Bid price should match after serialization"
         );
         assert_eq!(
-            deserialized.bids[0].visible_quantity, original.bids[0].visible_quantity,
+            deserialized.bids[0].visible_quantity(),
+            original.bids[0].visible_quantity(),
             "Bid visible quantity should match after serialization"
         );
 
         // Check first ask details
         assert_eq!(
-            deserialized.asks[0].price, original.asks[0].price,
+            deserialized.asks[0].price(),
+            original.asks[0].price(),
             "Ask price should match after serialization"
         );
         assert_eq!(
-            deserialized.asks[0].visible_quantity, original.asks[0].visible_quantity,
+            deserialized.asks[0].visible_quantity(),
+            original.asks[0].visible_quantity(),
             "Ask visible quantity should match after serialization"
         );
     }
@@ -360,14 +335,13 @@ mod tests {
 #[cfg(test)]
 mod tests_bis {
     use crate::OrderBookSnapshot;
-    use pricelevel::PriceLevelSnapshot;
 
     // Helper function to create an improved implementation of best_bid
     fn find_best_bid(snapshot: &OrderBookSnapshot) -> Option<(u128, u64)> {
         snapshot
             .bids
             .iter()
-            .map(|level| (level.price, level.visible_quantity))
+            .map(|level| (level.price(), level.visible_quantity()))
             .max_by_key(|&(price, _)| price)
     }
 
@@ -376,61 +350,25 @@ mod tests_bis {
         snapshot
             .asks
             .iter()
-            .map(|level| (level.price, level.visible_quantity))
+            .map(|level| (level.price(), level.visible_quantity()))
             .min_by_key(|&(price, _)| price)
     }
 
     // Create a snapshot with levels in random order
     fn create_unordered_snapshot() -> OrderBookSnapshot {
         // Create bid levels (out of order)
-        let bid1 = PriceLevelSnapshot {
-            price: 980,
-            visible_quantity: 30,
-            hidden_quantity: 0,
-            order_count: 3,
-            orders: Vec::new(),
-        };
+        let bid1 = crate::orderbook::tests::test_helpers::make_snapshot(980, 30, 0, 3);
 
-        let bid2 = PriceLevelSnapshot {
-            price: 1000, // Highest price
-            visible_quantity: 10,
-            hidden_quantity: 5,
-            order_count: 2,
-            orders: Vec::new(),
-        };
+        let bid2 = crate::orderbook::tests::test_helpers::make_snapshot(1000, 10, 5, 2);
 
-        let bid3 = PriceLevelSnapshot {
-            price: 990,
-            visible_quantity: 20,
-            hidden_quantity: 0,
-            order_count: 1,
-            orders: Vec::new(),
-        };
+        let bid3 = crate::orderbook::tests::test_helpers::make_snapshot(990, 20, 0, 1);
 
         // Create ask levels (out of order)
-        let ask1 = PriceLevelSnapshot {
-            price: 1020,
-            visible_quantity: 25,
-            hidden_quantity: 10,
-            order_count: 2,
-            orders: Vec::new(),
-        };
+        let ask1 = crate::orderbook::tests::test_helpers::make_snapshot(1020, 25, 10, 2);
 
-        let ask2 = PriceLevelSnapshot {
-            price: 1030,
-            visible_quantity: 35,
-            hidden_quantity: 0,
-            order_count: 4,
-            orders: Vec::new(),
-        };
+        let ask2 = crate::orderbook::tests::test_helpers::make_snapshot(1030, 35, 0, 4);
 
-        let ask3 = PriceLevelSnapshot {
-            price: 1010, // Lowest price
-            visible_quantity: 15,
-            hidden_quantity: 0,
-            order_count: 3,
-            orders: Vec::new(),
-        };
+        let ask3 = crate::orderbook::tests::test_helpers::make_snapshot(1010, 15, 0, 3);
 
         OrderBookSnapshot {
             symbol: "TEST".to_string(),
@@ -510,20 +448,20 @@ mod tests_bis {
         let mut snapshot = create_unordered_snapshot();
 
         // Sort the bids by price in descending order
-        snapshot.bids.sort_by(|a, b| b.price.cmp(&a.price));
+        snapshot.bids.sort_by_key(|b| std::cmp::Reverse(b.price()));
 
         // Sort the asks by price in ascending order
-        snapshot.asks.sort_by(|a, b| a.price.cmp(&b.price));
+        snapshot.asks.sort_by_key(|a| a.price());
 
         // Now the first element should be the best price
         let best_bid = snapshot
             .bids
             .first()
-            .map(|level| (level.price, level.visible_quantity));
+            .map(|level| (level.price(), level.visible_quantity()));
         let best_ask = snapshot
             .asks
             .first()
-            .map(|level| (level.price, level.visible_quantity));
+            .map(|level| (level.price(), level.visible_quantity()));
 
         // Verify that sorting gives the correct best prices
         assert_eq!(
@@ -547,7 +485,7 @@ mod tests_bis {
             snapshot
                 .bids
                 .iter()
-                .map(|level| (level.price, level.visible_quantity))
+                .map(|level| (level.price(), level.visible_quantity()))
                 .max_by_key(|&(price, _)| price)
         }
 
@@ -556,7 +494,7 @@ mod tests_bis {
             snapshot
                 .asks
                 .iter()
-                .map(|level| (level.price, level.visible_quantity))
+                .map(|level| (level.price(), level.visible_quantity()))
                 .min_by_key(|&(price, _)| price)
         }
 
@@ -579,43 +517,18 @@ mod tests_bis {
 #[cfg(test)]
 mod test_orderbook_snapshot {
     use crate::OrderBookSnapshot;
-    use pricelevel::PriceLevelSnapshot;
 
     #[test]
     fn test_snapshot_methods() {
         // Create a snapshot with bid levels
-        let bid1 = PriceLevelSnapshot {
-            price: 1000,
-            visible_quantity: 10,
-            hidden_quantity: 5,
-            order_count: 2,
-            orders: Vec::new(),
-        };
+        let bid1 = crate::orderbook::tests::test_helpers::make_snapshot(1000, 10, 5, 2);
 
-        let bid2 = PriceLevelSnapshot {
-            price: 990,
-            visible_quantity: 20,
-            hidden_quantity: 0,
-            order_count: 1,
-            orders: Vec::new(),
-        };
+        let bid2 = crate::orderbook::tests::test_helpers::make_snapshot(990, 20, 0, 1);
 
         // Create ask levels
-        let ask1 = PriceLevelSnapshot {
-            price: 1010,
-            visible_quantity: 15,
-            hidden_quantity: 0,
-            order_count: 3,
-            orders: Vec::new(),
-        };
+        let ask1 = crate::orderbook::tests::test_helpers::make_snapshot(1010, 15, 0, 3);
 
-        let ask2 = PriceLevelSnapshot {
-            price: 1020,
-            visible_quantity: 25,
-            hidden_quantity: 10,
-            order_count: 2,
-            orders: Vec::new(),
-        };
+        let ask2 = crate::orderbook::tests::test_helpers::make_snapshot(1020, 25, 10, 2);
 
         let snapshot = OrderBookSnapshot {
             symbol: "TEST".to_string(),
@@ -641,7 +554,6 @@ mod test_orderbook_snapshot {
 #[cfg(test)]
 mod test_snapshot_remaining {
     use crate::OrderBookSnapshot;
-    use pricelevel::PriceLevelSnapshot;
 
     #[test]
     fn test_empty_snapshot_volume_methods() {
@@ -662,22 +574,10 @@ mod test_snapshot_remaining {
     #[test]
     fn test_snapshot_tracing() {
         // Create a snapshot with a bid level
-        let bid = PriceLevelSnapshot {
-            price: 1000,
-            visible_quantity: 10,
-            hidden_quantity: 5,
-            order_count: 2,
-            orders: Vec::new(),
-        };
+        let bid = crate::orderbook::tests::test_helpers::make_snapshot(1000, 10, 5, 2);
 
         // Create an ask level
-        let ask = PriceLevelSnapshot {
-            price: 1010,
-            visible_quantity: 15,
-            hidden_quantity: 0,
-            order_count: 3,
-            orders: Vec::new(),
-        };
+        let ask = crate::orderbook::tests::test_helpers::make_snapshot(1010, 15, 0, 3);
 
         let snapshot = OrderBookSnapshot {
             symbol: "TEST".to_string(),
@@ -711,27 +611,15 @@ mod test_snapshot_remaining {
 #[cfg(test)]
 mod test_snapshot_specific {
     use crate::OrderBookSnapshot;
-    use pricelevel::PriceLevelSnapshot;
+
     use tracing::trace;
 
     #[test]
     fn test_snapshot_trace_output() {
         // Create a test snapshot
-        let bid = PriceLevelSnapshot {
-            price: 1000,
-            visible_quantity: 10,
-            hidden_quantity: 0,
-            order_count: 1,
-            orders: Vec::new(),
-        };
+        let bid = crate::orderbook::tests::test_helpers::make_snapshot(1000, 10, 0, 1);
 
-        let ask = PriceLevelSnapshot {
-            price: 1010,
-            visible_quantity: 15,
-            hidden_quantity: 0,
-            order_count: 1,
-            orders: Vec::new(),
-        };
+        let ask = crate::orderbook::tests::test_helpers::make_snapshot(1010, 15, 0, 1);
 
         let snapshot = OrderBookSnapshot {
             symbol: "TEST".to_string(),

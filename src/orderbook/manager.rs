@@ -94,21 +94,22 @@ where
     /// Process a single trade event.
     fn process_trade_event(event: TradeEvent) {
         info!(
-            "Processing trade for {}: {} transactions, executed quantity: {}",
+            "Processing trade for {}: {} trades, executed quantity: {}",
             event.symbol,
+            event.trade_result.match_result.trades().as_vec().len(),
             event
                 .trade_result
                 .match_result
-                .transactions
-                .transactions
-                .len(),
-            event.trade_result.match_result.executed_quantity()
+                .executed_quantity()
+                .unwrap_or(0)
         );
 
-        for transaction in event.trade_result.match_result.transactions.as_vec() {
+        for trade in event.trade_result.match_result.trades().as_vec() {
             info!(
-                "  Transaction: {} units at price {} (ID: {})",
-                transaction.quantity, transaction.price, transaction.transaction_id
+                "  Trade: {} units at price {} (ID: {})",
+                trade.quantity(),
+                trade.price(),
+                trade.trade_id()
             );
         }
     }
@@ -231,21 +232,22 @@ where
     /// Process a single trade event.
     fn process_trade_event(event: TradeEvent) {
         info!(
-            "Processing trade for {}: {} transactions, executed quantity: {}",
+            "Processing trade for {}: {} trades, executed quantity: {}",
             event.symbol,
+            event.trade_result.match_result.trades().as_vec().len(),
             event
                 .trade_result
                 .match_result
-                .transactions
-                .transactions
-                .len(),
-            event.trade_result.match_result.executed_quantity()
+                .executed_quantity()
+                .unwrap_or(0)
         );
 
-        for transaction in event.trade_result.match_result.transactions.as_vec() {
+        for trade in event.trade_result.match_result.trades().as_vec() {
             info!(
-                "  Transaction: {} units at price {} (ID: {})",
-                transaction.quantity, transaction.price, transaction.transaction_id
+                "  Trade: {} units at price {} (ID: {})",
+                trade.quantity(),
+                trade.price(),
+                trade.trade_id()
             );
         }
     }

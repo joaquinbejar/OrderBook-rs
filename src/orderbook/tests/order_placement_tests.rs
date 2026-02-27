@@ -3,16 +3,16 @@
 #[cfg(test)]
 mod tests {
     use crate::OrderBook;
-    use pricelevel::{OrderId, Side, TimeInForce};
+    use pricelevel::{Id, Side, TimeInForce};
 
     #[test]
     fn test_queue_ahead_at_price_basic() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Add multiple orders at same price
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 100, 20, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 100, 30, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 20, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 30, Side::Buy, TimeInForce::Gtc, None);
 
         assert_eq!(book.queue_ahead_at_price(100, Side::Buy), 3);
     }
@@ -28,8 +28,8 @@ mod tests {
     fn test_queue_ahead_at_price_different_levels() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 99, 20, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 99, 20, Side::Buy, TimeInForce::Gtc, None);
 
         assert_eq!(book.queue_ahead_at_price(100, Side::Buy), 1);
         assert_eq!(book.queue_ahead_at_price(99, Side::Buy), 1);
@@ -40,7 +40,7 @@ mod tests {
     fn test_price_n_ticks_inside_buy() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
 
         // 1 tick inside with tick_size = 1 means 100 - 1 = 99
         assert_eq!(book.price_n_ticks_inside(1, 1, Side::Buy), Some(99));
@@ -56,7 +56,7 @@ mod tests {
     fn test_price_n_ticks_inside_sell() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
 
         // 1 tick inside with tick_size = 1 means 100 + 1 = 101
         assert_eq!(book.price_n_ticks_inside(1, 1, Side::Sell), Some(101));
@@ -72,7 +72,7 @@ mod tests {
     fn test_price_n_ticks_inside_zero_values() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
 
         // Zero ticks should return None
         assert_eq!(book.price_n_ticks_inside(0, 1, Side::Buy), None);
@@ -93,7 +93,7 @@ mod tests {
     fn test_price_n_ticks_inside_underflow() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 5, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 5, 10, Side::Buy, TimeInForce::Gtc, None);
 
         // Trying to go 10 ticks inside would underflow (5 - 10 < 0)
         assert_eq!(book.price_n_ticks_inside(10, 1, Side::Buy), None);
@@ -103,9 +103,9 @@ mod tests {
     fn test_price_for_queue_position_basic() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 99, 10, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 98, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 99, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 98, 10, Side::Buy, TimeInForce::Gtc, None);
 
         // Position 1 should be best bid (100)
         assert_eq!(book.price_for_queue_position(1, Side::Buy), Some(100));
@@ -124,9 +124,9 @@ mod tests {
     fn test_price_for_queue_position_sell_side() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 101, 10, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 102, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 101, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 102, 10, Side::Sell, TimeInForce::Gtc, None);
 
         // Position 1 should be best ask (100)
         assert_eq!(book.price_for_queue_position(1, Side::Sell), Some(100));
@@ -139,7 +139,7 @@ mod tests {
     fn test_price_for_queue_position_zero() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
 
         // Position 0 is invalid
         assert_eq!(book.price_for_queue_position(0, Side::Buy), None);
@@ -157,9 +157,9 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Add orders with cumulative depth
-        let _ = book.add_limit_order(OrderId::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 99, 60, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 98, 70, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 99, 60, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 98, 70, Side::Buy, TimeInForce::Gtc, None);
 
         // Want to be just inside 100 units of depth
         // Depth at 100: 50, at 99: 110 (50+60), so we reach target at 99
@@ -178,7 +178,7 @@ mod tests {
     fn test_price_at_depth_adjusted_insufficient_depth() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
 
         // Target depth exceeds available, should return deepest price
         if let Some(price) = book.price_at_depth_adjusted(100, 1, Side::Buy) {
@@ -190,9 +190,9 @@ mod tests {
     fn test_price_at_depth_adjusted_sell_side() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 50, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 101, 60, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 102, 70, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 50, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 101, 60, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 102, 70, Side::Sell, TimeInForce::Gtc, None);
 
         // Want to be just inside 100 units of depth
         // Depth at 100: 50, at 101: 110, so we reach target at 101
@@ -206,7 +206,7 @@ mod tests {
     fn test_price_at_depth_adjusted_zero_values() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(OrderId::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 50, Side::Buy, TimeInForce::Gtc, None);
 
         // Zero target_depth should return None
         assert_eq!(book.price_at_depth_adjusted(0, 1, Side::Buy), None);
@@ -227,13 +227,13 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
         // Setup realistic order book
-        let _ = book.add_limit_order(OrderId::new(), 100, 30, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 100, 20, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 99, 40, Side::Buy, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 98, 50, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 30, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 100, 20, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 99, 40, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 98, 50, Side::Buy, TimeInForce::Gtc, None);
 
-        let _ = book.add_limit_order(OrderId::new(), 105, 25, Side::Sell, TimeInForce::Gtc, None);
-        let _ = book.add_limit_order(OrderId::new(), 106, 35, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 105, 25, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 106, 35, Side::Sell, TimeInForce::Gtc, None);
 
         // Test queue_ahead_at_price
         assert_eq!(book.queue_ahead_at_price(100, Side::Buy), 2);
@@ -262,8 +262,7 @@ mod tests {
         // Create a deep book
         for i in 0..10 {
             let price = 100 - i;
-            let _ =
-                book.add_limit_order(OrderId::new(), price, 10, Side::Buy, TimeInForce::Gtc, None);
+            let _ = book.add_limit_order(Id::new(), price, 10, Side::Buy, TimeInForce::Gtc, None);
         }
 
         // Test various positions
@@ -277,14 +276,7 @@ mod tests {
     fn test_tick_calculations_with_large_values() {
         let book: OrderBook<()> = OrderBook::new("TEST");
 
-        let _ = book.add_limit_order(
-            OrderId::new(),
-            100000,
-            10,
-            Side::Buy,
-            TimeInForce::Gtc,
-            None,
-        );
+        let _ = book.add_limit_order(Id::new(), 100000, 10, Side::Buy, TimeInForce::Gtc, None);
 
         // Test with large tick size
         assert_eq!(book.price_n_ticks_inside(10, 100, Side::Buy), Some(99000));

@@ -1,7 +1,9 @@
 //! Additional unit tests to improve test coverage for private.rs
 //! These tests target specific uncovered lines and edge cases
 
-use pricelevel::{Hash32, OrderId, OrderType, PegReferenceType, Side, TimeInForce};
+use pricelevel::{
+    Hash32, Id, OrderType, PegReferenceType, Price, Quantity, Side, TimeInForce, TimestampMs,
+};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -12,11 +14,11 @@ struct TestExtraFields {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orderbook_rs::orderbook::modifications::OrderQuantity;
+
     use orderbook_rs::{OrderBook, current_time_millis};
 
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     #[test]
@@ -30,11 +32,11 @@ mod tests {
 
         let day_order = OrderType::Standard {
             id: create_order_id(),
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time,
+            timestamp: TimestampMs::new(current_time),
             time_in_force: TimeInForce::Day,
             extra_fields: TestExtraFields::default(),
         };
@@ -51,11 +53,11 @@ mod tests {
 
         let gtc_order = OrderType::Standard {
             id: create_order_id(),
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time,
+            timestamp: TimestampMs::new(current_time),
             time_in_force: TimeInForce::Gtc,
             extra_fields: TestExtraFields::default(),
         };
@@ -110,11 +112,11 @@ mod tests {
 
         let order = Arc::new(OrderType::Standard {
             id: order_id,
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: TestExtraFields::default(),
         });
@@ -128,8 +130,8 @@ mod tests {
 
         // Verify order properties
         let order = retrieved_order.unwrap();
-        assert_eq!(order.price(), 100);
-        assert_eq!(order.quantity(), 10);
+        assert_eq!(order.price().as_u128(), 100);
+        assert_eq!(order.visible_quantity(), 10);
         assert_eq!(order.side(), Side::Buy);
     }
 
@@ -141,11 +143,11 @@ mod tests {
 
         let order = Arc::new(OrderType::Standard {
             id: order_id,
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: TestExtraFields::default(),
         });
@@ -159,8 +161,8 @@ mod tests {
 
         // Verify order properties
         let order = retrieved_order.unwrap();
-        assert_eq!(order.price(), 100);
-        assert_eq!(order.quantity(), 10);
+        assert_eq!(order.price().as_u128(), 100);
+        assert_eq!(order.visible_quantity(), 10);
         assert_eq!(order.side(), Side::Sell);
     }
 
@@ -173,11 +175,11 @@ mod tests {
 
         let order = OrderType::Standard {
             id: order_id,
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
             extra_fields: TestExtraFields {
                 metadata: "test".to_string(),
@@ -198,10 +200,10 @@ mod tests {
                 extra_fields: _,
             } => {
                 assert_eq!(converted_id, order_id);
-                assert_eq!(converted_price, 100);
-                assert_eq!(converted_quantity, 10);
+                assert_eq!(converted_price, Price::new(100));
+                assert_eq!(converted_quantity, Quantity::new(10));
                 assert_eq!(converted_side, Side::Buy);
-                assert_eq!(converted_timestamp, timestamp);
+                assert_eq!(converted_timestamp, TimestampMs::new(timestamp));
                 assert_eq!(converted_tif, TimeInForce::Gtc);
                 // extra_fields is unit type as expected
             }
@@ -218,12 +220,12 @@ mod tests {
 
         let order = OrderType::IcebergOrder {
             id: order_id,
-            price: 100,
-            visible_quantity: 5,
-            hidden_quantity: 15,
+            price: Price::new(100),
+            visible_quantity: Quantity::new(5),
+            hidden_quantity: Quantity::new(15),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Ioc,
             extra_fields: TestExtraFields {
                 metadata: "iceberg".to_string(),
@@ -245,11 +247,11 @@ mod tests {
                 extra_fields: _,
             } => {
                 assert_eq!(converted_id, order_id);
-                assert_eq!(converted_price, 100);
-                assert_eq!(converted_visible, 5);
-                assert_eq!(converted_hidden, 15);
+                assert_eq!(converted_price, Price::new(100));
+                assert_eq!(converted_visible, Quantity::new(5));
+                assert_eq!(converted_hidden, Quantity::new(15));
                 assert_eq!(converted_side, Side::Sell);
-                assert_eq!(converted_timestamp, timestamp);
+                assert_eq!(converted_timestamp, TimestampMs::new(timestamp));
                 assert_eq!(converted_tif, TimeInForce::Ioc);
                 // extra_fields is unit type as expected
             }
@@ -266,11 +268,11 @@ mod tests {
 
         let order = OrderType::PostOnly {
             id: order_id,
-            price: 100,
-            quantity: 20,
+            price: Price::new(100),
+            quantity: Quantity::new(20),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Fok,
             extra_fields: TestExtraFields {
                 metadata: "post_only".to_string(),
@@ -291,10 +293,10 @@ mod tests {
                 extra_fields: _,
             } => {
                 assert_eq!(converted_id, order_id);
-                assert_eq!(converted_price, 100);
-                assert_eq!(converted_quantity, 20);
+                assert_eq!(converted_price, Price::new(100));
+                assert_eq!(converted_quantity, Quantity::new(20));
                 assert_eq!(converted_side, Side::Buy);
-                assert_eq!(converted_timestamp, timestamp);
+                assert_eq!(converted_timestamp, TimestampMs::new(timestamp));
                 assert_eq!(converted_tif, TimeInForce::Fok);
                 // extra_fields is unit type as expected
             }
@@ -311,14 +313,14 @@ mod tests {
 
         let order = OrderType::TrailingStop {
             id: order_id,
-            price: 100,
-            quantity: 25,
+            price: Price::new(100),
+            quantity: Quantity::new(25),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Day,
-            trail_amount: 5,
-            last_reference_price: 105,
+            trail_amount: Quantity::new(5),
+            last_reference_price: Price::new(105),
             extra_fields: TestExtraFields {
                 metadata: "trailing_stop".to_string(),
             },
@@ -340,13 +342,13 @@ mod tests {
                 extra_fields: _,
             } => {
                 assert_eq!(converted_id, order_id);
-                assert_eq!(converted_price, 100);
-                assert_eq!(converted_quantity, 25);
+                assert_eq!(converted_price, Price::new(100));
+                assert_eq!(converted_quantity, Quantity::new(25));
                 assert_eq!(converted_side, Side::Sell);
-                assert_eq!(converted_timestamp, timestamp);
+                assert_eq!(converted_timestamp, TimestampMs::new(timestamp));
                 assert_eq!(converted_tif, TimeInForce::Day);
-                assert_eq!(converted_trail, 5);
-                assert_eq!(converted_ref_price, 105);
+                assert_eq!(converted_trail, Quantity::new(5));
+                assert_eq!(converted_ref_price, Price::new(105));
                 // extra_fields is unit type as expected
             }
             _ => panic!("Expected TrailingStop order type"),
@@ -362,11 +364,11 @@ mod tests {
 
         let order = OrderType::PeggedOrder {
             id: order_id,
-            price: 100,
-            quantity: 30,
+            price: Price::new(100),
+            quantity: Quantity::new(30),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
             reference_price_offset: 2,
             reference_price_type: PegReferenceType::BestBid,
@@ -391,10 +393,10 @@ mod tests {
                 extra_fields: _,
             } => {
                 assert_eq!(converted_id, order_id);
-                assert_eq!(converted_price, 100);
-                assert_eq!(converted_quantity, 30);
+                assert_eq!(converted_price, Price::new(100));
+                assert_eq!(converted_quantity, Quantity::new(30));
                 assert_eq!(converted_side, Side::Buy);
-                assert_eq!(converted_timestamp, timestamp);
+                assert_eq!(converted_timestamp, TimestampMs::new(timestamp));
                 assert_eq!(converted_tif, TimeInForce::Gtc);
                 assert_eq!(converted_offset, 2);
                 assert_eq!(converted_ref_type, PegReferenceType::BestBid);
@@ -413,11 +415,11 @@ mod tests {
 
         let order = OrderType::MarketToLimit {
             id: order_id,
-            price: 100,
-            quantity: 35,
+            price: Price::new(100),
+            quantity: Quantity::new(35),
             side: Side::Sell,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Ioc,
             extra_fields: TestExtraFields {
                 metadata: "market_to_limit".to_string(),
@@ -438,10 +440,10 @@ mod tests {
                 extra_fields: _,
             } => {
                 assert_eq!(converted_id, order_id);
-                assert_eq!(converted_price, 100);
-                assert_eq!(converted_quantity, 35);
+                assert_eq!(converted_price, Price::new(100));
+                assert_eq!(converted_quantity, Quantity::new(35));
                 assert_eq!(converted_side, Side::Sell);
-                assert_eq!(converted_timestamp, timestamp);
+                assert_eq!(converted_timestamp, TimestampMs::new(timestamp));
                 assert_eq!(converted_tif, TimeInForce::Ioc);
                 // extra_fields is unit type as expected
             }
@@ -458,15 +460,15 @@ mod tests {
 
         let order = OrderType::ReserveOrder {
             id: order_id,
-            price: 100,
-            visible_quantity: 10,
-            hidden_quantity: 40,
+            price: Price::new(100),
+            visible_quantity: Quantity::new(10),
+            hidden_quantity: Quantity::new(40),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp,
+            timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Fok,
-            replenish_threshold: 5,
-            replenish_amount: Some(15),
+            replenish_threshold: Quantity::new(5),
+            replenish_amount: Some(Quantity::new(15)),
             auto_replenish: true,
             extra_fields: TestExtraFields {
                 metadata: "reserve".to_string(),
@@ -491,14 +493,14 @@ mod tests {
                 extra_fields: _,
             } => {
                 assert_eq!(converted_id, order_id);
-                assert_eq!(converted_price, 100);
-                assert_eq!(converted_visible, 10);
-                assert_eq!(converted_hidden, 40);
+                assert_eq!(converted_price, Price::new(100));
+                assert_eq!(converted_visible, Quantity::new(10));
+                assert_eq!(converted_hidden, Quantity::new(40));
                 assert_eq!(converted_side, Side::Buy);
-                assert_eq!(converted_timestamp, timestamp);
+                assert_eq!(converted_timestamp, TimestampMs::new(timestamp));
                 assert_eq!(converted_tif, TimeInForce::Fok);
-                assert_eq!(converted_threshold, 5);
-                assert_eq!(converted_amount, Some(15));
+                assert_eq!(converted_threshold, Quantity::new(5));
+                assert_eq!(converted_amount, Some(Quantity::new(15)));
                 assert!(converted_auto);
                 // extra_fields is unit type as expected
             }
@@ -514,11 +516,11 @@ mod tests {
 
         let gtd_order = OrderType::Standard {
             id: create_order_id(),
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time,
+            timestamp: TimestampMs::new(current_time),
             time_in_force: TimeInForce::Gtd(current_time + 10000), // Expires in future
             extra_fields: TestExtraFields::default(),
         };
@@ -535,11 +537,11 @@ mod tests {
 
         let gtd_order = OrderType::Standard {
             id: create_order_id(),
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time,
+            timestamp: TimestampMs::new(current_time),
             time_in_force: TimeInForce::Gtd(current_time - 1000), // Expired
             extra_fields: TestExtraFields::default(),
         };
@@ -567,11 +569,11 @@ mod tests {
         let order_id1 = create_order_id();
         let order1 = Arc::new(OrderType::Standard {
             id: order_id1,
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: TestExtraFields::default(),
         });
@@ -582,11 +584,11 @@ mod tests {
         let order_id2 = create_order_id();
         let order2 = Arc::new(OrderType::Standard {
             id: order_id2,
-            price: 100,
-            quantity: 15,
+            price: Price::new(100),
+            quantity: Quantity::new(15),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: TestExtraFields::default(),
         });

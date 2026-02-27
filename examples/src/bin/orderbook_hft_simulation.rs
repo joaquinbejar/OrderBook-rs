@@ -1,5 +1,5 @@
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Side, TimeInForce, setup_logger};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -46,7 +46,7 @@ fn main() {
     let order_book: Arc<OrderBook<OrderMetadata>> = Arc::new(OrderBook::new(SYMBOL));
 
     // Shared queue to store order IDs for cancellation
-    let order_id_queue = Arc::new(Mutex::new(VecDeque::<OrderId>::new()));
+    let order_id_queue = Arc::new(Mutex::new(VecDeque::<Id>::new()));
 
     // Counters for operations
     let orders_added = Arc::new(AtomicU64::new(0));
@@ -181,7 +181,7 @@ fn preload_order_book(order_book: &OrderBook<OrderMetadata>, count: usize) {
     for i in 0..(count / 2) {
         let price_level = i % PRICE_LEVELS as usize;
         let price = BASE_BID_PRICE - price_level as u128 * 10; // Decreasing prices for bids
-        let id = OrderId::new_uuid();
+        let id = Id::new_uuid();
         let quantity = 10 + (i % 10) as u64; // 10-19 units
 
         let _ = order_book.add_limit_order(
@@ -199,7 +199,7 @@ fn preload_order_book(order_book: &OrderBook<OrderMetadata>, count: usize) {
         let price_level = i % PRICE_LEVELS as usize;
         let price = BASE_ASK_PRICE + price_level as u128 * 10; // Increasing prices for asks
 
-        let id = OrderId::new_uuid();
+        let id = Id::new_uuid();
         let quantity = 10 + (i % 10) as u64; // 10-19 units
 
         let _ = order_book.add_limit_order(
@@ -222,7 +222,7 @@ fn preload_order_book(order_book: &OrderBook<OrderMetadata>, count: usize) {
             BASE_ASK_PRICE + 5
         };
 
-        let id = OrderId::new_uuid();
+        let id = Id::new_uuid();
         let _ =
             order_book.add_iceberg_order(id, price, 5, 45, side, TimeInForce::Gtc, Some(metadata));
     }
@@ -270,13 +270,13 @@ fn print_order_book_state(order_book: &OrderBook<OrderMetadata>) {
     let snapshot = order_book.create_snapshot(100); // Get a deep snapshot
 
     for level in &snapshot.bids {
-        total_bid_visible += level.visible_quantity;
-        total_bid_hidden += level.hidden_quantity;
+        total_bid_visible += level.visible_quantity();
+        total_bid_hidden += level.hidden_quantity();
     }
 
     for level in &snapshot.asks {
-        total_ask_visible += level.visible_quantity;
-        total_ask_hidden += level.hidden_quantity;
+        total_ask_visible += level.visible_quantity();
+        total_ask_hidden += level.hidden_quantity();
     }
 
     info!(
@@ -303,11 +303,11 @@ fn print_order_book_state(order_book: &OrderBook<OrderMetadata>) {
         info!(
             "  [{}] Price: {}, Quantity: {} (Visible: {}, Hidden: {}), Orders: {}",
             i + 1,
-            level.price,
-            level.visible_quantity + level.hidden_quantity,
-            level.visible_quantity,
-            level.hidden_quantity,
-            level.order_count
+            level.price(),
+            level.visible_quantity() + level.hidden_quantity(),
+            level.visible_quantity(),
+            level.hidden_quantity(),
+            level.order_count()
         );
     }
 
@@ -316,11 +316,11 @@ fn print_order_book_state(order_book: &OrderBook<OrderMetadata>) {
         info!(
             "  [{}] Price: {}, Quantity: {} (Visible: {}, Hidden: {}), Orders: {}",
             i + 1,
-            level.price,
-            level.visible_quantity + level.hidden_quantity,
-            level.visible_quantity,
-            level.hidden_quantity,
-            level.order_count
+            level.price(),
+            level.visible_quantity() + level.hidden_quantity(),
+            level.visible_quantity(),
+            level.hidden_quantity(),
+            level.order_count()
         );
     }
 }
@@ -330,7 +330,7 @@ fn spawn_maker_thread(
     handles: &mut Vec<thread::JoinHandle<()>>,
     order_book: Arc<OrderBook<OrderMetadata>>,
     counter: Arc<AtomicU64>,
-    order_id_queue: Arc<Mutex<VecDeque<OrderId>>>,
+    order_id_queue: Arc<Mutex<VecDeque<Id>>>,
     barrier: Arc<Barrier>,
     running: Arc<AtomicBool>,
 ) {
@@ -361,7 +361,7 @@ fn spawn_maker_thread(
             let quantity = 5 + (local_count % 20); // 5-24 units
 
             // Choose order type based on iteration
-            let id = OrderId::new_uuid();
+            let id = Id::new_uuid();
             let mut order_added = false;
             let metadata = OrderMetadata {
                 client_id: Uuid::new_v4(),
@@ -509,12 +509,12 @@ fn spawn_taker_thread(
             let quantity = 1 + (local_count % 10); // 1-10 units
 
             // Submit a market order
-            let id = OrderId::new_uuid();
+            let id = Id::new_uuid();
             let result = order_book.submit_market_order(id, quantity, side);
 
             // Only count successful matches
             if let Ok(match_result) = result {
-                if match_result.executed_quantity() > 0 {
+                if match_result.executed_quantity().unwrap_or(0) > 0 {
                     local_count += 1;
                 }
             }
@@ -547,7 +547,7 @@ fn spawn_canceller_thread(
     thread_id: usize,
     handles: &mut Vec<thread::JoinHandle<()>>,
     order_book: Arc<OrderBook<OrderMetadata>>,
-    order_id_queue: Arc<Mutex<VecDeque<OrderId>>>,
+    order_id_queue: Arc<Mutex<VecDeque<Id>>>,
     counter: Arc<AtomicU64>,
     barrier: Arc<Barrier>,
     running: Arc<AtomicBool>,
@@ -578,7 +578,7 @@ fn spawn_canceller_thread(
             } else {
                 // If no orders available to cancel, try a random one occasionally
                 // This simulates attempting to cancel non-existent orders
-                let id = OrderId::new_uuid();
+                let id = Id::new_uuid();
                 let _ = order_book.cancel_order(id);
             }
 

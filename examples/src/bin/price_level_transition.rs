@@ -1,7 +1,7 @@
 // examples/src/bin/price_level_transition.rs
 
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Side, TimeInForce, setup_logger};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -86,7 +86,7 @@ fn main() {
                     match local_counter % 10 {
                         0 => {
                             // Add a buy limit order
-                            let id = OrderId::from_u64(thread_id as u64 * 1000000 + local_counter);
+                            let id = Id::from_u64(thread_id as u64 * 1000000 + local_counter);
                             let level = local_counter % std::cmp::max(1, max_level as u64);
                             let price: u128 = 10000 - level as u128 * 10;
                             let _ = thread_book.add_limit_order(
@@ -100,7 +100,7 @@ fn main() {
                         }
                         1 => {
                             // Add a sell limit order
-                            let id = OrderId::from_u64(thread_id as u64 * 1000000 + local_counter);
+                            let id = Id::from_u64(thread_id as u64 * 1000000 + local_counter);
                             let level = local_counter % std::cmp::max(1, max_level as u64);
                             let price: u128 = 10100 + level as u128 * 10;
                             let _ = thread_book.add_limit_order(
@@ -114,12 +114,12 @@ fn main() {
                         }
                         2 => {
                             // Submit a small market buy order
-                            let id = OrderId::from_u64(thread_id as u64 * 1000000 + local_counter);
+                            let id = Id::from_u64(thread_id as u64 * 1000000 + local_counter);
                             let _ = thread_book.submit_market_order(id, 1, Side::Buy);
                         }
                         3 => {
                             // Submit a small market sell order
-                            let id = OrderId::from_u64(thread_id as u64 * 1000000 + local_counter);
+                            let id = Id::from_u64(thread_id as u64 * 1000000 + local_counter);
                             let _ = thread_book.submit_market_order(id, 1, Side::Sell);
                         }
                         // The rest are read operations
@@ -224,7 +224,7 @@ fn setup_orders_for_test(order_book: &OrderBook, price_levels: i32, orders_per_l
         let price: u128 = 10000 - (level as u128 * 10);
 
         for _ in 0..orders_per_level {
-            let id = OrderId::from_u64(order_id);
+            let id = Id::from_u64(order_id);
             order_id += 1;
 
             let _ = order_book.add_limit_order(id, price, 10, Side::Buy, TimeInForce::Gtc, None);
@@ -236,7 +236,7 @@ fn setup_orders_for_test(order_book: &OrderBook, price_levels: i32, orders_per_l
         let price: u128 = 10100 + (level as u128 * 10);
 
         for _ in 0..orders_per_level {
-            let id = OrderId::from_u64(order_id);
+            let id = Id::from_u64(order_id);
             order_id += 1;
 
             let _ = order_book.add_limit_order(id, price, 10, Side::Sell, TimeInForce::Gtc, None);

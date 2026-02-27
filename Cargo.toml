@@ -42,15 +42,19 @@ bitflags = { workspace = true }
 async-nats = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
+crc32fast = { workspace = true, optional = true }
+memmap2 = { workspace = true, optional = true }
 
 [features]
 default = []
 special_orders = []
 nats = ["dep:async-nats", "dep:bytes"]
 bincode = ["dep:bincode"]
+journal = ["dep:crc32fast", "dep:memmap2"]
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
+tempfile = "3"
 
 [[bench]]
 name = "benches"
@@ -74,9 +78,9 @@ members = [
 
 [workspace.dependencies]
 orderbook-rs = { path = "." }
-pricelevel = "0.6"
+pricelevel = "0.7"
 tracing = "0.1"
-uuid = { version = "1.20", features = ["v4", "v5", "serde"] }
+uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
 dashmap = "6.1"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -84,8 +88,10 @@ sha2 = "0.10"
 tokio = { version = "1.49", features = ["sync", "rt"] }
 crossbeam-skiplist = "0.1"
 crossbeam = "0.8"
-bitflags = { version = "2.10", features = ["serde"] }
+bitflags = { version = "2.11", features = ["serde"] }
 tracing-subscriber = "0.3"
 async-nats = "0.46"
 bytes = "1"
 bincode = "1"
+crc32fast = "1"
+memmap2 = "0.9"

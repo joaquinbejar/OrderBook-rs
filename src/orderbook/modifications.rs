@@ -2,7 +2,7 @@ use crate::orderbook::book::OrderBook;
 use crate::orderbook::book_change_event::PriceLevelChangedEvent;
 use crate::orderbook::error::OrderBookError;
 use crate::orderbook::trade::TradeResult;
-use pricelevel::{OrderId, OrderType, OrderUpdate, PriceLevel, Side};
+use pricelevel::{Id, OrderType, OrderUpdate, PriceLevel, Quantity, Side};
 use std::sync::Arc;
 use tracing::trace;
 
@@ -23,37 +23,41 @@ pub trait OrderQuantity<T = ()> {
 impl<T> OrderQuantity<T> for OrderType<T> {
     fn quantity(&self) -> u64 {
         match self {
-            OrderType::Standard { quantity, .. } => *quantity,
+            OrderType::Standard { quantity, .. } => quantity.as_u64(),
             OrderType::IcebergOrder {
                 visible_quantity, ..
-            } => *visible_quantity,
-            OrderType::PostOnly { quantity, .. } => *quantity,
-            OrderType::TrailingStop { quantity, .. } => *quantity,
-            OrderType::PeggedOrder { quantity, .. } => *quantity,
-            OrderType::MarketToLimit { quantity, .. } => *quantity,
+            } => visible_quantity.as_u64(),
+            OrderType::PostOnly { quantity, .. } => quantity.as_u64(),
+            OrderType::TrailingStop { quantity, .. } => quantity.as_u64(),
+            OrderType::PeggedOrder { quantity, .. } => quantity.as_u64(),
+            OrderType::MarketToLimit { quantity, .. } => quantity.as_u64(),
             OrderType::ReserveOrder {
                 visible_quantity, ..
-            } => *visible_quantity,
+            } => visible_quantity.as_u64(),
         }
     }
 
     fn total_quantity(&self) -> u64 {
         match self {
-            OrderType::Standard { quantity, .. } => *quantity,
+            OrderType::Standard { quantity, .. } => quantity.as_u64(),
             OrderType::IcebergOrder {
                 visible_quantity,
                 hidden_quantity,
                 ..
-            } => *visible_quantity + *hidden_quantity,
-            OrderType::PostOnly { quantity, .. } => *quantity,
-            OrderType::TrailingStop { quantity, .. } => *quantity,
-            OrderType::PeggedOrder { quantity, .. } => *quantity,
-            OrderType::MarketToLimit { quantity, .. } => *quantity,
+            } => visible_quantity
+                .as_u64()
+                .saturating_add(hidden_quantity.as_u64()),
+            OrderType::PostOnly { quantity, .. } => quantity.as_u64(),
+            OrderType::TrailingStop { quantity, .. } => quantity.as_u64(),
+            OrderType::PeggedOrder { quantity, .. } => quantity.as_u64(),
+            OrderType::MarketToLimit { quantity, .. } => quantity.as_u64(),
             OrderType::ReserveOrder {
                 visible_quantity,
                 hidden_quantity,
                 ..
-            } => *visible_quantity + *hidden_quantity,
+            } => visible_quantity
+                .as_u64()
+                .saturating_add(hidden_quantity.as_u64()),
         }
     }
 
@@ -63,14 +67,16 @@ impl<T> OrderQuantity<T> for OrderType<T> {
             | OrderType::PostOnly { quantity, .. }
             | OrderType::TrailingStop { quantity, .. }
             | OrderType::PeggedOrder { quantity, .. }
-            | OrderType::MarketToLimit { quantity, .. } => *quantity = new_total_quantity,
+            | OrderType::MarketToLimit { quantity, .. } => {
+                *quantity = Quantity::new(new_total_quantity)
+            }
 
             OrderType::IcebergOrder {
                 visible_quantity, ..
             } => {
                 // For iceberg orders, treat new_total_quantity as the new visible quantity
                 // This matches the expected behavior where quantity() returns visible_quantity
-                *visible_quantity = new_total_quantity;
+                *visible_quantity = Quantity::new(new_total_quantity);
                 // Hidden quantity remains unchanged
             }
             OrderType::ReserveOrder {
@@ -79,19 +85,27 @@ impl<T> OrderQuantity<T> for OrderType<T> {
                 replenish_amount,
                 ..
             } => {
-                let original_total = *visible_quantity + *hidden_quantity;
+                let original_total = visible_quantity
+                    .as_u64()
+                    .saturating_add(hidden_quantity.as_u64());
                 let amount_to_reduce = original_total.saturating_sub(new_total_quantity);
 
-                let filled_from_visible = amount_to_reduce.min(*visible_quantity);
-                *visible_quantity -= filled_from_visible;
+                let vis = visible_quantity.as_u64();
+                let filled_from_visible = amount_to_reduce.min(vis);
+                *visible_quantity = Quantity::new(vis.saturating_sub(filled_from_visible));
 
                 let remaining_to_reduce = amount_to_reduce - filled_from_visible;
-                *hidden_quantity = hidden_quantity.saturating_sub(remaining_to_reduce);
+                *hidden_quantity =
+                    Quantity::new(hidden_quantity.as_u64().saturating_sub(remaining_to_reduce));
 
-                if *visible_quantity == 0 && *hidden_quantity > 0 {
-                    let refresh = replenish_amount.unwrap_or(0).min(*hidden_quantity);
-                    *visible_quantity = refresh;
-                    *hidden_quantity -= refresh;
+                if visible_quantity.as_u64() == 0 && hidden_quantity.as_u64() > 0 {
+                    let refresh = replenish_amount
+                        .map(|q| q.as_u64())
+                        .unwrap_or(0)
+                        .min(hidden_quantity.as_u64());
+                    *visible_quantity = Quantity::new(refresh);
+                    *hidden_quantity =
+                        Quantity::new(hidden_quantity.as_u64().saturating_sub(refresh));
                 }
             }
         }
@@ -119,7 +133,7 @@ where
 
                 if let Some((old_price, _)) = location {
                     // If price doesn't change, do nothing
-                    if old_price == new_price {
+                    if old_price == new_price.as_u128() {
                         return Err(OrderBookError::InvalidOperation {
                             message: "Cannot update price to the same value".to_string(),
                         });
@@ -250,7 +264,7 @@ where
                     }
 
                     // Update the quantity using the trait method
-                    new_order.set_quantity(new_quantity);
+                    new_order.set_quantity(new_quantity.as_u64());
 
                     // Add the updated order
                     let result = self.add_order(new_order)?;
@@ -430,10 +444,7 @@ where
     }
 
     /// Cancel an order by ID
-    pub fn cancel_order(
-        &self,
-        order_id: OrderId,
-    ) -> Result<Option<Arc<OrderType<T>>>, OrderBookError> {
+    pub fn cancel_order(&self, order_id: Id) -> Result<Option<Arc<OrderType<T>>>, OrderBookError> {
         self.cache.invalidate();
         // First, we find the order's location (price and side) without locking
         let location = self.order_locations.get(&order_id).map(|val| *val);
@@ -528,10 +539,10 @@ where
         // Tick size validation: reject orders whose price is not a multiple of tick_size
         if let Some(tick) = self.tick_size
             && tick > 0
-            && !order.price().is_multiple_of(tick)
+            && !order.price().as_u128().is_multiple_of(tick)
         {
             return Err(OrderBookError::InvalidTickSize {
-                price: order.price(),
+                price: order.price().as_u128(),
                 tick_size: tick,
             });
         }
@@ -547,21 +558,21 @@ where
                     hidden_quantity,
                     ..
                 } => {
-                    if !visible_quantity.is_multiple_of(lot) {
+                    if visible_quantity.as_u64() % lot != 0 {
                         return Err(OrderBookError::InvalidLotSize {
-                            quantity: *visible_quantity,
+                            quantity: visible_quantity.as_u64(),
                             lot_size: lot,
                         });
                     }
-                    if !hidden_quantity.is_multiple_of(lot) {
+                    if hidden_quantity.as_u64() % lot != 0 {
                         return Err(OrderBookError::InvalidLotSize {
-                            quantity: *hidden_quantity,
+                            quantity: hidden_quantity.as_u64(),
                             lot_size: lot,
                         });
                     }
                 }
                 _ => {
-                    if !order.total_quantity().is_multiple_of(lot) {
+                    if order.total_quantity() % lot != 0 {
                         return Err(OrderBookError::InvalidLotSize {
                             quantity: order.total_quantity(),
                             lot_size: lot,
@@ -598,9 +609,9 @@ where
             });
         }
 
-        if order.is_post_only() && self.will_cross_market(order.price(), order.side()) {
+        if order.is_post_only() && self.will_cross_market(order.price().as_u128(), order.side()) {
             return Err(OrderBookError::PriceCrossing {
-                price: order.price(),
+                price: order.price().as_u128(),
                 side: order.side(),
                 opposite_price: if order.side() == Side::Buy {
                     self.best_ask().unwrap_or(0)
@@ -612,8 +623,11 @@ where
 
         // For FOK orders, first check if the entire quantity can be matched without altering the book.
         if order.is_fill_or_kill() {
-            let potential_match =
-                self.peek_match(order.side(), order.total_quantity(), Some(order.price()));
+            let potential_match = self.peek_match(
+                order.side(),
+                order.total_quantity(),
+                Some(order.price().as_u128()),
+            );
             if potential_match < order.total_quantity() {
                 return Err(OrderBookError::InsufficientLiquidity {
                     side: order.side(),
@@ -629,11 +643,11 @@ where
             order.id(),
             order.side(),
             order.total_quantity(), // Use total quantity for matching
-            Some(order.price()),
+            Some(order.price().as_u128()),
             order.user_id(),
         )?;
 
-        if !match_result.transactions.transactions.is_empty()
+        if !match_result.trades().as_vec().is_empty()
             && let Some(ref listener) = self.trade_listener
         {
             let trade_result = TradeResult::with_fees(
@@ -645,7 +659,7 @@ where
         }
 
         // If the order was not fully filled, add the remainder to the book
-        if match_result.remaining_quantity > 0 {
+        if match_result.remaining_quantity() > 0 {
             if order.is_immediate() {
                 // IOC/FOK orders should not have a resting part.
                 // If FOK, it should have been fully filled or cancelled before this point.
@@ -655,17 +669,17 @@ where
                     requested: order.quantity(), // Now uses the trait method
                     available: order
                         .quantity()
-                        .saturating_sub(match_result.remaining_quantity),
+                        .saturating_sub(match_result.remaining_quantity()),
                 });
             }
 
             // Update the order with the remaining quantity
             // For iceberg orders, only update if there was actual matching (remaining < total)
-            if match_result.remaining_quantity < order.total_quantity() {
-                order.set_quantity(match_result.remaining_quantity); // Now uses the trait method
+            if match_result.remaining_quantity() < order.total_quantity() {
+                order.set_quantity(match_result.remaining_quantity()); // Now uses the trait method
             }
 
-            let price = order.price();
+            let price = order.price().as_u128();
             let side = order.side();
 
             let price_levels = match side {

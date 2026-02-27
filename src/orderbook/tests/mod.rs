@@ -16,5 +16,6 @@ mod serialize_tests;
 mod snapshot;
 mod statistics_tests;
 mod stp;
+mod test_helpers;
 mod time_in_force;
 mod uuid;

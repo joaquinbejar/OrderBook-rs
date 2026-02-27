@@ -196,8 +196,8 @@
 //! - **Previous Bottleneck:** The original implementation relied on a `crossbeam::queue::SegQueue` for storing orders. While the queue itself is lock-free, operations like finding or removing a specific order required draining the entire queue into a temporary list, performing the action, and then pushing all elements back. This process was inefficient and created a major point of contention, leading to deadlocks under heavy multi-threaded load.
 //!
 //! - **New Implementation:** The `OrderQueue` was re-designed to use a combination of:
-//!   1. A `dashmap::DashMap` for storing orders, allowing for highly concurrent, O(1) average-case time complexity for insertions, lookups, and removals by `OrderId`.
-//!   2. A `crossbeam::queue::SegQueue` that now only stores `OrderId`s to maintain the crucial First-In-First-Out (FIFO) order for matching.
+//!   1. A `dashmap::DashMap` for storing orders, allowing for highly concurrent, O(1) average-case time complexity for insertions, lookups, and removals by `Id`.
+//!   2. A `crossbeam::queue::SegQueue` that now only stores `Id`s to maintain the crucial First-In-First-Out (FIFO) order for matching.
 //!
 //! This hybrid approach eliminates the previous bottleneck, allowing threads to operate on the order collection with minimal contention, which is reflected in the massive throughput increase in the hot spot tests.
 //!
@@ -239,6 +239,8 @@ mod utils;
 
 #[cfg(feature = "bincode")]
 pub use orderbook::BincodeEventSerializer;
+#[cfg(feature = "journal")]
+pub use orderbook::FileJournal;
 #[cfg(feature = "nats")]
 pub use orderbook::NatsTradePublisher;
 pub use orderbook::implied_volatility::{
@@ -248,11 +250,17 @@ pub use orderbook::implied_volatility::{
 pub use orderbook::iterators::LevelInfo;
 pub use orderbook::manager::{BookManager, BookManagerStd, BookManagerTokio};
 pub use orderbook::market_impact::{MarketImpact, OrderSimulation};
+pub use orderbook::sequencer::{
+    Journal, JournalEntry, JournalError, JournalReadIter, SequencerCommand, SequencerEvent,
+    SequencerResult,
+};
 pub use orderbook::serialization::{EventSerializer, JsonEventSerializer, SerializationError};
 pub use orderbook::snapshot::{EnrichedSnapshot, MetricFlags};
 pub use orderbook::statistics::{DepthStats, DistributionBin};
 pub use orderbook::stp::STPMode;
 pub use orderbook::trade::{TradeListener, TradeResult};
+#[cfg(feature = "nats")]
+pub use orderbook::{BookChangeBatch, BookChangeEntry, NatsBookChangePublisher};
 pub use orderbook::{FeeSchedule, MassCancelResult, OrderBook, OrderBookError, OrderBookSnapshot};
 pub use utils::current_time_millis;
 
@@ -270,7 +278,10 @@ pub type LegacyOrderBook = OrderBook<()>;
 pub type DefaultOrderBook = OrderBook<()>;
 
 // Re-export tipos de pricelevel con alias
-pub use pricelevel::{OrderId, OrderType, Side, TimeInForce};
+pub use pricelevel::{Id, OrderType, Side, TimeInForce};
+
+/// Legacy type alias for backward compatibility with code using `OrderId`.
+pub type OrderId = Id;
 
 /// Legacy type alias for `OrderType<()>` to maintain backward compatibility.
 ///

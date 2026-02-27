@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion};
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce};
+use pricelevel::{Id, Side, TimeInForce};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -58,7 +58,7 @@ fn measure_read_write_contention(
 
     // Pre-populate with orders to read against
     for i in 0..500 {
-        let id = OrderId::new_uuid();
+        let id = Id::new_uuid();
         let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
         let price = if side == Side::Buy { 990 } else { 1010 };
         order_book
@@ -98,7 +98,7 @@ fn measure_read_write_contention(
                     match op_type {
                         0 => {
                             // Add a new order
-                            let id = OrderId::new_uuid();
+                            let id = Id::new_uuid();
                             let side = if thread_id % 2 == 0 {
                                 Side::Buy
                             } else {
@@ -111,7 +111,7 @@ fn measure_read_write_contention(
                         }
                         1 => {
                             // Submit a market order
-                            let id = OrderId::new_uuid();
+                            let id = Id::new_uuid();
                             let side = if thread_id % 2 == 0 {
                                 Side::Buy
                             } else {
@@ -165,7 +165,7 @@ fn measure_hot_spot_contention(
 
     // Create "hot spot" price level at 1000
     for _i in 0..20 {
-        let id = OrderId::new_uuid();
+        let id = Id::new_uuid();
         order_book
             .add_limit_order(id, 1000, 10, Side::Sell, TimeInForce::Gtc, None)
             .unwrap();
@@ -173,7 +173,7 @@ fn measure_hot_spot_contention(
 
     // Create other price levels from 1001-1020
     for i in 1..20 {
-        let id = OrderId::new_uuid();
+        let id = Id::new_uuid();
         order_book
             .add_limit_order(id, 1000 + i, 10, Side::Sell, TimeInForce::Gtc, None)
             .unwrap();
@@ -205,7 +205,7 @@ fn measure_hot_spot_contention(
                 match op_type {
                     0 => {
                         // Add a new order at selected price
-                        let id = OrderId::new_uuid();
+                        let id = Id::new_uuid();
                         thread_order_book
                             .add_limit_order(id, price, 10, Side::Buy, TimeInForce::Gtc, None)
                             .unwrap();
@@ -216,7 +216,7 @@ fn measure_hot_spot_contention(
                     }
                     _ => {
                         // Submit a market order (will match against orders at the price)
-                        let id = OrderId::new_uuid();
+                        let id = Id::new_uuid();
                         thread_order_book.submit_market_order(id, 1, Side::Buy).ok();
                     }
                 }

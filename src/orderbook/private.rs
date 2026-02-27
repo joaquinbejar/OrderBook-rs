@@ -37,7 +37,7 @@ where
         &self,
         order: Arc<OrderType<T>>,
     ) -> Result<Arc<OrderType<T>>, OrderBookError> {
-        let (side, price, order_id) = (order.side(), order.price(), order.id());
+        let (side, price, order_id) = (order.side(), order.price().as_u128(), order.id());
 
         let book_side = match side {
             Side::Buy => &self.bids,
@@ -76,11 +76,7 @@ where
     /// Orders with `Hash32::zero()` (anonymous) are still tracked so that
     /// `cancel_all_orders` and `cancel_orders_by_side` work correctly.
     #[inline]
-    pub(super) fn track_user_order(
-        &self,
-        user_id: pricelevel::Hash32,
-        order_id: pricelevel::OrderId,
-    ) {
+    pub(super) fn track_user_order(&self, user_id: pricelevel::Hash32, order_id: pricelevel::Id) {
         self.user_orders.entry(user_id).or_default().push(order_id);
     }
 
@@ -91,7 +87,7 @@ where
     pub(super) fn untrack_user_order(
         &self,
         user_id: pricelevel::Hash32,
-        order_id: &pricelevel::OrderId,
+        order_id: &pricelevel::Id,
     ) {
         if let Some(mut entry) = self.user_orders.get_mut(&user_id) {
             entry.value_mut().retain(|id| id != order_id);
@@ -109,7 +105,7 @@ where
     /// accessible. The scan is efficient in practice because:
     /// - Each order belongs to exactly one user (early return on first match)
     /// - The number of active users is typically small
-    pub(super) fn untrack_order_by_id(&self, order_id: &pricelevel::OrderId) {
+    pub(super) fn untrack_order_by_id(&self, order_id: &pricelevel::Id) {
         let mut user_to_remove = None;
         for mut entry in self.user_orders.iter_mut() {
             let ids = entry.value_mut();
@@ -289,12 +285,12 @@ mod tests {
     use crate::OrderBookError; // Import the error type
     use crate::orderbook::book::OrderBook;
     use crate::utils::current_time_millis; // Import the time utility
-    use pricelevel::{Hash32, OrderId, OrderType, Side, TimeInForce};
+    use pricelevel::{Hash32, Id, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs};
     use std::sync::Arc;
 
     // Helper function to create a unique order ID
-    fn create_order_id() -> OrderId {
-        OrderId::new_uuid()
+    fn create_order_id() -> Id {
+        Id::new_uuid()
     }
 
     #[test]
@@ -303,11 +299,11 @@ mod tests {
         let order_id = create_order_id();
         let order = Arc::new(OrderType::Standard {
             id: order_id,
-            price: 100,
-            quantity: 10,
+            price: Price::new(100),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time_millis(),
+            timestamp: TimestampMs::new(current_time_millis()),
             time_in_force: TimeInForce::Gtc,
             extra_fields: (),
         });
@@ -321,7 +317,7 @@ mod tests {
         // Verify order in price level by checking its properties
         let price_level = order_book.bids.get(&100).unwrap();
         assert_eq!(price_level.value().order_count(), 1);
-        assert_eq!(price_level.value().total_quantity(), 10); // Check if quantity matches the added order
+        assert_eq!(price_level.value().total_quantity().unwrap_or(0), 10); // Check if quantity matches the added order
     }
 
     #[test]
@@ -341,11 +337,11 @@ mod tests {
 
         let order = OrderType::Standard {
             id: create_order_id(),
-            price: 1000,
-            quantity: 10,
+            price: Price::new(1000),
+            quantity: Quantity::new(10),
             side: Side::Buy,
             user_id: Hash32::zero(),
-            timestamp: current_time,
+            timestamp: TimestampMs::new(current_time),
             time_in_force: TimeInForce::Day,
             extra_fields: (),
         };
@@ -417,9 +413,9 @@ mod tests {
         let match_result = result.unwrap();
 
         // Check the match result
-        assert_eq!(match_result.executed_quantity(), 5);
-        assert_eq!(match_result.remaining_quantity, 5);
-        assert!(!match_result.is_complete);
+        assert_eq!(match_result.executed_quantity().unwrap(), 5);
+        assert_eq!(match_result.remaining_quantity(), 5);
+        assert!(!match_result.is_complete());
 
         // Ask side should be empty now
         assert_eq!(book.best_ask(), None);

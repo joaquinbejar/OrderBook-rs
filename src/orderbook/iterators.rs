@@ -56,7 +56,7 @@ impl<'a> Iterator for LevelsWithCumulativeDepth<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|entry| {
             let price = *entry.key();
-            let quantity = entry.value().total_quantity();
+            let quantity = entry.value().total_quantity().unwrap_or(0);
             self.cumulative_depth = self.cumulative_depth.saturating_add(quantity);
 
             LevelInfo {
@@ -115,7 +115,7 @@ impl<'a> Iterator for LevelsUntilDepth<'a> {
 
         self.iter.next().map(|entry| {
             let price = *entry.key();
-            let quantity = entry.value().total_quantity();
+            let quantity = entry.value().total_quantity().unwrap_or(0);
             self.cumulative_depth = self.cumulative_depth.saturating_add(quantity);
 
             let level_info = LevelInfo {
@@ -186,7 +186,7 @@ impl<'a> Iterator for LevelsInRange<'a> {
 
             // Check if price is within range
             if price >= self.min_price && price <= self.max_price {
-                let quantity = entry.value().total_quantity();
+                let quantity = entry.value().total_quantity().unwrap_or(0);
 
                 return Some(LevelInfo {
                     price,

@@ -1,6 +1,6 @@
 use orderbook_rs::DefaultOrderBook;
 use orderbook_rs::orderbook::{ORDERBOOK_SNAPSHOT_FORMAT_VERSION, OrderBookSnapshotPackage};
-use pricelevel::{OrderId, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Side, TimeInForce, setup_logger};
 use std::error::Error;
 use tracing::info;
 
@@ -76,7 +76,7 @@ fn add_limit_order(
     side: Side,
 ) -> Result<(), Box<dyn Error>> {
     book.add_limit_order(
-        OrderId::from_u64(id),
+        Id::from_u64(id),
         price,
         quantity,
         side,

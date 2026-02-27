@@ -1,5 +1,5 @@
 use orderbook_rs::OrderBook;
-use pricelevel::{OrderId, Side, TimeInForce};
+use pricelevel::{Id, Side, TimeInForce};
 use tracing::info;
 
 // Helper function to set up orders for read/write test
@@ -10,7 +10,7 @@ pub fn setup_orders_for_read_write_test(order_book: &OrderBook) {
     // Buy orders
     for i in 0u64..250 {
         let price: u128 = 9900 + (i as u128 % 20) * 5; // 20 price levels: 9900-9995
-        let id = OrderId::from_u64(i);
+        let id = Id::from_u64(i);
         let quantity: u64 = 10 + (i % 10);
 
         let _ = order_book.add_limit_order(id, price, quantity, Side::Buy, TimeInForce::Gtc, None);
@@ -19,7 +19,7 @@ pub fn setup_orders_for_read_write_test(order_book: &OrderBook) {
     // Sell orders
     for i in 0u64..250 {
         let price: u128 = 10000 + (i as u128 % 20) * 5; // 20 price levels: 10000-10095
-        let id = OrderId::from_u64(i + 250);
+        let id = Id::from_u64(i + 250);
         let quantity: u64 = 10 + (i % 10);
 
         let _ = order_book.add_limit_order(id, price, quantity, Side::Sell, TimeInForce::Gtc, None);
@@ -38,7 +38,7 @@ pub fn setup_orders_for_hot_spot_test(order_book: &crate::OrderBook) {
         let is_buy = i % 2 == 0;
         let side = if is_buy { Side::Buy } else { Side::Sell };
         let price: u128 = if is_buy { 9950 } else { 10050 };
-        let id = OrderId::from_u64(i as u64);
+        let id = Id::from_u64(i as u64);
 
         let _ = order_book.add_limit_order(id, price, 10, side, TimeInForce::Gtc, None);
     }
@@ -54,7 +54,7 @@ pub fn setup_orders_for_hot_spot_test(order_book: &crate::OrderBook) {
         } else {
             price_base + price_offset
         };
-        let id = OrderId::from_u64(i as u64);
+        let id = Id::from_u64(i as u64);
 
         let _ = order_book.add_limit_order(id, price, 10, side, TimeInForce::Gtc, None);
     }
@@ -94,7 +94,7 @@ pub fn setup_orders_for_price_level_test(
         let price: u128 = 10000 - (level as u128 * 10);
 
         for _ in 0..orders_per_level {
-            let id = OrderId::from_u64(order_id);
+            let id = Id::from_u64(order_id);
             order_id += 1;
 
             let _ = order_book.add_limit_order(id, price, 10, Side::Buy, TimeInForce::Gtc, None);
@@ -106,7 +106,7 @@ pub fn setup_orders_for_price_level_test(
         let price: u128 = 10100 + (level as u128 * 10);
 
         for _ in 0..orders_per_level {
-            let id = OrderId::from_u64(order_id);
+            let id = Id::from_u64(order_id);
             order_id += 1;
 
             let _ = order_book.add_limit_order(id, price, 10, Side::Sell, TimeInForce::Gtc, None);
