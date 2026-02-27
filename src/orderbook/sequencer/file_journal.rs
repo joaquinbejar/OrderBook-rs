@@ -292,8 +292,14 @@ where
         let segments = list_segments(&self.dir)?;
         let mut archived = 0usize;
 
+        // Never archive the active segment — the writer is still appending to it.
+        let active_start = self
+            .segment_start_seq
+            .lock()
+            .map_err(|_| JournalError::MutexPoisoned)?;
+
         for start_seq in segments {
-            if start_seq < before_sequence {
+            if start_seq < before_sequence && start_seq != *active_start {
                 let src = segment_path(&self.dir, start_seq);
                 let mut dst = src.clone();
                 dst.set_extension("journal.archived");
@@ -524,7 +530,12 @@ where
                     .and_then(|v| v.checked_add(entry_length));
                 let entry_end = match entry_end {
                     Some(end) if end <= data.len() => end,
-                    _ => break, // Truncated entry — stop scanning
+                    _ => {
+                        return Err(JournalError::InvalidEntryHeader {
+                            offset,
+                            message: "truncated entry (extends beyond segment data)".to_string(),
+                        });
+                    }
                 };
 
                 // Verify CRC
