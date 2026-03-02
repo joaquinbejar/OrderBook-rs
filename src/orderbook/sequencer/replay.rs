@@ -242,8 +242,8 @@ pub fn snapshots_match(actual: &OrderBookSnapshot, expected: &OrderBookSnapshot)
     // Compare bids sorted by price descending (highest bid first)
     let mut actual_bids: Vec<_> = actual.bids.iter().collect();
     let mut expected_bids: Vec<_> = expected.bids.iter().collect();
-    actual_bids.sort_by(|a, b| b.price().cmp(&a.price()));
-    expected_bids.sort_by(|a, b| b.price().cmp(&a.price()));
+    actual_bids.sort_by_key(|b| std::cmp::Reverse(b.price()));
+    expected_bids.sort_by_key(|b| std::cmp::Reverse(b.price()));
 
     if actual_bids.len() != expected_bids.len() {
         return false;
