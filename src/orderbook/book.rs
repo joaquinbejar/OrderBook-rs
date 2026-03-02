@@ -2160,12 +2160,25 @@ where
     }
 
     /// Create a checksum-protected snapshot package of the entire book.
+    ///
+    /// The returned package includes the book's configuration fields
+    /// (`fee_schedule`, `stp_mode`, `tick_size`, `lot_size`,
+    /// `min_order_size`, `max_order_size`) so that
+    /// [`restore_from_snapshot_package`](Self::restore_from_snapshot_package)
+    /// can fully reconstruct the book's state.
     pub fn create_snapshot_package(
         &self,
         depth: usize,
     ) -> Result<OrderBookSnapshotPackage, OrderBookError> {
         let snapshot = self.create_snapshot(depth);
-        OrderBookSnapshotPackage::new(snapshot)
+        let mut package = OrderBookSnapshotPackage::new(snapshot)?;
+        package.fee_schedule = self.fee_schedule;
+        package.stp_mode = self.stp_mode;
+        package.tick_size = self.tick_size;
+        package.lot_size = self.lot_size;
+        package.min_order_size = self.min_order_size;
+        package.max_order_size = self.max_order_size;
+        Ok(package)
     }
 
     /// Serialize a checksum-protected snapshot package to JSON.
@@ -2174,15 +2187,41 @@ where
     }
 
     /// Restore the book state from a checksum-validated snapshot package.
+    ///
+    /// This restores both the order data and the configuration fields
+    /// (`fee_schedule`, `stp_mode`, `tick_size`, `lot_size`,
+    /// `min_order_size`, `max_order_size`) that were captured by
+    /// [`create_snapshot_package`](Self::create_snapshot_package).
     pub fn restore_from_snapshot_package(
-        &self,
+        &mut self,
         package: OrderBookSnapshotPackage,
     ) -> Result<(), OrderBookError> {
-        self.restore_from_snapshot(package.into_snapshot()?)
+        // Extract config before consuming the package via into_snapshot().
+        let fee_schedule = package.fee_schedule;
+        let stp_mode = package.stp_mode;
+        let tick_size = package.tick_size;
+        let lot_size = package.lot_size;
+        let min_order_size = package.min_order_size;
+        let max_order_size = package.max_order_size;
+
+        self.restore_from_snapshot(package.into_snapshot()?)?;
+
+        // Apply configuration that was captured in the package.
+        self.fee_schedule = fee_schedule;
+        self.stp_mode = stp_mode;
+        self.tick_size = tick_size;
+        self.lot_size = lot_size;
+        self.min_order_size = min_order_size;
+        self.max_order_size = max_order_size;
+
+        Ok(())
     }
 
     /// Restore the book state from a JSON payload containing a checksum-protected snapshot package.
-    pub fn restore_from_snapshot_json(&self, data: &str) -> Result<(), OrderBookError> {
+    ///
+    /// This restores both order data and configuration fields.
+    /// See [`restore_from_snapshot_package`](Self::restore_from_snapshot_package).
+    pub fn restore_from_snapshot_json(&mut self, data: &str) -> Result<(), OrderBookError> {
         let package = OrderBookSnapshotPackage::from_json(data)?;
         self.restore_from_snapshot_package(package)
     }

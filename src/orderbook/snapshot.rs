@@ -7,6 +7,8 @@ use sha2::{Digest, Sha256};
 use tracing::trace;
 
 use super::error::OrderBookError;
+use super::fees::FeeSchedule;
+use super::stp::STPMode;
 
 /// A snapshot of the order book state at a specific point in time
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +141,17 @@ impl OrderBookSnapshot {
 pub const ORDERBOOK_SNAPSHOT_FORMAT_VERSION: u32 = 1;
 
 /// Wrapper that provides checksum validation for `OrderBookSnapshot` instances.
+///
+/// In addition to the snapshot payload and checksum, this package carries
+/// the order book's configuration fields (`fee_schedule`, `stp_mode`,
+/// `tick_size`, `lot_size`, `min_order_size`, `max_order_size`) so that
+/// [`OrderBook::restore_from_snapshot_package`](super::book::OrderBook::restore_from_snapshot_package)
+/// can fully reconstruct the book's state, including validation rules and
+/// fee settings.
+///
+/// All configuration fields use `#[serde(default)]` for backward
+/// compatibility — snapshots created before this version will deserialize
+/// with default values (`None` / `STPMode::None`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderBookSnapshotPackage {
     /// Version of the snapshot schema for forward compatibility.
@@ -147,6 +160,30 @@ pub struct OrderBookSnapshotPackage {
     pub snapshot: OrderBookSnapshot,
     /// Hex-encoded checksum of the serialized snapshot.
     pub checksum: String,
+
+    /// Fee schedule active at the time of the snapshot.
+    #[serde(default)]
+    pub fee_schedule: Option<FeeSchedule>,
+
+    /// Self-trade prevention mode active at the time of the snapshot.
+    #[serde(default)]
+    pub stp_mode: STPMode,
+
+    /// Tick size (minimum price increment) active at the time of the snapshot.
+    #[serde(default)]
+    pub tick_size: Option<u128>,
+
+    /// Lot size (minimum quantity increment) active at the time of the snapshot.
+    #[serde(default)]
+    pub lot_size: Option<u64>,
+
+    /// Minimum order size active at the time of the snapshot.
+    #[serde(default)]
+    pub min_order_size: Option<u64>,
+
+    /// Maximum order size active at the time of the snapshot.
+    #[serde(default)]
+    pub max_order_size: Option<u64>,
 }
 
 impl OrderBookSnapshotPackage {
@@ -160,6 +197,12 @@ impl OrderBookSnapshotPackage {
             version: ORDERBOOK_SNAPSHOT_FORMAT_VERSION,
             snapshot,
             checksum,
+            fee_schedule: None,
+            stp_mode: STPMode::None,
+            tick_size: None,
+            lot_size: None,
+            min_order_size: None,
+            max_order_size: None,
         })
     }
 
