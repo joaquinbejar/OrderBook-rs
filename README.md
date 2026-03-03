@@ -5,7 +5,7 @@
 [![Issues](https://img.shields.io/github/issues/Layer-V/orderbook.svg)](https://github.com/Layer-V/orderbook/issues)
 [![PRs](https://img.shields.io/github/issues-pr/Layer-V/orderbook.svg)](https://github.com/Layer-V/orderbook/pulls)
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/Layer-V/orderbook/ci.yml)](https://github.com/Layer-V/orderbook/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/Layer-V/orderbook/build.yml)](https://github.com/Layer-V/orderbook/actions)
 [![Coverage](https://img.shields.io/codecov/c/github/Layer-V/orderbook)](https://codecov.io/gh/Layer-V/orderbook)
 [![Dependencies](https://img.shields.io/librariesio/github/Layer-V/orderbook)](https://libraries.io/github/Layer-V/orderbook)
 [![Documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://docs.rs/orderbook-rs)
