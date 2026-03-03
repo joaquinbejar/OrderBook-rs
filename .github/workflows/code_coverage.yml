@@ -38,12 +38,13 @@ jobs:
       # GENERATE CODE COVERAGE REPORT
       # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       - name: Generate code coverage report.
-        run: cargo tarpaulin
-          --engine llvm
-          --all-features
-          --workspace
-          --timeout 180
-          --out Xml
+        run: |
+          cargo tarpaulin \
+            --engine llvm \
+            --all-features \
+            --workspace \
+            --timeout 180 \
+            --out Xml
       # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       # UPLOAD CODE COVERAGE REPORT TO CODECOV.IO
       # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
