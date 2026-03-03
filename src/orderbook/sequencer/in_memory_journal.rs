@@ -65,15 +65,19 @@ impl<T> InMemoryJournal<T> {
     }
 
     /// Returns the total number of events stored.
+    ///
+    /// Returns 0 if the lock is poisoned.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.events.read().unwrap().len()
+        self.events.read().map(|e| e.len()).unwrap_or(0)
     }
 
     /// Returns `true` if no events have been appended.
+    ///
+    /// Returns `true` if the lock is poisoned.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.events.read().unwrap().is_empty()
+        self.events.read().map(|e| e.is_empty()).unwrap_or(true)
     }
 }
 

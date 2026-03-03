@@ -18,8 +18,8 @@
 
 // Core order book types
 pub use crate::orderbook::OrderBook;
-pub use crate::orderbook::OrderBookError;
 pub use crate::orderbook::manager::{BookManager, BookManagerStd, BookManagerTokio};
+pub use crate::orderbook::{ManagerError, OrderBookError};
 
 // Iterator types
 pub use crate::orderbook::iterators::LevelInfo;

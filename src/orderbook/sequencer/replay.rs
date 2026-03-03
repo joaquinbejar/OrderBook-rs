@@ -116,13 +116,11 @@ where
         symbol: &str,
         progress: impl Fn(u64, u64),
     ) -> Result<(OrderBook<T>, u64), ReplayError> {
-        let last_seq_opt = journal.last_sequence();
+        let last_seq = match journal.last_sequence() {
+            Some(seq) => seq,
+            None => return Err(ReplayError::EmptyJournal),
+        };
 
-        if last_seq_opt.is_none() {
-            return Err(ReplayError::EmptyJournal);
-        }
-
-        let last_seq = last_seq_opt.unwrap();
         if from_sequence > last_seq {
             return Err(ReplayError::InvalidSequence {
                 from_sequence,

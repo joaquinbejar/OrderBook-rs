@@ -10,6 +10,7 @@
 //! for both standard library (`BookManagerStd`) and Tokio (`BookManagerTokio`) channels.
 
 use crate::orderbook::OrderBook;
+use crate::orderbook::error::ManagerError;
 use crate::orderbook::trade::{TradeEvent, TradeListener, TradeResult};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -74,13 +75,15 @@ where
     }
 
     /// Start the trade event processor in a separate thread.
-    pub fn start_trade_processor(&mut self) -> std::thread::JoinHandle<()> {
+    ///
+    /// Returns an error if the processor has already been started.
+    pub fn start_trade_processor(&mut self) -> Result<std::thread::JoinHandle<()>, ManagerError> {
         let receiver = self
             .trade_receiver
             .take()
-            .expect("Trade processor already started");
+            .ok_or(ManagerError::ProcessorAlreadyStarted)?;
 
-        std::thread::spawn(move || {
+        Ok(std::thread::spawn(move || {
             info!("Trade processor started");
 
             while let Ok(trade_event) = receiver.recv() {
@@ -88,7 +91,7 @@ where
             }
 
             info!("Trade processor stopped");
-        })
+        }))
     }
 
     /// Process a single trade event.
@@ -208,14 +211,15 @@ where
 
     /// Start the trade event processor as an async task.
     ///
-    /// Returns a JoinHandle for the spawned task.
-    pub fn start_trade_processor(&mut self) -> tokio::task::JoinHandle<()> {
+    /// Returns a JoinHandle for the spawned task, or an error if the
+    /// processor has already been started.
+    pub fn start_trade_processor(&mut self) -> Result<tokio::task::JoinHandle<()>, ManagerError> {
         let mut receiver = self
             .trade_receiver
             .take()
-            .expect("Trade processor already started");
+            .ok_or(ManagerError::ProcessorAlreadyStarted)?;
 
-        tokio::spawn(async move {
+        Ok(tokio::spawn(async move {
             info!("Trade processor started (Tokio)");
 
             while let Some(trade_event) = receiver.recv().await {
@@ -223,7 +227,7 @@ where
             }
 
             info!("Trade processor stopped (Tokio)");
-        })
+        }))
     }
 
     /// Process a single trade event.

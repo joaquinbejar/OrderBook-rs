@@ -343,6 +343,26 @@ impl Clone for OrderBookError {
     }
 }
 
+/// Errors that can occur in BookManager operations
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ManagerError {
+    /// Trade processor has already been started
+    ProcessorAlreadyStarted,
+}
+
+impl fmt::Display for ManagerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ManagerError::ProcessorAlreadyStarted => {
+                write!(f, "trade processor already started")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ManagerError {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

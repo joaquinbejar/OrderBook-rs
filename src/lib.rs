@@ -264,7 +264,9 @@ pub use orderbook::stp::STPMode;
 pub use orderbook::trade::{TradeListener, TradeResult};
 #[cfg(feature = "nats")]
 pub use orderbook::{BookChangeBatch, BookChangeEntry, NatsBookChangePublisher};
-pub use orderbook::{FeeSchedule, MassCancelResult, OrderBook, OrderBookError, OrderBookSnapshot};
+pub use orderbook::{
+    FeeSchedule, ManagerError, MassCancelResult, OrderBook, OrderBookError, OrderBookSnapshot,
+};
 pub use utils::current_time_millis;
 
 /// Legacy type alias for `OrderBook<()>` to maintain backward compatibility.

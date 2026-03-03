@@ -58,7 +58,7 @@ pub mod repricing;
 pub mod sequencer;
 
 pub use book::OrderBook;
-pub use error::OrderBookError;
+pub use error::{ManagerError, OrderBookError};
 pub use fees::FeeSchedule;
 pub use implied_volatility::{
     BlackScholes, IVConfig, IVError, IVParams, IVQuality, IVResult, OptionType, PriceSource,
