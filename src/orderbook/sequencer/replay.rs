@@ -218,6 +218,22 @@ where
                         source: e,
                     })?;
             }
+            SequencerCommand::CancelAll => {
+                let _ = book.cancel_all_orders();
+            }
+            SequencerCommand::CancelBySide { side } => {
+                let _ = book.cancel_orders_by_side(*side);
+            }
+            SequencerCommand::CancelByUser { user_id } => {
+                let _ = book.cancel_orders_by_user(*user_id);
+            }
+            SequencerCommand::CancelByPriceRange {
+                side,
+                min_price,
+                max_price,
+            } => {
+                let _ = book.cancel_orders_by_price_range(*side, *min_price, *max_price);
+            }
         }
 
         Ok(())
