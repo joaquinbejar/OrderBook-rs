@@ -5,7 +5,7 @@
 [![Issues](https://img.shields.io/github/issues/joaquinbejar/OrderBook-rs.svg)](https://github.com/joaquinbejar/OrderBook-rs/issues)
 [![PRs](https://img.shields.io/github/issues-pr/joaquinbejar/OrderBook-rs.svg)](https://github.com/joaquinbejar/OrderBook-rs/pulls)
 
-[![Build Status](https://img.shields.io/github/workflow/status/joaquinbejar/OrderBook-rs/CI)](https://github.com/joaquinbejar/OrderBook-rs/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/joaquinbejar/OrderBook-rs/build.yml)](https://github.com/joaquinbejar/OrderBook-rs/actions)
 [![Coverage](https://img.shields.io/codecov/c/github/joaquinbejar/OrderBook-rs)](https://codecov.io/gh/joaquinbejar/OrderBook-rs)
 [![Dependencies](https://img.shields.io/librariesio/github/joaquinbejar/OrderBook-rs)](https://libraries.io/github/joaquinbejar/OrderBook-rs)
 [![Documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://docs.rs/orderbook-rs)
@@ -354,7 +354,7 @@ maintainer:
 - **Email**: jb@taunais.com
 - **Telegram**: [@joaquin_bejar](https://t.me/joaquin_bejar)
 - **Repository**: <https://github.com/joaquinbejar/OrderBook-rs>
-- **Documentation**: <https://docs.rs/OrderBook-rs>
+- **Documentation**: <https://docs.rs/orderbook-rs>
 
 
 We appreciate your interest and look forward to your contributions!
