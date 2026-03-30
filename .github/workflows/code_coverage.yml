@@ -48,7 +48,7 @@ jobs:
             --out Xml
 
       - name: Upload coverage reports to Codecov.io
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           fail_ci_if_error: true
         env:
