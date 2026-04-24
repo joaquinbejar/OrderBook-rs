@@ -60,6 +60,7 @@ journal = ["dep:crc32fast", "dep:memmap2"]
 criterion = { version = "0.8", features = ["html_reports"] }
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "time"] }
 tempfile = "3"
+proptest = "1.7"
 
 [[bench]]
 name = "benches"
