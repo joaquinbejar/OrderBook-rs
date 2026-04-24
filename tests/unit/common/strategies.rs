@@ -66,16 +66,18 @@ fn standard_order_strategy(id_seed: u64) -> impl Strategy<Value = OrderType<()>>
         price_strategy(),
         qty_strategy(),
     )
-        .prop_map(move |(user_id, side, price, quantity)| OrderType::Standard {
-            id: Id::from_u64(id_seed),
-            price,
-            quantity,
-            side,
-            time_in_force: TimeInForce::Gtc,
-            user_id,
-            timestamp: TimestampMs::new(0),
-            extra_fields: (),
-        })
+        .prop_map(
+            move |(user_id, side, price, quantity)| OrderType::Standard {
+                id: Id::from_u64(id_seed),
+                price,
+                quantity,
+                side,
+                time_in_force: TimeInForce::Gtc,
+                user_id,
+                timestamp: TimestampMs::new(0),
+                extra_fields: (),
+            },
+        )
 }
 
 /// Only AddOrder for #51's determinism proptest. Cancels require a

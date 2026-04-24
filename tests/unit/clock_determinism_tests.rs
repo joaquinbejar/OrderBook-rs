@@ -101,12 +101,10 @@ fn replay_with_different_stub_clocks_still_snapshots_match() {
     let clock_a: Arc<dyn Clock> = Arc::new(StubClock::starting_at(1_000));
     let clock_b: Arc<dyn Clock> = Arc::new(StubClock::starting_at(9_999_999));
 
-    let (book_a, _) =
-        ReplayEngine::<()>::replay_from_with_clock(&journal, 1, "ETH-USD", clock_a)
-            .expect("replay A succeeds");
-    let (book_b, _) =
-        ReplayEngine::<()>::replay_from_with_clock(&journal, 1, "ETH-USD", clock_b)
-            .expect("replay B succeeds");
+    let (book_a, _) = ReplayEngine::<()>::replay_from_with_clock(&journal, 1, "ETH-USD", clock_a)
+        .expect("replay A succeeds");
+    let (book_b, _) = ReplayEngine::<()>::replay_from_with_clock(&journal, 1, "ETH-USD", clock_b)
+        .expect("replay B succeeds");
 
     let snap_a = book_a.create_snapshot(usize::MAX);
     let snap_b = book_b.create_snapshot(usize::MAX);

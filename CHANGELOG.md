@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-04-24
+
+### Added
+
+- **`Clock` trait** (`src/orderbook/clock.rs`) — pluggable timestamp source
+  injected at the operations edge so matching stays deterministic under
+  sequencer replay. Two implementations ship: `MonotonicClock` (production,
+  wraps `SystemTime::now`) and `StubClock` (replay / tests, monotonic
+  `AtomicU64` counter with configurable start and step). Exposed at the
+  crate root and via `prelude`.
+- **`OrderBook::with_clock(symbol, Arc<dyn Clock>)`** constructor and
+  **`OrderBook::set_clock`**, **`OrderBook::clock()`** accessors. The
+  default `OrderBook::new` keeps wrapping `MonotonicClock` internally —
+  existing callers observe no behavioural change.
+- **`OrderStateTracker::with_clock`** and
+  **`OrderStateTracker::with_capacity_and_clock`** constructors.
+- **`ReplayEngine::replay_from_with_clock`** and
+  **`ReplayEngine::replay_from_with_clock_and_progress`** — the canonical
+  entry points for byte-identical replay tests and disaster-recovery
+  pipelines that must reproduce engine timestamps deterministically.
+- Integration proptest `tests/unit/clock_determinism_tests.rs` (128 cases)
+  covering "two replays with identical `StubClock` produce matching
+  snapshots". A strictly byte-identical event-stream oracle (via
+  `EventSerializer`) is widened in issue #57.
+- New dev-dependency `proptest = "1.7"`.
+
+### Changed
+
+- **`OrderStateTracker` history unit migrated from nanoseconds to
+  milliseconds.** The tracker now stamps via the injected `Clock`, and
+  `Clock::now_millis` is the only unit the trait exposes.
+  `OrderStateTracker::get_history` and `OrderBook::get_order_history`
+  therefore return `Vec<(u64 /* ms */, OrderStatus)>` instead of
+  nanoseconds. `purge_terminal_older_than(Duration)` interprets its
+  argument in milliseconds accordingly.
+- Wall-clock reads (`SystemTime::now` / `current_time_millis`) removed
+  from `src/orderbook/operations.rs`, `private.rs`, `book.rs`, and
+  `order_state.rs` — every stamp now flows through
+  `self.clock().now_millis()`. `utils::current_time_millis` remains
+  public for non-library callers and is unchanged.
+
+### Notes
+
+- Non-breaking public API surface. `cargo-semver-checks` should classify
+  this release as a minor bump; the version jump to `0.7.0` is a
+  deliberate marker that the `Clock` extensibility surface is now public.
+- Replay determinism: `ReplayEngine::replay_from` continues to behave as
+  before (production stamping via `MonotonicClock`). Byte-identical
+  replay requires the new `replay_from_with_clock` entry point with a
+  caller-supplied `Arc<StubClock>` and a fixed start value.
+
 ## [0.6.2] — 2026-04-20
 
 ### Changed
