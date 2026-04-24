@@ -298,6 +298,7 @@ pub use orderbook::stp::STPMode;
 pub use orderbook::trade::{TradeListener, TradeResult};
 #[cfg(feature = "nats")]
 pub use orderbook::{BookChangeBatch, BookChangeEntry, NatsBookChangePublisher};
+pub use orderbook::clock::{Clock, MonotonicClock, StubClock};
 pub use orderbook::{
     FeeSchedule, ManagerError, MassCancelResult, OrderBook, OrderBookError, OrderBookSnapshot,
 };

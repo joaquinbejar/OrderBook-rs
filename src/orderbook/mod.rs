@@ -1,6 +1,8 @@
 //! OrderBook implementation for managing multiple price levels and order matching.
 
 pub mod book;
+/// Pluggable timestamp source for the matching core.
+pub mod clock;
 pub mod error;
 /// Implied volatility calculation from order book prices.
 pub mod implied_volatility;
@@ -58,6 +60,7 @@ pub mod repricing;
 pub mod sequencer;
 
 pub use book::OrderBook;
+pub use clock::{Clock, MonotonicClock, StubClock};
 pub use error::{ManagerError, OrderBookError};
 pub use fees::FeeSchedule;
 pub use implied_volatility::{
