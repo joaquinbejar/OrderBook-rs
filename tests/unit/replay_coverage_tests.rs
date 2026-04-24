@@ -169,8 +169,9 @@ fn replay_skips_rejected_events() {
     let result = ReplayEngine::<()>::replay_from(&journal, 0, "TEST");
     assert!(result.is_ok());
     let (book, last_seq) = result.unwrap();
-    assert_eq!(last_seq, 1);
-    // The add should be applied, the rejected event should be skipped
+    // The add at seq 0 is applied, the rejected event at seq 1 is skipped
+    // and therefore does not advance `last_applied_seq`.
+    assert_eq!(last_seq, 0);
     let snap = book.create_snapshot(usize::MAX);
     assert_eq!(snap.bids.len(), 1);
 }

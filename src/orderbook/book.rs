@@ -726,7 +726,9 @@ where
     /// Returns the full transition history for an order.
     ///
     /// Each entry is a `(timestamp_ms, OrderStatus)` pair in chronological
-    /// order. Timestamps come from the clock installed on this book.
+    /// order. Timestamps come from the configured order state tracker's
+    /// clock. For deterministic replay and consistent timestamps, configure
+    /// the tracker with the same clock as this book.
     /// Returns `None` if no tracker is configured or the order ID was
     /// never submitted.
     #[must_use]

@@ -87,11 +87,13 @@ impl StubClock {
     /// Create a new stub clock starting at `start` with a custom step.
     ///
     /// Each call to [`Clock::now_millis`] advances the counter by `step`.
+    /// A `step` of `0` is silently clamped to `1` so the clock stays
+    /// strictly monotonic — the trait contract every caller relies on.
     #[must_use]
     pub fn with_step(start: u64, step: u64) -> Self {
         Self {
             counter: AtomicU64::new(start),
-            step,
+            step: step.max(1),
         }
     }
 
@@ -205,5 +207,15 @@ mod tests {
             .expect("overflow");
         let observed_max = all.iter().copied().max().expect("non-empty");
         assert_eq!(observed_max, expected_max);
+    }
+
+    #[test]
+    fn test_stub_clock_with_step_zero_clamps_to_one() {
+        // `step = 0` would break the trait's monotonicity contract; the
+        // constructor clamps to 1 so every call still advances.
+        let clock = StubClock::with_step(10, 0);
+        assert_eq!(clock.now_millis().as_u64(), 10);
+        assert_eq!(clock.now_millis().as_u64(), 11);
+        assert_eq!(clock.now_millis().as_u64(), 12);
     }
 }

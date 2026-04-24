@@ -1,9 +1,11 @@
 //! Integration tests for the deterministic-replay contract: with a stable
-//! injected [`Clock`], replaying the same journal produces byte-identical
-//! book state across independent runs.
+//! injected [`Clock`], replaying the same journal produces structurally
+//! identical snapshots across independent runs.
 //!
 //! These tests exercise [`ReplayEngine::replay_from_with_clock`], the
 //! clock-aware replay entry point added alongside the [`Clock`] trait.
+//! A strictly byte-identical event-stream oracle (via `EventSerializer`)
+//! is widened in issue #57.
 
 use super::common::strategies::event_stream;
 

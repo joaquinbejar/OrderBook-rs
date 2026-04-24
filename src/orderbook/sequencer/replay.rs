@@ -253,11 +253,20 @@ where
                 });
             }
 
+            // Advance `expected_seq` before applying so gap detection stays
+            // correct even if the event is a rejected no-op. `last_applied_seq`,
+            // `count`, and `progress` track only events that actually mutate
+            // the book — consistent with the "events applied" / "last applied
+            // sequence" contract on the public entry points.
+            let applied = !matches!(event.result, SequencerResult::Rejected { .. });
             Self::apply_event(book, event)?;
-            last_applied_seq = event.sequence_num;
-            count = count.saturating_add(1);
             expected_seq = expected_seq.saturating_add(1);
-            progress(count, last_applied_seq);
+
+            if applied {
+                last_applied_seq = event.sequence_num;
+                count = count.saturating_add(1);
+                progress(count, last_applied_seq);
+            }
         }
 
         Ok(last_applied_seq)
