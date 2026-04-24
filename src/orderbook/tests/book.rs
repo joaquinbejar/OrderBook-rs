@@ -1095,10 +1095,7 @@ mod test_book_specific {
         // stub clock (1000), not a wall-clock millisecond.
         let fetched = book.get_order(id);
         assert!(fetched.is_some(), "order not found in book");
-        let stamped = fetched
-            .as_ref()
-            .map(|o| o.timestamp())
-            .unwrap_or_default();
+        let stamped = fetched.as_ref().map(|o| o.timestamp()).unwrap_or_default();
         assert_eq!(
             stamped, 1000,
             "order timestamp should come from the injected stub clock"

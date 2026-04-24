@@ -277,6 +277,7 @@ pub use orderbook::BincodeEventSerializer;
 pub use orderbook::FileJournal;
 #[cfg(feature = "nats")]
 pub use orderbook::NatsTradePublisher;
+pub use orderbook::clock::{Clock, MonotonicClock, StubClock};
 pub use orderbook::implied_volatility::{
     BlackScholes, IVConfig, IVError, IVParams, IVQuality, IVResult, OptionType, PriceSource,
     SolverConfig,
@@ -298,7 +299,6 @@ pub use orderbook::stp::STPMode;
 pub use orderbook::trade::{TradeListener, TradeResult};
 #[cfg(feature = "nats")]
 pub use orderbook::{BookChangeBatch, BookChangeEntry, NatsBookChangePublisher};
-pub use orderbook::clock::{Clock, MonotonicClock, StubClock};
 pub use orderbook::{
     FeeSchedule, ManagerError, MassCancelResult, OrderBook, OrderBookError, OrderBookSnapshot,
 };

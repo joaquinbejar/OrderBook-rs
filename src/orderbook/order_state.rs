@@ -456,8 +456,8 @@ impl OrderStateTracker {
     /// The number of entries purged.
     pub fn purge_terminal_older_than(&self, older_than: Duration) -> usize {
         let now_ms = self.clock.now_millis().as_u64();
-        let cutoff = now_ms
-            .saturating_sub(u64::try_from(older_than.as_millis()).unwrap_or(u64::MAX));
+        let cutoff =
+            now_ms.saturating_sub(u64::try_from(older_than.as_millis()).unwrap_or(u64::MAX));
 
         let mut purged = 0usize;
         // Collect IDs to remove (avoid holding DashMap iterators during mutation)
