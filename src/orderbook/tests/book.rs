@@ -1075,4 +1075,70 @@ mod test_book_specific {
             _ => panic!("Expected InsufficientLiquidity error"),
         }
     }
+
+    // ───────────────────────────── Clock injection ─────────────────────────────
+
+    #[test]
+    fn test_with_clock_stamps_orders_via_injected_clock() {
+        use crate::orderbook::clock::{Clock, StubClock};
+        use std::sync::Arc;
+
+        // Start the stub at 1000 ms, step of 1; each `now_millis` advances it.
+        let clock: Arc<dyn Clock> = Arc::new(StubClock::starting_at(1000));
+        let book: OrderBook<()> = OrderBook::with_clock("CLOCKED", Arc::clone(&clock));
+
+        let id = create_order_id();
+        let result = book.add_limit_order(id, 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        assert!(result.is_ok(), "add_limit_order failed: {:?}", result.err());
+
+        // The order should have been stamped with the first tick from the
+        // stub clock (1000), not a wall-clock millisecond.
+        let fetched = book.get_order(id);
+        assert!(fetched.is_some(), "order not found in book");
+        let stamped = fetched
+            .as_ref()
+            .map(|o| o.timestamp())
+            .unwrap_or_default();
+        assert_eq!(
+            stamped, 1000,
+            "order timestamp should come from the injected stub clock"
+        );
+    }
+
+    #[test]
+    fn test_set_clock_replaces_source() {
+        use crate::orderbook::clock::{Clock, StubClock};
+        use std::sync::Arc;
+
+        let clock_a: Arc<dyn Clock> = Arc::new(StubClock::starting_at(500));
+        let mut book: OrderBook<()> = OrderBook::with_clock("CLOCKED", Arc::clone(&clock_a));
+
+        // First order stamped by clock A (500).
+        let id_a = create_order_id();
+        let result_a = book.add_limit_order(id_a, 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        assert!(result_a.is_ok());
+        let ts_a = book
+            .get_order(id_a)
+            .as_ref()
+            .map(|o| o.timestamp())
+            .unwrap_or_default();
+        assert_eq!(ts_a, 500);
+
+        // Replace the clock mid-flight; the next order should use clock B.
+        let clock_b: Arc<dyn Clock> = Arc::new(StubClock::starting_at(9_000));
+        book.set_clock(Arc::clone(&clock_b));
+
+        let id_b = create_order_id();
+        let result_b = book.add_limit_order(id_b, 200, 5, Side::Sell, TimeInForce::Gtc, None);
+        assert!(result_b.is_ok());
+        let ts_b = book
+            .get_order(id_b)
+            .as_ref()
+            .map(|o| o.timestamp())
+            .unwrap_or_default();
+        assert_eq!(
+            ts_b, 9_000,
+            "order submitted after set_clock must use the new clock source"
+        );
+    }
 }

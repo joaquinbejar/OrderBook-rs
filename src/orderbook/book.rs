@@ -1,6 +1,7 @@
 //! Core OrderBook implementation for managing price levels and orders
 
 use super::cache::PriceLevelCache;
+use super::clock::{Clock, MonotonicClock};
 use super::error::OrderBookError;
 use super::fees::FeeSchedule;
 use super::iterators::{LevelInfo, LevelsInRange, LevelsUntilDepth, LevelsWithCumulativeDepth};
@@ -12,7 +13,6 @@ use crate::orderbook::book_change_event::PriceLevelChangedListener;
 use crate::orderbook::repricing::SpecialOrderTracker;
 use crate::orderbook::stp::STPMode;
 use crate::orderbook::trade::{TradeListener, TradeResult};
-use crate::utils::current_time_millis;
 use crossbeam::atomic::AtomicCell;
 use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
@@ -123,6 +123,14 @@ pub struct OrderBook<T = ()> {
     /// When `Some`, every order transition (Open, PartiallyFilled, Filled,
     /// Cancelled, Rejected) is recorded. When `None`, zero overhead.
     pub(super) order_state_tracker: Option<super::order_state::OrderStateTracker>,
+
+    /// Pluggable source of millisecond timestamps stamped on inbound
+    /// orders, snapshots, and lifecycle transitions. Defaults to
+    /// [`MonotonicClock`] (wall-clock); tests and sequencer replay can
+    /// inject a [`super::clock::StubClock`] for byte-identical
+    /// reproducibility. Not serialized — reconstructed on the restoring
+    /// side like [`trade_listener`](Self::trade_listener).
+    pub(super) clock: Arc<dyn Clock>,
 }
 
 impl<T> Serialize for OrderBook<T>
@@ -353,8 +361,22 @@ where
             },
         }
     }
-    /// Create a new order book for the given symbol
+    /// Create a new order book for the given symbol.
+    ///
+    /// The book is installed with a [`MonotonicClock`] (wall-clock
+    /// milliseconds). Use [`Self::with_clock`] to inject a custom
+    /// [`Clock`] implementation.
     pub fn new(symbol: &str) -> Self {
+        Self::with_clock(symbol, Arc::new(MonotonicClock) as Arc<dyn Clock>)
+    }
+
+    /// Create a new order book for the given symbol with a
+    /// caller-provided [`Clock`] implementation.
+    ///
+    /// Use this when byte-identical timestamp behaviour is required, e.g.
+    /// for sequencer replay or deterministic tests — pass in a
+    /// [`super::clock::StubClock`].
+    pub fn with_clock(symbol: &str, clock: Arc<dyn Clock>) -> Self {
         // Create a unique namespace for this order book's transaction IDs
         let namespace = Uuid::new_v4();
 
@@ -383,7 +405,24 @@ where
             stp_mode: STPMode::None,
             fee_schedule: None,
             order_state_tracker: None,
+            clock,
         }
+    }
+
+    /// Replace the clock used by this book.
+    ///
+    /// This takes `&mut self` and is intended for cold configuration
+    /// paths — the production pattern is to set the clock once at
+    /// construction via [`Self::with_clock`].
+    pub fn set_clock(&mut self, clock: Arc<dyn Clock>) {
+        self.clock = clock;
+    }
+
+    /// Access the currently-installed clock.
+    #[inline]
+    #[must_use]
+    pub fn clock(&self) -> &Arc<dyn Clock> {
+        &self.clock
     }
 
     /// Create a new order book for the given symbol with tick size validation.
@@ -451,6 +490,7 @@ where
             stp_mode: STPMode::None,
             fee_schedule: None,
             order_state_tracker: None,
+            clock: Arc::new(MonotonicClock) as Arc<dyn Clock>,
         }
     }
 
@@ -495,6 +535,7 @@ where
             stp_mode: STPMode::None,
             fee_schedule: None,
             order_state_tracker: None,
+            clock: Arc::new(MonotonicClock) as Arc<dyn Clock>,
         }
     }
 
@@ -684,9 +725,10 @@ where
 
     /// Returns the full transition history for an order.
     ///
-    /// Each entry is a `(timestamp_ns, OrderStatus)` pair in chronological
-    /// order. Returns `None` if no tracker is configured or the order ID
-    /// was never submitted.
+    /// Each entry is a `(timestamp_ms, OrderStatus)` pair in chronological
+    /// order. Timestamps come from the clock installed on this book.
+    /// Returns `None` if no tracker is configured or the order ID was
+    /// never submitted.
     #[must_use]
     pub fn get_order_history(
         &self,
@@ -2234,7 +2276,7 @@ where
 
         OrderBookSnapshot {
             symbol: self.symbol.clone(),
-            timestamp: current_time_millis(),
+            timestamp: self.clock().now_millis().as_u64(),
             bids: bid_levels,
             asks: ask_levels,
         }
@@ -2481,7 +2523,7 @@ where
         // Create enriched snapshot with pre-calculated metrics
         EnrichedSnapshot::with_metrics(
             self.symbol.clone(),
-            current_time_millis(),
+            self.clock().now_millis().as_u64(),
             bid_levels,
             ask_levels,
             depth, // Use depth for VWAP calculation

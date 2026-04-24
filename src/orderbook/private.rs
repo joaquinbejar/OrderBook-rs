@@ -1,5 +1,5 @@
 use crate::orderbook::book_change_event::PriceLevelChangedEvent;
-use crate::{OrderBook, OrderBookError, current_time_millis};
+use crate::{OrderBook, OrderBookError};
 use pricelevel::{OrderType, PriceLevel, Side};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -11,7 +11,7 @@ where
     /// Check if an order has expired
     pub fn has_expired(&self, order: &OrderType<T>) -> bool {
         let time_in_force = order.time_in_force();
-        let current_time = current_time_millis();
+        let current_time = self.clock().now_millis().as_u64();
 
         // Only check market close timestamp if we have one set
         let market_close = if self.has_market_close.load(Ordering::Relaxed) {

@@ -4,19 +4,13 @@
 mod tests {
     use crate::OrderBook;
     use crate::orderbook::repricing::RepricingOperations;
+    use crate::utils::current_time_millis;
     use pricelevel::{
         Hash32, Id, OrderType, PegReferenceType, Price, Quantity, Side, TimeInForce, TimestampMs,
     };
 
     fn create_order_id() -> Id {
         Id::new_uuid()
-    }
-
-    fn current_time_millis() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
     }
 
     #[test]
