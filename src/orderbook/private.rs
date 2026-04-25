@@ -138,6 +138,27 @@ where
         }
     }
 
+    /// Record an `OrderStatus::Rejected` transition for a failed risk
+    /// admission, mapping the typed [`OrderBookError`] to its closed
+    /// [`super::reject_reason::RejectReason`] code.
+    ///
+    /// Used by new-flow entry points where the risk gate (`Risk*`
+    /// variants) returned `Err` before the order could enter the book —
+    /// emitting `Rejected` here keeps the lifecycle accurate (the
+    /// `Rejected` semantic is "rejected during validation, never
+    /// entered"). No-op when no tracker is configured.
+    #[inline]
+    pub(super) fn reject_with_risk(&self, order_id: pricelevel::Id, err: &OrderBookError) {
+        if self.order_state_tracker.is_some() {
+            self.track_state(
+                order_id,
+                super::order_state::OrderStatus::Rejected {
+                    reason: super::reject_reason::RejectReason::from(err),
+                },
+            );
+        }
+    }
+
     /// Convert `OrderType<T>` to OrderType<()> for compatibility with current PriceLevel API
     pub fn convert_to_unit_type(&self, order: &OrderType<T>) -> OrderType<()> {
         match order {

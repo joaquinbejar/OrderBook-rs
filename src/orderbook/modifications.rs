@@ -595,11 +595,17 @@ where
         // Pre-trade risk gate: per-account open-orders / notional /
         // price band. No-op when no `RiskConfig` is installed.
         // Documented order: kill_switch → risk → STP → fees → match.
-        self.check_risk_limit_admission(
+        // On the cold reject path, record an `OrderStatus::Rejected`
+        // transition with the closed `RejectReason` taxonomy before
+        // propagating the typed error.
+        if let Err(err) = self.check_risk_limit_admission(
             order.user_id(),
             order.price().as_u128(),
             order.total_quantity(),
-        )?;
+        ) {
+            self.reject_with_risk(order.id(), &err);
+            return Err(err);
+        }
         self.cache.invalidate();
 
         trace!(

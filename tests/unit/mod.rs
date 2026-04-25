@@ -17,6 +17,7 @@ mod operations_coverage_tests;
 mod operations_coverage_tests_extended;
 mod order_state_tests;
 mod private_coverage_tests;
+mod reject_reason_tests;
 mod replay_coverage_tests;
 mod risk_layer_tests;
 mod sequencer_types_tests;
