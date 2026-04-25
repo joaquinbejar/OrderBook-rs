@@ -1341,4 +1341,38 @@ mod test_book_specific {
             "engine_seq must be strictly monotonic across all outbound streams: {observed:?}"
         );
     }
+
+    #[test]
+    fn test_kill_switch_starts_disengaged() {
+        let book = OrderBook::<()>::new("TEST");
+        assert!(!book.is_kill_switch_engaged());
+    }
+
+    #[test]
+    fn test_engage_release_round_trip() {
+        let book = OrderBook::<()>::new("TEST");
+        book.engage_kill_switch();
+        assert!(book.is_kill_switch_engaged());
+        book.release_kill_switch();
+        assert!(!book.is_kill_switch_engaged());
+    }
+
+    #[test]
+    fn test_engage_is_idempotent() {
+        let book = OrderBook::<()>::new("TEST");
+        book.engage_kill_switch();
+        book.engage_kill_switch();
+        book.engage_kill_switch();
+        assert!(book.is_kill_switch_engaged());
+    }
+
+    #[test]
+    fn test_release_is_idempotent() {
+        let book = OrderBook::<()>::new("TEST");
+        book.engage_kill_switch();
+        book.release_kill_switch();
+        book.release_kill_switch();
+        book.release_kill_switch();
+        assert!(!book.is_kill_switch_engaged());
+    }
 }

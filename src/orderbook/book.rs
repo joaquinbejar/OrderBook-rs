@@ -84,6 +84,15 @@ pub struct OrderBook<T = ()> {
     /// into a fresh book yields fresh seqs, not the originals.
     pub(super) engine_seq: AtomicU64,
 
+    /// Operational kill switch. When `true`, every public `submit_*`,
+    /// `add_order`, and non-cancel `update_order` call short-circuits with
+    /// [`OrderBookError::KillSwitchActive`] before any matching, fee, STP,
+    /// or allocation work happens. Cancel and mass-cancel paths are
+    /// explicitly **not** gated so operators can drain the resting book.
+    /// Persisted across snapshot/restore via
+    /// [`OrderBookSnapshotPackage::kill_switch_engaged`](super::snapshot::OrderBookSnapshotPackage::kill_switch_engaged).
+    pub(super) kill_switch: AtomicBool,
+
     /// The last price at which a trade occurred
     pub(super) last_trade_price: AtomicCell<u128>,
 
@@ -407,6 +416,7 @@ where
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
             engine_seq: AtomicU64::new(0),
+            kill_switch: AtomicBool::new(false),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -468,6 +478,63 @@ where
         self.engine_seq.load(Ordering::Acquire)
     }
 
+    /// Engage the kill switch. While engaged, every public `submit_*`,
+    /// `add_order`, and non-cancel `update_order` call returns
+    /// [`OrderBookError::KillSwitchActive`] before any matching, fee,
+    /// or STP work happens. Cancel and mass-cancel paths are
+    /// explicitly **not** gated so operators can drain the resting book.
+    ///
+    /// The flag persists across snapshot/restore. Idempotent — calling
+    /// while already engaged is a no-op.
+    ///
+    /// Note: the low-level [`Self::match_market_order`] /
+    /// [`Self::match_limit_order`] entry points are not gated.
+    /// Production flow goes through the `submit_*` / `add_order` /
+    /// `update_order` public surface.
+    pub fn engage_kill_switch(&self) {
+        self.kill_switch.store(true, Ordering::Relaxed);
+    }
+
+    /// Release the kill switch and resume accepting new flow.
+    /// Idempotent.
+    pub fn release_kill_switch(&self) {
+        self.kill_switch.store(false, Ordering::Relaxed);
+    }
+
+    /// Current state of the kill switch.
+    #[inline]
+    #[must_use]
+    pub fn is_kill_switch_engaged(&self) -> bool {
+        self.kill_switch.load(Ordering::Relaxed)
+    }
+
+    /// Reject the current operation if the kill switch is engaged,
+    /// recording an `OrderStatus::Rejected` transition for `order_id`
+    /// when an order state tracker is configured.
+    ///
+    /// Returns `Err(OrderBookError::KillSwitchActive)` when engaged so
+    /// callers can early-return before any matching, fee, or STP work.
+    /// Allocation-free on the happy path (no tracker write, no error
+    /// construction); on the cold rejection path the tracker reason
+    /// string is constructed via `to_string`.
+    #[inline]
+    #[allow(dead_code)]
+    pub(super) fn check_kill_switch_or_reject(
+        &self,
+        order_id: Id,
+    ) -> Result<(), OrderBookError> {
+        if self.is_kill_switch_engaged() {
+            self.track_state(
+                order_id,
+                super::order_state::OrderStatus::Rejected {
+                    reason: "kill switch active".to_string(),
+                },
+            );
+            return Err(OrderBookError::KillSwitchActive);
+        }
+        Ok(())
+    }
+
     /// Create a new order book for the given symbol with tick size validation.
     ///
     /// Orders added to this book must have prices that are exact multiples
@@ -517,6 +584,7 @@ where
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
             engine_seq: AtomicU64::new(0),
+            kill_switch: AtomicBool::new(false),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -563,6 +631,7 @@ where
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
             engine_seq: AtomicU64::new(0),
+            kill_switch: AtomicBool::new(false),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
