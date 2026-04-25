@@ -19,6 +19,8 @@ mod order_state_tests;
 mod private_coverage_tests;
 mod reject_reason_tests;
 mod replay_coverage_tests;
+#[cfg(feature = "journal")]
+mod replay_determinism;
 mod risk_layer_tests;
 mod sequencer_types_tests;
 mod snapshot_restore_tests;
