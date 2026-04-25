@@ -379,6 +379,7 @@ pub use orderbook::market_impact::{MarketImpact, OrderSimulation};
 pub use orderbook::order_state::{
     CancelReason, OrderStateListener, OrderStateTracker, OrderStatus,
 };
+pub use orderbook::reject_reason::RejectReason;
 pub use orderbook::risk::{ReferencePriceSource, RiskConfig, RiskState};
 pub use orderbook::sequencer::{
     InMemoryJournal, Journal, JournalEntry, JournalError, JournalReadIter, ReplayEngine,
