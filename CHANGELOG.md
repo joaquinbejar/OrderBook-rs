@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > below group changes by feature; everything ships in the same
 > 0.7.0 publish.
 
+### Added — feature-gated allocation counter (#58)
+
+- **New feature `alloc-counters`** (default off). Exposes
+  `CountingAllocator<Inner: GlobalAlloc>` and `AllocSnapshot` at the
+  crate root, layering four `AtomicU64` counters (`allocs`,
+  `deallocs`, `bytes_allocated`, `bytes_deallocated`) on top of any
+  inner allocator. Bench / test binaries opt in by installing the
+  wrapper as `#[global_allocator]`.
+- **Bench `alloc_count`** at `benches/order_book/alloc_count.rs`
+  (also feature-gated) runs the mixed 70 / 20 / 10 workload, prints
+  `allocs_per_op` + `bytes_alloc/op` to stdout, and writes a small
+  markdown summary to `target/alloc-counters/<scenario>.md`.
+- **Integration test `alloc_budget_tests`** at
+  `tests/unit/alloc_budget_tests.rs` runs 10 000 mixed ops and
+  asserts `allocs/op < 10` — conservative ceiling tuned to catch
+  order-of-magnitude regressions in CI, not to certify zero.
+- **`BENCH.md`** gains an "Allocation profile" section with the
+  workflow + a reference number from a single M4 Max run.
+- **`mod utils` made `pub mod utils`** so the new types are
+  reachable via `orderbook_rs::utils::CountingAllocator` as well as
+  the crate-root re-export. Existing `pub use utils::current_time_millis`
+  unchanged.
+
+### Notes — alloc counter
+
+- The library `rlib` does **not** install a `#[global_allocator]` —
+  consumers pick their own (`jemalloc`, `mimalloc`, system, …). The
+  wrapper exists to give bench / test binaries a measurement hook
+  without forcing a global choice on the library.
+- `counting_allocator.rs` carries a documented
+  `#[allow(unsafe_code)]` exception to the crate's
+  `#![deny(unsafe_code)]` policy because Rust's `GlobalAlloc` trait
+  requires `unsafe impl`. The exception is gated on the feature flag
+  and confined to the wrapper module; every `unsafe` block
+  delegates immediately to the inner allocator.
+
 ### Added — HDR-histogram tail-latency bench suite (#56)
 
 - **Six new bench binaries** under `benches/order_book/*_hdr.rs` that

@@ -8,6 +8,51 @@ that Criterion does well. The HDR benches are the source of truth for
 the **tail** numbers (`p50` / `p99` / `p99.9` / `p99.99`) that tier-one
 electronic exchanges quote in SLOs.
 
+## Allocation profile (feature `alloc-counters`)
+
+Under the `alloc-counters` feature the crate exposes a
+`CountingAllocator<Inner: GlobalAlloc>` wrapper that tracks
+`allocs` / `deallocs` / `bytes_allocated` / `bytes_deallocated` as
+`AtomicU64` counters. Bench / test binaries opt in via:
+
+```rust
+use orderbook_rs::CountingAllocator;
+use std::alloc::System;
+
+#[global_allocator]
+static A: CountingAllocator<System> = CountingAllocator::new(System);
+```
+
+`benches/order_book/alloc_count.rs` runs the same mixed 70 / 20 / 10
+workload as `mixed_70_20_10_hdr` but reports `allocs_per_op` and
+`bytes_alloc/op` over the measurement window (200 000 warmup +
+1 000 000 measured). A reference run on the same M4 Max host:
+
+| counter        | value         |
+|----------------|---------------|
+| allocs         | 17 757 222    |
+| deallocs       | 17 690 635    |
+| bytes_alloc    | 4 926 064 834 |
+| bytes_dealloc  | 4 897 062 482 |
+| **allocs/op**  | **17.76**     |
+| bytes_alloc/op | 4 926         |
+
+This is the headline number for "what does the matching engine cost
+in alloc pressure on a realistic workload" — useful as a regression
+signal much more than as an absolute target. The integration test
+`tests/unit/alloc_budget_tests.rs` runs a smaller 10 000-op slice and
+asserts `allocs/op < 10` to catch order-of-magnitude regressions in
+CI.
+
+Run yourself:
+
+```bash
+cargo bench --features alloc-counters --bench alloc_count
+cargo test  --features alloc-counters alloc_budget
+```
+
+Per-run summaries land in `target/alloc-counters/<scenario>.md`.
+
 ## How to run
 
 ```bash

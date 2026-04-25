@@ -48,6 +48,22 @@ This order book engine is built with the following design principles:
 
 ### What's New in Version 0.7.0
 
+#### v0.7.0 — Feature-gated allocation counter
+
+- **New feature `alloc-counters`** (default off). Exposes
+  [`CountingAllocator`] and [`AllocSnapshot`] at the crate root.
+  Wraps any inner [`GlobalAlloc`](std::alloc::GlobalAlloc) and
+  tracks four `AtomicU64` counters: `allocs`, `deallocs`,
+  `bytes_allocated`, `bytes_deallocated`.
+- Bench / test binaries opt in via
+  `#[global_allocator] static A: CountingAllocator<System> = ...`.
+  The library `rlib` does **not** install a global allocator.
+- **`bench_count`** bench + **`alloc_budget_tests`** integration
+  test run the mixed 70/20/10 workload; the bench reports
+  `allocs_per_op`, the test asserts a conservative ceiling for
+  regression detection.
+- **`BENCH.md`** gains an "Allocation profile" section.
+
 #### v0.7.0 — HDR-histogram tail-latency bench suite
 
 - **Six new `*_hdr` bench binaries** under
