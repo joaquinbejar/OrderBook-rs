@@ -202,3 +202,10 @@ workflow: workflow-build workflow-lint workflow-test workflow-coverage
 .PHONY: tree
 tree:
 	tree -I 'target|.idea|.run|.DS_Store|Cargo.lock|*.md|*.toml|*.zip|*.html|*.xml|*.json|*.txt|*.sh|*.yml|*.yaml|*.gitignore|*.gitattributes|*.gitmodules|*.git|*.gitkeep|*.gitlab-ci.yml' -a -L 3
+
+# Build every example binary with all feature flags and run each in
+# turn, recording per-example pass / fail / timeout. JSON results land
+# at smoke-results.json; per-example logs at /tmp/orderbook-smoke-*.log.
+.PHONY: smoke-test
+smoke-test:
+	./scripts/smoke-test.sh

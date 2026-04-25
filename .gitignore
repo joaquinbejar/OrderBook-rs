@@ -39,3 +39,4 @@ tmp_reply.json
 .internalDoc/
 /.windsurfrules
 .full_engine_diff.patch
+smoke-results.json
