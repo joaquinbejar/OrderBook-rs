@@ -37,7 +37,7 @@
 //! ### v0.7.0 — Feature-gated allocation counter
 //!
 //! - **New feature `alloc-counters`** (default off). Exposes
-//!   [`CountingAllocator`] and [`AllocSnapshot`] at the crate root.
+//!   \[`CountingAllocator`\] and \[`AllocSnapshot`\] at the crate root.
 //!   Wraps any inner [`GlobalAlloc`](std::alloc::GlobalAlloc) and
 //!   tracks four `AtomicU64` counters: `allocs`, `deallocs`,
 //!   `bytes_allocated`, `bytes_deallocated`.

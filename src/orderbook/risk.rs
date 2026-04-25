@@ -426,7 +426,7 @@ impl RiskState {
     /// when the entry is not present.
     ///
     /// Both decrements clamp at zero via saturating CAS — same
-    /// rationale as [`on_fill`].
+    /// rationale as \[`on_fill`\].
     pub(super) fn on_cancel(&self, order_id: Id) {
         if self.config.is_none() {
             return;

@@ -51,7 +51,7 @@ This order book engine is built with the following design principles:
 #### v0.7.0 — Feature-gated allocation counter
 
 - **New feature `alloc-counters`** (default off). Exposes
-  [`CountingAllocator`] and [`AllocSnapshot`] at the crate root.
+  \[`CountingAllocator`\] and \[`AllocSnapshot`\] at the crate root.
   Wraps any inner [`GlobalAlloc`](std::alloc::GlobalAlloc) and
   tracks four `AtomicU64` counters: `allocs`, `deallocs`,
   `bytes_allocated`, `bytes_deallocated`.
@@ -63,6 +63,40 @@ This order book engine is built with the following design principles:
   `allocs_per_op`, the test asserts a conservative ceiling for
   regression detection.
 - **`BENCH.md`** gains an "Allocation profile" section.
+
+#### v0.7.0 — Metrics and Observability (#60)
+
+- **New optional `metrics` feature** wires Prometheus-style
+  counters and gauges into the matching engine. Default `off`;
+  when enabled, every increment goes through the global
+  [`metrics`](https://docs.rs/metrics) facade so any compatible
+  recorder (Prometheus exporter, OpenTelemetry bridge, etc.)
+  can collect them.
+- **Surface (stable across `0.7.x`):**
+  - `orderbook_rejects_total{reason="..."}` — counter, one
+    increment per rejected order. Label value is the
+    [`RejectReason`] [`Display`](std::fmt::Display) string.
+  - `orderbook_depth_levels_bid` /
+    `orderbook_depth_levels_ask` — gauges, current count of
+    distinct price levels on each side. Updated on every
+    structural mutation (add, cancel, modify, fill).
+  - `orderbook_trades_total` — counter, monotonic count of
+    every emitted trade transaction (one increment per
+    `MatchResult` transaction).
+- **Determinism preserved.** Metrics emission is out-of-band:
+  no allocation on the happy path, no influence on matching
+  outcomes, and `restore_from_snapshot_package` deliberately
+  does **not** rehydrate counters — they are operational only
+  and live for the process lifetime. The integration test
+  `tests/metrics/` proves byte-identical snapshots between two
+  books with metrics enabled.
+- **Compile-time no-op.** When the feature is off every helper
+  in [`orderbook::metrics`] compiles to an empty function so
+  call-sites in the matching hot path stay unconditional.
+- Example: `examples/src/bin/prometheus_export.rs` (run with
+  `cargo run --features metrics --bin prometheus_export`)
+  demonstrates installing the `metrics-exporter-prometheus`
+  recorder and dumping the exposition payload.
 
 #### v0.7.0 — Feature-gated binary wire protocol
 
@@ -82,7 +116,8 @@ This order book engine is built with the following design principles:
   `#[repr(C, packed)]` with `zerocopy::{FromBytes, IntoBytes,
   Unaligned, Immutable, KnownLayout}` derives. Each ships a
   `const _: () = assert!(size_of::<…>() == N)` guard. Decoding
-  is safe — `#![deny(unsafe_code)]` stays on.
+  is safe — `zerocopy` performs the layout validation, no
+  `unsafe` is required at any wire call site.
 - **Byte-cursor outbound** — `ExecReport`, `TradePrintWire`,
   `BookUpdateWire` are encoded via explicit
   `extend_from_slice` calls. Outbound is I/O-dominated; this

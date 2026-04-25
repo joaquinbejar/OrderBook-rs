@@ -198,7 +198,7 @@ impl std::fmt::Display for RejectReason {
 ///
 /// Errors that do not represent a public reject (e.g.
 /// `SerializationError`, `ChecksumMismatch`, `NatsPublishError`,
-/// internal-state errors) map to [`RejectReason::Other(0)`] — they are
+/// internal-state errors) map to \[`RejectReason::Other(0)`\] — they are
 /// not expected to surface on outbound reject events.
 ///
 /// The match below is intentionally exhaustive (no `_ =>` catch-all);
