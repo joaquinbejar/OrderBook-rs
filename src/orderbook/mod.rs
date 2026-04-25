@@ -38,6 +38,9 @@ pub mod fees;
 /// Mass cancel operations for bulk order removal.
 pub mod mass_cancel;
 
+/// Operational Prometheus-style metrics hooks (feature-gated).
+pub mod metrics;
+
 /// Order state machine for explicit lifecycle tracking.
 pub mod order_state;
 

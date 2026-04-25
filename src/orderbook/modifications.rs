@@ -660,12 +660,14 @@ where
                     ..
                 } => {
                     if visible_quantity.as_u64() % lot != 0 {
+                        crate::orderbook::metrics::record_reject(RejectReason::InvalidQuantity);
                         return Err(OrderBookError::InvalidLotSize {
                             quantity: visible_quantity.as_u64(),
                             lot_size: lot,
                         });
                     }
                     if hidden_quantity.as_u64() % lot != 0 {
+                        crate::orderbook::metrics::record_reject(RejectReason::InvalidQuantity);
                         return Err(OrderBookError::InvalidLotSize {
                             quantity: hidden_quantity.as_u64(),
                             lot_size: lot,
@@ -674,6 +676,7 @@ where
                 }
                 _ => {
                     if order.total_quantity() % lot != 0 {
+                        crate::orderbook::metrics::record_reject(RejectReason::InvalidQuantity);
                         return Err(OrderBookError::InvalidLotSize {
                             quantity: order.total_quantity(),
                             lot_size: lot,
@@ -688,6 +691,7 @@ where
         if let Some(min) = self.min_order_size
             && qty < min
         {
+            crate::orderbook::metrics::record_reject(RejectReason::OrderSizeOutOfRange);
             return Err(OrderBookError::OrderSizeOutOfRange {
                 quantity: qty,
                 min: Some(min),
@@ -697,6 +701,7 @@ where
         if let Some(max) = self.max_order_size
             && qty > max
         {
+            crate::orderbook::metrics::record_reject(RejectReason::OrderSizeOutOfRange);
             return Err(OrderBookError::OrderSizeOutOfRange {
                 quantity: qty,
                 min: self.min_order_size,
@@ -743,6 +748,7 @@ where
                         reason: CancelReason::InsufficientLiquidity,
                     },
                 );
+                crate::orderbook::metrics::record_reject(RejectReason::InsufficientLiquidity);
                 return Err(OrderBookError::InsufficientLiquidity {
                     side: order.side(),
                     requested: order.total_quantity(),
@@ -790,6 +796,7 @@ where
                         reason: CancelReason::InsufficientLiquidity,
                     },
                 );
+                crate::orderbook::metrics::record_reject(RejectReason::InsufficientLiquidity);
                 return Err(OrderBookError::InsufficientLiquidity {
                     side: order.side(),
                     requested: order.quantity(), // Now uses the trait method
