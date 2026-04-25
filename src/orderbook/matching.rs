@@ -369,7 +369,7 @@ where
 
             // Notify price level changes
             if let Some(listener) = price_level_changed_listener {
-                let engine_seq = engine_seq_counter.fetch_add(1, Ordering::Relaxed);
+                let engine_seq = super::book::mint_engine_seq(engine_seq_counter);
                 listener(PriceLevelChangedEvent {
                     side: side.opposite(),
                     price: price_level.price(),

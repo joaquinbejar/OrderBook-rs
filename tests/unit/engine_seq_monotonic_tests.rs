@@ -26,25 +26,26 @@ fn collect_observed_engine_seqs(events: &[SequencerEvent<()>]) -> Vec<u64> {
 
     let trade_observed = Arc::clone(&observed);
     let trade_listener: TradeListener = Arc::new(move |result: &TradeResult| {
-        if let Ok(mut guard) = trade_observed.lock() {
-            guard.push(result.engine_seq);
-        }
+        let mut guard = trade_observed
+            .lock()
+            .expect("observed mutex poisoned in trade listener");
+        guard.push(result.engine_seq);
     });
 
     let price_observed = Arc::clone(&observed);
     let price_listener: PriceLevelChangedListener =
         Arc::new(move |event: PriceLevelChangedEvent| {
-            if let Ok(mut guard) = price_observed.lock() {
-                guard.push(event.engine_seq);
-            }
+            let mut guard = price_observed
+                .lock()
+                .expect("observed mutex poisoned in price listener");
+            guard.push(event.engine_seq);
         });
 
-    let mut book = OrderBook::<()>::with_trade_and_price_level_listener(
+    let book = OrderBook::<()>::with_trade_and_price_level_listener(
         "TEST",
         trade_listener,
         price_listener,
     );
-    let _ = &mut book;
 
     for event in events {
         if let SequencerCommand::AddOrder(order) = &event.command {
@@ -52,10 +53,10 @@ fn collect_observed_engine_seqs(events: &[SequencerEvent<()>]) -> Vec<u64> {
         }
     }
 
-    match observed.lock() {
-        Ok(g) => g.clone(),
-        Err(_) => Vec::new(),
-    }
+    let guard = observed
+        .lock()
+        .expect("observed mutex poisoned after replay");
+    guard.clone()
 }
 
 proptest! {

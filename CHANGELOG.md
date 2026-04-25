@@ -87,10 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- Non-breaking public API surface for the Clock trait. The
-  `engine_seq` field adds (#52) extend public structs that consumers
-  may construct via struct literals; while `cargo-semver-checks` may
-  flag those, the `0.6.x → 0.7.x` delta in `0.x` semver permits
+- Non-breaking public API surface for the Clock trait. Adding the
+  `engine_seq` fields extends public structs that consumers may
+  construct via struct literals; while `cargo-semver-checks`
+  may flag those, the `0.6.x → 0.7.x` delta in `0.x` semver permits
   minor breaking changes.
 - Replay determinism: `ReplayEngine::replay_from` continues to behave
   as before (production stamping via `MonotonicClock`). Byte-identical
