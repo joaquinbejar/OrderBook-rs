@@ -584,6 +584,14 @@ where
     /// validation, tick/lot validation, or matching work.
     pub fn add_order(&self, mut order: OrderType<T>) -> Result<Arc<OrderType<T>>, OrderBookError> {
         self.check_kill_switch_or_reject(order.id())?;
+        // Pre-trade risk gate: per-account open-orders / notional /
+        // price band. No-op when no `RiskConfig` is installed.
+        // Documented order: kill_switch → risk → STP → fees → match.
+        self.check_risk_limit_admission(
+            order.user_id(),
+            order.price().as_u128(),
+            order.total_quantity(),
+        )?;
         self.cache.invalidate();
 
         trace!(
