@@ -149,14 +149,15 @@ where
     /// entered"). No-op when no tracker is configured.
     #[inline]
     pub(super) fn reject_with_risk(&self, order_id: pricelevel::Id, err: &OrderBookError) {
-        if self.order_state_tracker.is_some() {
-            self.track_state(
-                order_id,
-                super::order_state::OrderStatus::Rejected {
-                    reason: super::reject_reason::RejectReason::from(err),
-                },
-            );
-        }
+        // `track_state` is itself a no-op when no tracker is configured,
+        // so the outer `is_some` check is redundant. Drop it to keep the
+        // helper minimal and avoid future divergence.
+        self.track_state(
+            order_id,
+            super::order_state::OrderStatus::Rejected {
+                reason: super::reject_reason::RejectReason::from(err),
+            },
+        );
     }
 
     /// Convert `OrderType<T>` to OrderType<()> for compatibility with current PriceLevel API

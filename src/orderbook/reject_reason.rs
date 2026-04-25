@@ -20,7 +20,7 @@
 //! [`RejectReason`] is the stable public contract.
 
 use crate::orderbook::error::OrderBookError;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Closed taxonomy of reasons an order may be rejected at admission.
 ///
@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 /// | `DuplicateOrderId`       | 12  |
 /// | `InsufficientLiquidity`  | 13  |
 /// | `Other(code)`            | code|
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 #[repr(u16)]
 pub enum RejectReason {
@@ -118,6 +118,58 @@ impl RejectReason {
             Self::InsufficientLiquidity => 13,
             Self::Other(code) => code,
         }
+    }
+
+    /// Reconstruct a [`RejectReason`] from its wire code. Known
+    /// discriminants map to their named variant; any other value is
+    /// preserved via [`Self::Other`] so older deserializers can carry
+    /// forward unknown codes minted by newer producers.
+    #[inline]
+    #[must_use]
+    pub fn from_u16(code: u16) -> Self {
+        match code {
+            1 => Self::KillSwitchActive,
+            2 => Self::RiskMaxOpenOrders,
+            3 => Self::RiskMaxNotional,
+            4 => Self::RiskPriceBand,
+            5 => Self::PostOnlyWouldCross,
+            6 => Self::SelfTradePrevention,
+            7 => Self::InvalidPrice,
+            8 => Self::InvalidQuantity,
+            9 => Self::InvalidPriceLevel,
+            10 => Self::OrderSizeOutOfRange,
+            11 => Self::MissingUserId,
+            12 => Self::DuplicateOrderId,
+            13 => Self::InsufficientLiquidity,
+            other => Self::Other(other),
+        }
+    }
+}
+
+/// Serialize as the stable `u16` wire code via [`RejectReason::as_u16`].
+///
+/// JSON / Bincode / any serde format encodes the numeric reject code,
+/// not the variant name or an internal serde index. This is what the
+/// wire-stability rustdoc on the type promises and what consumers can
+/// rely on across `0.7.x` patch upgrades.
+impl Serialize for RejectReason {
+    #[inline]
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u16(self.as_u16())
+    }
+}
+
+/// Deserialize from the stable `u16` wire code via
+/// [`RejectReason::from_u16`].
+///
+/// Unknown codes map to [`RejectReason::Other`] so an older deserializer
+/// can still parse a payload minted by a newer producer that has
+/// introduced a new reject variant.
+impl<'de> Deserialize<'de> for RejectReason {
+    #[inline]
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let code = u16::deserialize(deserializer)?;
+        Ok(Self::from_u16(code))
     }
 }
 
@@ -406,6 +458,39 @@ mod tests {
         let json = serde_json::to_string(&other).expect("serialize Other(42)");
         let decoded: RejectReason = serde_json::from_str(&json).expect("deserialize Other(42)");
         assert_eq!(decoded, other);
+    }
+
+    #[test]
+    fn test_serde_json_emits_stable_u16_wire_code() {
+        // Wire format must be the documented u16 code, not a variant
+        // name or a serde-derived index. This is the contract consumers
+        // rely on across `0.7.x` patch upgrades.
+        for reason in named_variants() {
+            let json = serde_json::to_string(&reason).expect("serialize named variant");
+            assert_eq!(
+                json,
+                reason.as_u16().to_string(),
+                "JSON wire code drift for {reason:?}"
+            );
+        }
+        let other = RejectReason::Other(7777);
+        let json = serde_json::to_string(&other).expect("serialize Other");
+        assert_eq!(json, "7777");
+    }
+
+    #[test]
+    fn test_serde_json_unknown_code_decodes_to_other() {
+        // Forward-compat: an older deserializer reading a payload
+        // minted by a newer producer with a code outside the documented
+        // table preserves it via `RejectReason::Other(code)` instead of
+        // failing to deserialize.
+        let decoded: RejectReason = serde_json::from_str("999").expect("deserialize unknown code");
+        assert_eq!(decoded, RejectReason::Other(999));
+
+        // Reserved-application range round-trips too.
+        let decoded: RejectReason =
+            serde_json::from_str("1234").expect("deserialize reserved-range code");
+        assert_eq!(decoded, RejectReason::Other(1234));
     }
 
     #[cfg(feature = "bincode")]
