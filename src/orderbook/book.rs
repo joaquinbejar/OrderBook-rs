@@ -2573,16 +2573,20 @@ where
         // `restore_from_snapshot` consumes the snapshot's level vectors.
         let snapshot = package.into_snapshot()?;
 
-        // Rebuild per-order risk entries and per-account counters by
-        // walking the snapshot's resting orders. Done before
+        // Preserve the persisted risk-installation state exactly:
+        // install + rebuild only when a config was snapshotted,
+        // otherwise explicitly disable risk so a `risk_config()` call
+        // post-restore returns `None` rather than `Some(empty)`. The
+        // rebuild walks the snapshot's resting orders before
         // `restore_from_snapshot` consumes the snapshot so we avoid
-        // cloning all level snapshots. The active `RiskConfig` is
-        // applied first; an absent persisted config installs the
-        // default empty config (every check is a no-op passthrough,
-        // identical to `RiskState::new` post-construction state).
-        self.risk_state.set_config(risk_config.unwrap_or_default());
-        self.risk_state
-            .rebuild_from_snapshot(&snapshot.bids, &snapshot.asks);
+        // cloning all level snapshots.
+        if let Some(risk_config) = risk_config {
+            self.risk_state.set_config(risk_config);
+            self.risk_state
+                .rebuild_from_snapshot(&snapshot.bids, &snapshot.asks);
+        } else {
+            self.risk_state.disable();
+        }
 
         self.restore_from_snapshot(snapshot)?;
 

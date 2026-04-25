@@ -63,6 +63,27 @@ pub enum ReferencePriceSource {
 /// returns `Ok(())`. The struct is `Default` and `Serialize`/
 /// `Deserialize`, so it round-trips cleanly through the snapshot
 /// package with `#[serde(default)]`.
+///
+/// # Semantics: submitted vs. resting
+///
+/// The `max_open_orders_per_account` and `max_notional_per_account`
+/// limits are evaluated against the **submitted** quantity / notional,
+/// **before** matching. An aggressive limit order that would fully
+/// match against the opposite side and leave nothing resting is still
+/// gated against these limits as if every contract were going to rest.
+///
+/// This is the standard pre-trade gating pattern in tier-one electronic
+/// venues (CME / Nasdaq pre-trade risk hooks behave the same way): the
+/// engine does not speculatively match before deciding whether to
+/// admit. Counter updates **after** matching reflect the actual resting
+/// remainder, so a fully-filled aggressive order does not leave
+/// long-lived counter pressure on the account — only the in-flight
+/// admission check sees the worst case.
+///
+/// If you need a "would-rest" projection instead of a "submitted"
+/// admission gate, run a `peek_match` simulation in your gateway
+/// layer and pass the resulting resting remainder in. Issue a
+/// follow-up if you want this surfaced from the engine itself.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RiskConfig {
     /// Maximum number of resting orders a single account may have on
@@ -154,6 +175,31 @@ pub struct RiskState {
     pub(super) counters: DashMap<Hash32, RiskCounters>,
     pub(super) orders: DashMap<Id, RiskEntry>,
     pub(super) warned_no_reference: AtomicBool,
+}
+
+/// Saturating decrement on an `AtomicU64` via `fetch_update`. Clamps at
+/// zero so a double-decrement under a fill / cancel race floors rather
+/// than wrapping to `u64::MAX` and permanently locking an account out
+/// of admission.
+#[inline]
+fn saturating_sub_u64(counter: &AtomicU64, delta: u64) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        Some(current.saturating_sub(delta))
+    });
+}
+
+/// Saturating decrement on an `AtomicCell<u128>` via a compare-exchange
+/// loop. Clamps at zero — same rationale as [`saturating_sub_u64`].
+#[inline]
+fn saturating_sub_u128(cell: &AtomicCell<u128>, delta: u128) {
+    let mut current = cell.load();
+    loop {
+        let new = current.saturating_sub(delta);
+        match cell.compare_exchange(current, new) {
+            Ok(_) => return,
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 impl RiskState {
@@ -337,6 +383,12 @@ impl RiskState {
     /// not tracked (e.g. risk was disabled when the maker was
     /// admitted, or the entry was already evicted by a prior cancel
     /// in the same submit call).
+    ///
+    /// Both decrements clamp at zero via saturating CAS — under a
+    /// double-fill / fill-cancel race the worst case is a counter
+    /// that floors at zero rather than wrapping to `u64::MAX` /
+    /// `u128::MAX` and permanently locking the account out of
+    /// admission.
     pub(super) fn on_fill(&self, maker_id: Id, filled_qty: u64, maker_price: u128) {
         if self.config.is_none() {
             return;
@@ -356,9 +408,9 @@ impl RiskState {
         let notional_delta = (filled_qty as u128).saturating_mul(maker_price);
 
         if let Some(counters_ref) = self.counters.get(&account) {
-            counters_ref.resting_notional.fetch_sub(notional_delta);
+            saturating_sub_u128(&counters_ref.resting_notional, notional_delta);
             if fully_filled {
-                counters_ref.open_count.fetch_sub(1, Ordering::Relaxed);
+                saturating_sub_u64(&counters_ref.open_count, 1);
             }
         }
 
@@ -372,6 +424,9 @@ impl RiskState {
     /// Removes the entry and decrements both per-account counters
     /// using the entry's stored `remaining_qty` and `price`. No-op
     /// when the entry is not present.
+    ///
+    /// Both decrements clamp at zero via saturating CAS — same
+    /// rationale as [`on_fill`].
     pub(super) fn on_cancel(&self, order_id: Id) {
         if self.config.is_none() {
             return;
@@ -381,8 +436,8 @@ impl RiskState {
         };
         let notional_delta = (entry.remaining_qty as u128).saturating_mul(entry.price);
         if let Some(counters_ref) = self.counters.get(&entry.account) {
-            counters_ref.open_count.fetch_sub(1, Ordering::Relaxed);
-            counters_ref.resting_notional.fetch_sub(notional_delta);
+            saturating_sub_u64(&counters_ref.open_count, 1);
+            saturating_sub_u128(&counters_ref.resting_notional, notional_delta);
         }
     }
 
@@ -702,5 +757,44 @@ mod tests {
                 .check_limit_admission(acct, 100, 100, Some(100))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn test_on_fill_overshoot_clamps_counters_at_zero() {
+        // Regression: a stray double-fill or filled_qty > remaining
+        // must not wrap counters via `fetch_sub`. Both decrements
+        // saturate at zero.
+        let mut state = RiskState::new();
+        state.set_config(RiskConfig::new().with_max_notional_per_account(10_000));
+
+        let acct = account(12);
+        let order_id = Id::new_uuid();
+        state.on_admission(order_id, acct, 100, 5);
+
+        // Decrement by far more than what was admitted.
+        state.on_fill(order_id, 1_000_000, 100);
+
+        let counters = state.counters.get(&acct).expect("counters present");
+        assert_eq!(counters.open_count.load(Ordering::Relaxed), 0);
+        assert_eq!(counters.resting_notional.load(), 0);
+    }
+
+    #[test]
+    fn test_on_cancel_after_fully_filled_is_noop_and_does_not_wrap() {
+        // Regression: cancel after the entry has already been removed
+        // by an on_fill must be a no-op and not under-flow the
+        // counters that the prior fill already drove to zero.
+        let mut state = RiskState::new();
+        state.set_config(RiskConfig::new().with_max_open_orders_per_account(10));
+
+        let acct = account(13);
+        let order_id = Id::new_uuid();
+        state.on_admission(order_id, acct, 100, 5);
+        state.on_fill(order_id, 5, 100); // entry removed, counters at 0
+        state.on_cancel(order_id); // no-op (entry not present)
+
+        let counters = state.counters.get(&acct).expect("counters present");
+        assert_eq!(counters.open_count.load(Ordering::Relaxed), 0);
+        assert_eq!(counters.resting_notional.load(), 0);
     }
 }
