@@ -41,6 +41,9 @@ pub mod mass_cancel;
 /// Order state machine for explicit lifecycle tracking.
 pub mod order_state;
 
+/// Closed-taxonomy reject reasons surfaced on `OrderStatus::Rejected`.
+pub mod reject_reason;
+
 /// Pre-trade risk layer: per-account counters, configurable limits.
 pub mod risk;
 
@@ -78,6 +81,7 @@ pub use nats::NatsTradePublisher;
 #[cfg(feature = "nats")]
 pub use nats_book_change::{BookChangeBatch, BookChangeEntry, NatsBookChangePublisher};
 pub use order_state::{CancelReason, OrderStateListener, OrderStateTracker, OrderStatus};
+pub use reject_reason::RejectReason;
 #[cfg(feature = "special_orders")]
 pub use repricing::{RepricingOperations, RepricingResult, SpecialOrderTracker};
 pub use risk::{ReferencePriceSource, RiskConfig, RiskState};

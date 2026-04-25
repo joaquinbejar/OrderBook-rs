@@ -34,6 +34,27 @@
 //!
 //! ## What's New in Version 0.7.0
 //!
+//! ### v0.7.0 — Closed `RejectReason` enum
+//!
+//! - **New [`RejectReason`]** — closed
+//!   `#[non_exhaustive] #[repr(u16)]` enum with stable explicit
+//!   discriminants (1..13 + `Other(u16)`). The canonical wire-side
+//!   reject taxonomy; consumers can route on the numeric code without
+//!   parsing strings.
+//! - **`OrderStatus::Rejected.reason: String`** is now
+//!   `RejectReason` — typed, machine-routable, and stable across
+//!   `0.7.x`. Breaking change on a public variant shape; allowed under
+//!   the `0.6.x → 0.7.x` minor delta in `0.x` semver.
+//! - **`impl From<&OrderBookError> for RejectReason`** — operational
+//!   ergonomics. Exhaustive match — a future `OrderBookError` variant
+//!   addition is caught at compile time.
+//! - **Tracker emission on every reject path that already transitioned
+//!   the tracker.** Kill switch, risk gates, and the three internal
+//!   sites in `modifications.rs` (validation / post-only / missing
+//!   user id) now record typed reasons. STP cancel-taker and IOC/FOK
+//!   `InsufficientLiquidity` paths still return typed errors without
+//!   transitioning the tracker — deferred to a follow-up.
+//!
 //! ### v0.7.0 — Pre-trade risk layer
 //!
 //! - **New [`RiskConfig`]** with three opt-in guard-rails:
@@ -80,7 +101,7 @@
 //!   `#[serde(default)]`.
 //! - When an `OrderStateTracker` is configured, kill-switched
 //!   rejections are recorded as
-//!   `OrderStatus::Rejected { reason: "kill switch active" }`.
+//!   `OrderStatus::Rejected { reason: RejectReason::KillSwitchActive }`.
 //! - Example: `examples/src/bin/kill_switch_drain.rs`.
 //!
 //! ### v0.7.0 — Global `engine_seq` across outbound streams
@@ -379,6 +400,7 @@ pub use orderbook::market_impact::{MarketImpact, OrderSimulation};
 pub use orderbook::order_state::{
     CancelReason, OrderStateListener, OrderStateTracker, OrderStatus,
 };
+pub use orderbook::reject_reason::RejectReason;
 pub use orderbook::risk::{ReferencePriceSource, RiskConfig, RiskState};
 pub use orderbook::sequencer::{
     InMemoryJournal, Journal, JournalEntry, JournalError, JournalReadIter, ReplayEngine,

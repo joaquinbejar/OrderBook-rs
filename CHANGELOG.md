@@ -11,6 +11,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > below group changes by feature; everything ships in the same
 > 0.7.0 publish.
 
+### Added — closed `RejectReason` enum (#55)
+
+- **New `RejectReason`** closed `#[non_exhaustive] #[repr(u16)]` enum
+  with stable explicit discriminants (1..13 + `Other(u16)`). It is the
+  canonical wire-side reject taxonomy — consumers can route on the
+  numeric code without parsing strings, and the discriminants are
+  documented as stable across `0.7.x` patch upgrades.
+- **`OrderStatus::Rejected.reason: String`** → `RejectReason`
+  (breaking change to a public enum's variant shape; allowed under the
+  `0.6.x → 0.7.x` minor delta in `0.x` semver).
+- **Crate-root + prelude re-export** of `RejectReason`.
+- **`impl From<&OrderBookError> for RejectReason`** — operational
+  ergonomics. Maps every `OrderBookError` variant to its wire-side
+  reject code (or `Other(0)` for internal-state errors with no public
+  reject mapping). Exhaustive match — adding an `OrderBookError`
+  variant in the future is caught at compile time inside the crate.
+- **Risk-gate rejection now records the tracker.** When an
+  `OrderStateTracker` is configured and `add_order` is rejected by the
+  risk layer, the engine records
+  `OrderStatus::Rejected { reason: RejectReason::Risk* }` against the
+  rejected order id before propagating the typed error. Mirrors the
+  kill-switch tracker pattern.
+- **Kill-switch reject now uses the typed code.** The previous string
+  `"kill switch active"` is replaced by
+  `RejectReason::KillSwitchActive`.
+- **Validation / post-only / missing-user-id rejects also typed.** The
+  internal sites in `modifications.rs` that already transitioned the
+  tracker to `OrderStatus::Rejected` now emit `RejectReason::InvalidPrice`,
+  `RejectReason::PostOnlyWouldCross`, and `RejectReason::MissingUserId`
+  respectively (incidental migration — these paths previously stored a
+  free-form string).
+- New integration tests `tests/unit/reject_reason_tests.rs` cover the
+  kill-switch and three risk-gate tracker emissions and a Display
+  smoke test.
+
+### Notes — `RejectReason`
+
+- Discriminants are stable wire codes. Do not reorder or reuse a
+  retired discriminant within the `0.7.x` series.
+- `Other(u16)` is the forward-compat escape hatch for application-side
+  extensions. Values `>= 1000` are reserved for caller use; the
+  library will never emit a value in that range.
+- The reverse direction `From<RejectReason> for OrderBookError` is
+  **not** provided. The enum is the stable public contract; the error
+  is the internal impl detail.
+- Snapshot format unchanged. `OrderStateTracker` history is not
+  persisted in `OrderBookSnapshotPackage`; format version stays at `2`.
+- Out of scope (deferred to a follow-up issue): wiring tracker
+  `Rejected` emission for STP cancel-taker and `InsufficientLiquidity`
+  IOC/FOK paths, both of which currently return errors without
+  transitioning the tracker.
+
 ### Added — pre-trade risk layer (#54)
 
 - **Pre-trade risk layer** on `OrderBook<T>`. New `RiskConfig` with

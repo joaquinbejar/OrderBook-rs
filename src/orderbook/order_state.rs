@@ -23,6 +23,7 @@
 //! ```
 
 use super::clock::{Clock, MonotonicClock};
+use super::reject_reason::RejectReason;
 use dashmap::DashMap;
 use pricelevel::Id;
 use serde::{Deserialize, Serialize};
@@ -106,8 +107,8 @@ pub enum OrderStatus {
 
     /// Order rejected during validation (never entered the book).
     Rejected {
-        /// Human-readable rejection reason.
-        reason: String,
+        /// Closed wire-side reject code. See [`RejectReason`].
+        reason: RejectReason,
     },
 }
 
@@ -562,7 +563,7 @@ mod tests {
         );
         assert!(
             OrderStatus::Rejected {
-                reason: "test".to_string()
+                reason: RejectReason::Other(0)
             }
             .is_terminal()
         );
@@ -621,7 +622,7 @@ mod tests {
         );
         assert_eq!(
             OrderStatus::Rejected {
-                reason: "bad".to_string()
+                reason: RejectReason::InvalidPrice
             }
             .filled_quantity(),
             0
@@ -656,10 +657,10 @@ mod tests {
         );
         assert_eq!(
             OrderStatus::Rejected {
-                reason: "bad tick".to_string()
+                reason: RejectReason::InvalidPrice
             }
             .to_string(),
-            "Rejected(bad tick)"
+            "Rejected(invalid price)"
         );
     }
 
@@ -737,7 +738,7 @@ mod tests {
         tracker.transition(
             id,
             OrderStatus::Rejected {
-                reason: "invalid tick size".to_string(),
+                reason: RejectReason::InvalidPrice,
             },
         );
 
@@ -894,7 +895,7 @@ mod tests {
                 reason: CancelReason::SelfTradePrevention,
             },
             OrderStatus::Rejected {
-                reason: "test".to_string(),
+                reason: RejectReason::InvalidPrice,
             },
         ];
 

@@ -546,7 +546,7 @@ where
             self.track_state(
                 order_id,
                 super::order_state::OrderStatus::Rejected {
-                    reason: "kill switch active".to_string(),
+                    reason: super::reject_reason::RejectReason::KillSwitchActive,
                 },
             );
             return Err(OrderBookError::KillSwitchActive);

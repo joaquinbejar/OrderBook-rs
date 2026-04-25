@@ -53,6 +53,9 @@ pub use crate::orderbook::order_state::{
     CancelReason, OrderStateListener, OrderStateTracker, OrderStatus,
 };
 
+// Rejection taxonomy
+pub use crate::orderbook::reject_reason::RejectReason;
+
 // Pre-trade risk layer types
 pub use crate::orderbook::risk::{ReferencePriceSource, RiskConfig, RiskState};
 

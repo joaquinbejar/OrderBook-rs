@@ -7,7 +7,7 @@
 #[cfg(test)]
 mod tests_kill_switch {
     use orderbook_rs::orderbook::order_state::{OrderStateTracker, OrderStatus};
-    use orderbook_rs::{OrderBook, OrderBookError};
+    use orderbook_rs::{OrderBook, OrderBookError, RejectReason};
     use pricelevel::{Hash32, Id, OrderUpdate, Price, Quantity, Side, TimeInForce};
 
     fn new_book() -> OrderBook<()> {
@@ -275,7 +275,7 @@ mod tests_kill_switch {
         let status = book.order_status(order_id);
         match status {
             Some(OrderStatus::Rejected { reason }) => {
-                assert_eq!(reason, "kill switch active");
+                assert_eq!(reason, RejectReason::KillSwitchActive);
             }
             other => panic!("expected Rejected with kill switch reason, got {other:?}"),
         }
