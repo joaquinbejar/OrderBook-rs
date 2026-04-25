@@ -355,7 +355,10 @@ mod tests {
             requested: 100,
             available: 50,
         };
-        assert_eq!(RejectReason::from(&err), RejectReason::InsufficientLiquidity);
+        assert_eq!(
+            RejectReason::from(&err),
+            RejectReason::InsufficientLiquidity
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ use crate::orderbook::book::OrderBook;
 use crate::orderbook::book_change_event::PriceLevelChangedEvent;
 use crate::orderbook::error::OrderBookError;
 use crate::orderbook::order_state::{CancelReason, OrderStatus};
+use crate::orderbook::reject_reason::RejectReason;
 use crate::orderbook::trade::TradeResult;
 use pricelevel::{Id, OrderType, OrderUpdate, PriceLevel, Quantity, Side};
 use std::sync::Arc;
@@ -616,7 +617,7 @@ where
             self.track_state(
                 order.id(),
                 OrderStatus::Rejected {
-                    reason: "missing user_id with STP enabled".to_string(),
+                    reason: RejectReason::MissingUserId,
                 },
             );
             return Err(OrderBookError::MissingUserId {
@@ -632,11 +633,7 @@ where
             self.track_state(
                 order.id(),
                 OrderStatus::Rejected {
-                    reason: format!(
-                        "price {} not a multiple of tick size {}",
-                        order.price().as_u128(),
-                        tick
-                    ),
+                    reason: RejectReason::InvalidPrice,
                 },
             );
             return Err(OrderBookError::InvalidTickSize {
@@ -711,7 +708,7 @@ where
             self.track_state(
                 order.id(),
                 OrderStatus::Rejected {
-                    reason: "post-only order would cross market".to_string(),
+                    reason: RejectReason::PostOnlyWouldCross,
                 },
             );
             return Err(OrderBookError::PriceCrossing {
