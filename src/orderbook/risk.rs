@@ -7,7 +7,7 @@
 //!   orders, per-account notional, price band against a reference price).
 //! - [`ReferencePriceSource`] — selects the reference price used by the
 //!   price-band check.
-//! - [`RiskState`] — bound to an [`OrderBook`](super::book::OrderBook),
+//! - [`RiskState`] — bound to an [`OrderBook`](crate::OrderBook),
 //!   carries the optional config plus per-account counters
 //!   (`DashMap<Hash32, RiskCounters>`) and per-resting-order entries
 //!   (`DashMap<Id, RiskEntry>`). When [`RiskConfig`] is `None`, every
@@ -21,7 +21,7 @@
 //!
 //! Market orders skip every risk check (no submitted price; no rest;
 //! no contribution to the resting open-order count). Kill switch still
-//! gates them. [`RiskState::check_market_admission`] therefore returns
+//! gates them. `RiskState::check_market_admission` therefore returns
 //! `Ok(())` unconditionally and exists only to keep the gate ordering
 //! consistent across submit and add paths and to leave room for a
 //! future per-account market-order rate limiter without breaking the
@@ -163,7 +163,7 @@ pub(super) struct RiskEntry {
     pub(super) remaining_qty: u64,
 }
 
-/// Risk state bound to a single [`OrderBook`](super::book::OrderBook).
+/// Risk state bound to a single [`OrderBook`](crate::OrderBook).
 ///
 /// Carries the optional [`RiskConfig`], the per-account counters, the
 /// per-order entry map, and a one-shot warning latch for the

@@ -481,6 +481,13 @@
 pub mod orderbook;
 
 pub mod prelude;
+
+/// Shared internal helpers exposed at the crate root.
+///
+/// Currently re-exports `current_time_millis`. When the optional
+/// `alloc-counters` feature is enabled, also exposes `CountingAllocator`
+/// and `AllocSnapshot` for opt-in allocation instrumentation in bench /
+/// test binaries.
 pub mod utils;
 
 /// Feature-gated binary wire protocol.

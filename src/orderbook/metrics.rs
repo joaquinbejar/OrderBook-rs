@@ -9,7 +9,7 @@
 //! # Metrics surface
 //!
 //! - `orderbook_rejects_total{reason="…"}` — counter, incremented on
-//!   every rejection that flows through [`record_reject`]. The label
+//!   every rejection that flows through `record_reject`. The label
 //!   value is the [`RejectReason`] [`Display`] string (stable across
 //!   `0.7.x`).
 //! - `orderbook_depth_levels_bid` / `orderbook_depth_levels_ask` —
