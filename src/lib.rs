@@ -50,6 +50,40 @@
 //!   regression detection.
 //! - **`BENCH.md`** gains an "Allocation profile" section.
 //!
+//! ### v0.7.0 — Metrics and Observability (#60)
+//!
+//! - **New optional `metrics` feature** wires Prometheus-style
+//!   counters and gauges into the matching engine. Default `off`;
+//!   when enabled, every increment goes through the global
+//!   [`metrics`](https://docs.rs/metrics) facade so any compatible
+//!   recorder (Prometheus exporter, OpenTelemetry bridge, etc.)
+//!   can collect them.
+//! - **Surface (stable across `0.7.x`):**
+//!   - `orderbook_rejects_total{reason="..."}` — counter, one
+//!     increment per rejected order. Label value is the
+//!     [`RejectReason`] [`Display`](std::fmt::Display) string.
+//!   - `orderbook_depth_levels_bid` /
+//!     `orderbook_depth_levels_ask` — gauges, current count of
+//!     distinct price levels on each side. Updated on every
+//!     structural mutation (add, cancel, modify, fill).
+//!   - `orderbook_trades_total` — counter, monotonic count of
+//!     every emitted trade transaction (one increment per
+//!     `MatchResult` transaction).
+//! - **Determinism preserved.** Metrics emission is out-of-band:
+//!   no allocation on the happy path, no influence on matching
+//!   outcomes, and `restore_from_snapshot_package` deliberately
+//!   does **not** rehydrate counters — they are operational only
+//!   and live for the process lifetime. The integration test
+//!   `tests/metrics/` proves byte-identical snapshots between two
+//!   books with metrics enabled.
+//! - **Compile-time no-op.** When the feature is off every helper
+//!   in [`orderbook::metrics`] compiles to an empty function so
+//!   call-sites in the matching hot path stay unconditional.
+//! - Example: `examples/src/bin/prometheus_export.rs` (run with
+//!   `cargo run --features metrics --bin prometheus_export`)
+//!   demonstrates installing the `metrics-exporter-prometheus`
+//!   recorder and dumping the exposition payload.
+//!
 //! ### v0.7.0 — HDR-histogram tail-latency bench suite
 //!
 //! - **Six new `*_hdr` bench binaries** under
