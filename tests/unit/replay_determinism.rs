@@ -4,7 +4,7 @@
 //! produces byte-identical execution results and snapshot consistency.
 
 #[cfg(feature = "journal")]
-mod replay_determinism {
+mod inner {
     use orderbook_rs::orderbook::sequencer::{
         InMemoryJournal, Journal, ReplayEngine, SequencerCommand, SequencerEvent, SequencerResult,
         snapshots_match,
@@ -68,7 +68,7 @@ mod replay_determinism {
         );
     }
 
-    /// Proptest: random sequence of adds deterministically replays.
+    // Proptest: random sequence of adds deterministically replays.
     proptest! {
         #[test]
         fn prop_replay_deterministic_across_runs(
@@ -77,8 +77,7 @@ mod replay_determinism {
             let journal: InMemoryJournal<()> = InMemoryJournal::new();
 
             // Build deterministic journal from add_count.
-            let mut seq = 0u64;
-            for i in 0..add_count {
+            for (seq, i) in (0..add_count).enumerate() {
                 let id = Id::new_uuid();
                 let price = 100 + (i as u128 * 10);
                 let order = make_standard_order(
@@ -88,13 +87,12 @@ mod replay_determinism {
                     if i % 2 == 0 { Side::Buy } else { Side::Sell },
                 );
                 let evt = SequencerEvent {
-                    sequence_num: seq,
-                    timestamp_ns: seq,
+                    sequence_num: seq as u64,
+                    timestamp_ns: seq as u64,
                     command: SequencerCommand::AddOrder(order),
                     result: SequencerResult::OrderAdded { order_id: id },
                 };
                 assert!(journal.append(&evt).is_ok());
-                seq += 1;
             }
 
             // Replay multiple times.

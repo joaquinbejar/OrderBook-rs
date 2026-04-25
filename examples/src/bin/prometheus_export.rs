@@ -100,8 +100,7 @@ fn trigger_rejects(book: &OrderBook<()>) {
     // taxonomy. Releases immediately so the book still serves the
     // last metric render correctly.
     book.engage_kill_switch();
-    let result =
-        book.add_limit_order(Id::new_uuid(), 100, 1, Side::Buy, TimeInForce::Gtc, None);
+    let result = book.add_limit_order(Id::new_uuid(), 100, 1, Side::Buy, TimeInForce::Gtc, None);
     match result {
         Err(OrderBookError::KillSwitchActive) => {
             info!("expected KillSwitchActive reject recorded as a metric")
