@@ -78,9 +78,9 @@ pub use nats::NatsTradePublisher;
 #[cfg(feature = "nats")]
 pub use nats_book_change::{BookChangeBatch, BookChangeEntry, NatsBookChangePublisher};
 pub use order_state::{CancelReason, OrderStateListener, OrderStateTracker, OrderStatus};
-pub use risk::{ReferencePriceSource, RiskConfig, RiskState};
 #[cfg(feature = "special_orders")]
 pub use repricing::{RepricingOperations, RepricingResult, SpecialOrderTracker};
+pub use risk::{ReferencePriceSource, RiskConfig, RiskState};
 #[cfg(feature = "journal")]
 pub use sequencer::FileJournal;
 pub use sequencer::journal::{Journal, JournalEntry};

@@ -393,7 +393,6 @@ impl RiskState {
     /// snapshot's resting orders have been re-installed into the book.
     /// Iteration is in input-vector order, which is deterministic and
     /// does not affect outbound emissions.
-    #[allow(dead_code)] // wired in commit 4 (snapshot persistence)
     pub(super) fn rebuild_from_snapshot(
         &self,
         bids: &[PriceLevelSnapshot],
@@ -443,10 +442,7 @@ mod tests {
         assert_eq!(cfg.max_open_orders_per_account, Some(5));
         assert_eq!(cfg.max_notional_per_account, Some(1_000_000));
         assert_eq!(cfg.price_band_bps, Some(500));
-        assert_eq!(
-            cfg.reference_price,
-            Some(ReferencePriceSource::LastTrade)
-        );
+        assert_eq!(cfg.reference_price, Some(ReferencePriceSource::LastTrade));
     }
 
     #[test]
@@ -507,9 +503,7 @@ mod tests {
     #[test]
     fn test_on_fill_partial_keeps_open_count() {
         let mut state = RiskState::new();
-        state.set_config(
-            RiskConfig::new().with_max_notional_per_account(1_000_000),
-        );
+        state.set_config(RiskConfig::new().with_max_notional_per_account(1_000_000));
 
         let acct = account(3);
         let order_id = Id::new_uuid();
@@ -517,10 +511,7 @@ mod tests {
 
         state.on_fill(order_id, 4, 100);
 
-        let counters = state
-            .counters
-            .get(&acct)
-            .expect("counters entry present");
+        let counters = state.counters.get(&acct).expect("counters entry present");
         assert_eq!(
             counters.open_count.load(Ordering::Relaxed),
             1,
@@ -541,9 +532,7 @@ mod tests {
     #[test]
     fn test_on_fill_full_decrements_open_count() {
         let mut state = RiskState::new();
-        state.set_config(
-            RiskConfig::new().with_max_open_orders_per_account(10),
-        );
+        state.set_config(RiskConfig::new().with_max_open_orders_per_account(10));
 
         let acct = account(4);
         let order_id = Id::new_uuid();
@@ -551,10 +540,7 @@ mod tests {
 
         state.on_fill(order_id, 10, 100);
 
-        let counters = state
-            .counters
-            .get(&acct)
-            .expect("counters entry retained");
+        let counters = state.counters.get(&acct).expect("counters entry retained");
         assert_eq!(counters.open_count.load(Ordering::Relaxed), 0);
         assert_eq!(counters.resting_notional.load(), 0);
         assert!(!state.orders.contains_key(&order_id));
@@ -563,9 +549,7 @@ mod tests {
     #[test]
     fn test_check_limit_admission_max_open_orders_breach_returns_typed_error() {
         let mut state = RiskState::new();
-        state.set_config(
-            RiskConfig::new().with_max_open_orders_per_account(2),
-        );
+        state.set_config(RiskConfig::new().with_max_open_orders_per_account(2));
 
         let acct = account(5);
         state.on_admission(Id::new_uuid(), acct, 100, 1);
@@ -591,9 +575,7 @@ mod tests {
     #[test]
     fn test_check_limit_admission_max_notional_breach_returns_typed_error() {
         let mut state = RiskState::new();
-        state.set_config(
-            RiskConfig::new().with_max_notional_per_account(1_000),
-        );
+        state.set_config(RiskConfig::new().with_max_notional_per_account(1_000));
 
         let acct = account(6);
         // Pre-load 800 of notional.
@@ -695,19 +677,13 @@ mod tests {
 
         let acct = account(10);
         // Reference 100, submitted 100 → 0 bps. All checks pass.
-        assert!(
-            state
-                .check_limit_admission(acct, 100, 5, Some(100))
-                .is_ok()
-        );
+        assert!(state.check_limit_admission(acct, 100, 5, Some(100)).is_ok());
     }
 
     #[test]
     fn test_disable_keeps_counters() {
         let mut state = RiskState::new();
-        state.set_config(
-            RiskConfig::new().with_max_open_orders_per_account(10),
-        );
+        state.set_config(RiskConfig::new().with_max_open_orders_per_account(10));
 
         let acct = account(11);
         let order_id = Id::new_uuid();

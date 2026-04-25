@@ -4,9 +4,9 @@ use super::cache::PriceLevelCache;
 use super::clock::{Clock, MonotonicClock};
 use super::error::OrderBookError;
 use super::fees::FeeSchedule;
-use super::risk::{ReferencePriceSource, RiskConfig, RiskState};
 use super::iterators::{LevelInfo, LevelsInRange, LevelsUntilDepth, LevelsWithCumulativeDepth};
 use super::market_impact::{MarketImpact, OrderSimulation};
+use super::risk::{ReferencePriceSource, RiskConfig, RiskState};
 use super::snapshot::{EnrichedSnapshot, MetricFlags, OrderBookSnapshot, OrderBookSnapshotPackage};
 use super::statistics::{DepthStats, DistributionBin};
 use crate::orderbook::book_change_event::PriceLevelChangedListener;
@@ -607,10 +607,7 @@ where
     /// `FixedPrice` always returns the operator-pinned value.
     #[inline]
     #[must_use]
-    pub(super) fn resolve_reference_price(
-        &self,
-        source: ReferencePriceSource,
-    ) -> Option<u128> {
+    pub(super) fn resolve_reference_price(&self, source: ReferencePriceSource) -> Option<u128> {
         match source {
             ReferencePriceSource::LastTrade => self.last_trade_price(),
             ReferencePriceSource::Mid => match (self.best_bid(), self.best_ask()) {
@@ -2533,6 +2530,7 @@ where
         package.max_order_size = self.max_order_size;
         package.engine_seq = self.engine_seq();
         package.kill_switch_engaged = self.is_kill_switch_engaged();
+        package.risk_config = self.risk_state.config().cloned();
         Ok(package)
     }
 
@@ -2567,8 +2565,26 @@ where
         let max_order_size = package.max_order_size;
         let engine_seq = package.engine_seq;
         let kill_switch_engaged = package.kill_switch_engaged;
+        let risk_config = package.risk_config.clone();
 
-        self.restore_from_snapshot(package.into_snapshot()?)?;
+        // Take ownership of the validated snapshot. We hold it locally
+        // so that the per-account risk counters can be rebuilt from
+        // `snapshot.bids` / `snapshot.asks` before
+        // `restore_from_snapshot` consumes the snapshot's level vectors.
+        let snapshot = package.into_snapshot()?;
+
+        // Rebuild per-order risk entries and per-account counters by
+        // walking the snapshot's resting orders. Done before
+        // `restore_from_snapshot` consumes the snapshot so we avoid
+        // cloning all level snapshots. The active `RiskConfig` is
+        // applied first; an absent persisted config installs the
+        // default empty config (every check is a no-op passthrough,
+        // identical to `RiskState::new` post-construction state).
+        self.risk_state.set_config(risk_config.unwrap_or_default());
+        self.risk_state
+            .rebuild_from_snapshot(&snapshot.bids, &snapshot.asks);
+
+        self.restore_from_snapshot(snapshot)?;
 
         // Apply configuration that was captured in the package.
         self.fee_schedule = fee_schedule;

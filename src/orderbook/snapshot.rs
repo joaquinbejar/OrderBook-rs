@@ -8,6 +8,7 @@ use tracing::trace;
 
 use super::error::OrderBookError;
 use super::fees::FeeSchedule;
+use super::risk::RiskConfig;
 use super::stp::STPMode;
 
 /// A snapshot of the order book state at a specific point in time
@@ -216,6 +217,17 @@ pub struct OrderBookSnapshotPackage {
     /// always came back disengaged.
     #[serde(default)]
     pub kill_switch_engaged: bool,
+
+    /// Risk configuration active at the time of snapshot. `None` means
+    /// no risk gating. Counters and per-order risk state are rebuilt
+    /// post-restore by walking the snapshot's resting orders.
+    ///
+    /// `#[serde(default)]` keeps the format version at `2`: payloads
+    /// written before this field existed deserialize with `None`, which
+    /// matches the previous (implicit) behaviour where a restored book
+    /// always came back without any risk gates engaged.
+    #[serde(default)]
+    pub risk_config: Option<RiskConfig>,
 }
 
 impl OrderBookSnapshotPackage {
@@ -237,6 +249,7 @@ impl OrderBookSnapshotPackage {
             max_order_size: None,
             engine_seq: 0,
             kill_switch_engaged: false,
+            risk_config: None,
         })
     }
 
