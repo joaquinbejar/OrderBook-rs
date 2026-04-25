@@ -642,3 +642,178 @@ mod test_snapshot_specific {
         assert_eq!(best_ask, Some((1010, 15)));
     }
 }
+
+#[cfg(test)]
+mod test_snapshot_engine_seq {
+    use crate::DefaultOrderBook;
+    use crate::orderbook::error::OrderBookError;
+    use crate::orderbook::{ORDERBOOK_SNAPSHOT_FORMAT_VERSION, OrderBookSnapshotPackage};
+
+    /// Round-trip an engine_seq value through the snapshot package: the
+    /// counter must be restored verbatim, and the next mint must resume
+    /// from that value (i.e. return `engine_seq` then advance to
+    /// `engine_seq + 1`).
+    #[test]
+    fn test_snapshot_package_round_trips_engine_seq() {
+        let original = DefaultOrderBook::new("ESQ");
+
+        // Advance the counter past zero. After 5 calls the counter sits at 5.
+        for _ in 0..5 {
+            let _ = original.next_engine_seq();
+        }
+        assert_eq!(original.engine_seq(), 5, "counter primed to 5");
+
+        let package = original
+            .create_snapshot_package(10)
+            .expect("build snapshot package");
+        assert_eq!(
+            package.engine_seq, 5,
+            "package captures engine_seq from the source book"
+        );
+        assert_eq!(
+            package.version, ORDERBOOK_SNAPSHOT_FORMAT_VERSION,
+            "package carries the current format version"
+        );
+
+        // Round-trip via JSON.
+        let json = package.to_json().expect("serialize to json");
+        let parsed = OrderBookSnapshotPackage::from_json(&json).expect("deserialize from json");
+        assert_eq!(
+            parsed.engine_seq, 5,
+            "engine_seq survives JSON encode/decode"
+        );
+
+        // Restore into a fresh book; the counter must equal 5.
+        let mut restored = DefaultOrderBook::new("ESQ");
+        restored
+            .restore_from_snapshot_package(parsed)
+            .expect("restore from package");
+        assert_eq!(
+            restored.engine_seq(),
+            5,
+            "restored book resumes its counter at the snapshotted value"
+        );
+
+        // Next mint returns 5 (the resumed value) and advances to 6.
+        let next = restored.next_engine_seq();
+        assert_eq!(next, 5, "next_engine_seq returns the resumed value");
+        assert_eq!(
+            restored.engine_seq(),
+            6,
+            "engine_seq advances to 6 after the mint"
+        );
+    }
+
+    /// `version: 1` payloads — the legacy format that lacked `engine_seq`
+    /// — must be rejected by `validate()` with the existing
+    /// `Unsupported snapshot version` error after the bump to v2. No
+    /// special-casing.
+    #[test]
+    fn test_snapshot_package_v1_payload_rejected_by_validate() {
+        let payload = serde_json::json!({
+            "version": 1u32,
+            "snapshot": {
+                "symbol": "V1",
+                "timestamp": 0u64,
+                "bids": [],
+                "asks": []
+            },
+            "checksum": "deadbeef",
+            "fee_schedule": null,
+            "stp_mode": "None",
+            "tick_size": null,
+            "lot_size": null,
+            "min_order_size": null,
+            "max_order_size": null
+        })
+        .to_string();
+
+        let package =
+            OrderBookSnapshotPackage::from_json(&payload).expect("deserialize v1 payload");
+        assert_eq!(package.version, 1, "version field reflects the payload");
+        assert_eq!(
+            package.engine_seq, 0,
+            "missing engine_seq field defaults to 0"
+        );
+
+        let err = package
+            .validate()
+            .expect_err("v1 payload must be rejected after the v2 bump");
+
+        match err {
+            OrderBookError::InvalidOperation { message } => {
+                assert!(
+                    message.contains("Unsupported snapshot version"),
+                    "error message must mention the unsupported version, got: {message}"
+                );
+                assert!(
+                    message.contains('1'),
+                    "error message must mention version 1, got: {message}"
+                );
+                assert!(
+                    message.contains('2'),
+                    "error message must mention expected version 2, got: {message}"
+                );
+            }
+            other => panic!("expected InvalidOperation, got {other:?}"),
+        }
+    }
+
+    /// Pure serde round-trip: a package with a non-trivial `engine_seq`
+    /// value survives JSON encoding and decoding intact.
+    #[test]
+    fn test_snapshot_package_engine_seq_field_serializes_and_deserializes() {
+        let book = DefaultOrderBook::new("FLD");
+        let mut package = book
+            .create_snapshot_package(10)
+            .expect("build snapshot package");
+        package.engine_seq = 12_345;
+
+        let json = package.to_json().expect("serialize package to json");
+        let decoded =
+            OrderBookSnapshotPackage::from_json(&json).expect("deserialize package from json");
+
+        assert_eq!(
+            decoded.engine_seq, 12_345,
+            "engine_seq round-trips through JSON unchanged"
+        );
+    }
+
+    /// A `version: 2` payload that omits the `engine_seq` field entirely
+    /// (e.g. produced by a downstream consumer that constructed the
+    /// package via the legacy `OrderBookSnapshotPackage::new` entry
+    /// point) must still deserialize, falling back to `0` via
+    /// `#[serde(default)]`.
+    #[test]
+    fn test_snapshot_package_v2_payload_without_engine_seq_field_uses_default() {
+        let payload = serde_json::json!({
+            "version": ORDERBOOK_SNAPSHOT_FORMAT_VERSION,
+            "snapshot": {
+                "symbol": "V2",
+                "timestamp": 0u64,
+                "bids": [],
+                "asks": []
+            },
+            "checksum": "deadbeef",
+            "fee_schedule": null,
+            "stp_mode": "None",
+            "tick_size": null,
+            "lot_size": null,
+            "min_order_size": null,
+            "max_order_size": null
+            // engine_seq deliberately omitted — must default to 0.
+        })
+        .to_string();
+
+        let package = OrderBookSnapshotPackage::from_json(&payload)
+            .expect("deserialize v2 payload missing engine_seq");
+        assert_eq!(
+            package.version, ORDERBOOK_SNAPSHOT_FORMAT_VERSION,
+            "version field reflects the payload"
+        );
+        assert_eq!(
+            package.engine_seq, 0,
+            "omitted engine_seq must default to 0 via #[serde(default)]"
+        );
+    }
+}

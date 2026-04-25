@@ -2339,6 +2339,7 @@ where
         package.lot_size = self.lot_size;
         package.min_order_size = self.min_order_size;
         package.max_order_size = self.max_order_size;
+        package.engine_seq = self.engine_seq();
         Ok(package)
     }
 
@@ -2364,6 +2365,7 @@ where
         let lot_size = package.lot_size;
         let min_order_size = package.min_order_size;
         let max_order_size = package.max_order_size;
+        let engine_seq = package.engine_seq;
 
         self.restore_from_snapshot(package.into_snapshot()?)?;
 
@@ -2374,6 +2376,12 @@ where
         self.lot_size = lot_size;
         self.min_order_size = min_order_size;
         self.max_order_size = max_order_size;
+
+        // Restore the engine's outbound monotonic counter so that the
+        // first `next_engine_seq()` call on this restored book returns
+        // exactly the snapshotted value, preserving cross-snapshot
+        // monotonicity for downstream consumers.
+        self.engine_seq.store(engine_seq, Ordering::Release);
 
         Ok(())
     }

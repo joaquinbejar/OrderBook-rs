@@ -138,7 +138,13 @@ impl OrderBookSnapshot {
 }
 
 /// Format version used for checksum-enabled order book snapshots.
-pub const ORDERBOOK_SNAPSHOT_FORMAT_VERSION: u32 = 1;
+///
+/// Bumped to `2` to accompany the addition of [`OrderBookSnapshotPackage::engine_seq`],
+/// which persists the engine's outbound monotonic counter across snapshot/restore.
+/// `version: 1` payloads are rejected by [`OrderBookSnapshotPackage::validate`]
+/// with the existing `Unsupported snapshot version` error — the format break is
+/// intentional, with no special-case migration path.
+pub const ORDERBOOK_SNAPSHOT_FORMAT_VERSION: u32 = 2;
 
 /// Wrapper that provides checksum validation for `OrderBookSnapshot` instances.
 ///
@@ -184,6 +190,19 @@ pub struct OrderBookSnapshotPackage {
     /// Maximum order size active at the time of the snapshot.
     #[serde(default)]
     pub max_order_size: Option<u64>,
+
+    /// Engine sequence at the time of snapshot. Restored as the new
+    /// counter value on
+    /// [`OrderBook::restore_from_snapshot_package`](super::book::OrderBook::restore_from_snapshot_package)
+    /// so monotonicity resumes from this point on the restored book.
+    ///
+    /// `#[serde(default)]` lets `version: 2` payloads that omit the field
+    /// (e.g. older code paths constructing the package via the legacy
+    /// [`OrderBookSnapshotPackage::new`]) deserialize cleanly with `0`.
+    /// Payloads with `version: 1` are rejected by
+    /// [`OrderBookSnapshotPackage::validate`].
+    #[serde(default)]
+    pub engine_seq: u64,
 }
 
 impl OrderBookSnapshotPackage {
@@ -203,6 +222,7 @@ impl OrderBookSnapshotPackage {
             lot_size: None,
             min_order_size: None,
             max_order_size: None,
+            engine_seq: 0,
         })
     }
 
