@@ -11,6 +11,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > below group changes by feature; everything ships in the same
 > 0.7.0 publish.
 
+### Added — pre-trade risk layer (#54)
+
+- **Pre-trade risk layer** on `OrderBook<T>`. New `RiskConfig` with
+  three opt-in guard-rails and three new typed reject variants on
+  `OrderBookError`:
+  - `max_open_orders_per_account: Option<u64>` →
+    `OrderBookError::RiskMaxOpenOrders { account, current, limit }`
+  - `max_notional_per_account: Option<u128>` →
+    `OrderBookError::RiskMaxNotional { account, current, attempted, limit }`
+  - `price_band_bps: Option<u32>` (with
+    `ReferencePriceSource::{LastTrade, Mid, FixedPrice(u128)}`) →
+    `OrderBookError::RiskPriceBand { submitted, reference, deviation_bps, limit_bps }`
+- **Public API on `OrderBook<T>`**:
+  `pub fn set_risk_config(&mut self, RiskConfig)`,
+  `pub fn risk_config(&self) -> Option<&RiskConfig>`,
+  `pub fn disable_risk(&mut self)`. `RiskConfig` is a builder:
+  `RiskConfig::new().with_max_open_orders_per_account(n).with_max_notional_per_account(n).with_price_band_bps(bps, source)`.
+- **Per-account counters** in `DashMap<Hash32, RiskCounters>` with
+  `open_count: AtomicU64` and `resting_notional: AtomicCell<u128>`.
+  Per-resting-order risk state in `DashMap<Id, RiskEntry>`. All hooks
+  are allocation-free on the happy path.
+- **Check ordering** on submit/add: `kill_switch → risk → STP →
+  fees → match`. Documented in the rustdoc on
+  `RiskState::check_limit_admission`.
+- **Market orders bypass the risk layer** (no submitted price, no
+  rest, no contribution to the open-order count). Kill switch still
+  gates them. Documented.
+- **Reference-price resolution** for `price_band_bps`:
+  - `LastTrade` → `last_trade_price`. Skipped (with one-time
+    `tracing::warn!`) when no trades have occurred.
+  - `Mid` → integer `(best_bid + best_ask) / 2`. One-sided book
+    falls back to `LastTrade`.
+  - `FixedPrice(p)` → caller-supplied `u128` ticks.
+- **Snapshot persistence**. `OrderBookSnapshotPackage` carries
+  `risk_config: Option<RiskConfig>` (with `#[serde(default)]` for
+  forward-compat). On restore, counters and the per-order map are
+  rebuilt by walking the snapshot's resting orders. Snapshot format
+  version stays at `2` — the field is purely additive.
+- **Crate-root re-exports**: `RiskConfig`, `RiskState`,
+  `ReferencePriceSource`. Also surfaced via `prelude`.
+- New example: `examples/src/bin/risk_limits.rs` — operator demo
+  that breaches each gate in sequence.
+- Integration tests `tests/unit/risk_layer_tests.rs` cover every
+  reject path, every state-update hook, market-order bypass, and
+  snapshot round-trip.
+
+### Notes — pre-trade risk layer
+
+- Counters are estimative. The `open_count` and `resting_notional`
+  pair is two independent atomics; no atomic snapshot of the pair is
+  taken. Under high concurrency the check may admit one order beyond
+  the limit before settling — acceptable for a guard-rail (vs. a
+  hard regulatory cap).
+- Risk config is operator-driven, not journaled. Replays via
+  `ReplayEngine::replay_from*` start with no risk gating; operators
+  re-attach config post-replay.
+- `disable_risk()` lifts the gates without dropping per-account
+  counters, so subsequent `set_risk_config(...)` calls re-engage
+  with the existing history intact.
+
 ### Added — kill switch (#53)
 
 - **Operational kill switch** on `OrderBook<T>`. New `AtomicBool` on

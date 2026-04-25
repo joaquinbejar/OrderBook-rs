@@ -48,6 +48,33 @@ This order book engine is built with the following design principles:
 
 ### What's New in Version 0.7.0
 
+#### v0.7.0 — Pre-trade risk layer
+
+- **New [`RiskConfig`]** with three opt-in guard-rails:
+  `max_open_orders_per_account`, `max_notional_per_account`, and
+  `price_band_bps` against a configurable
+  [`ReferencePriceSource`] (`LastTrade` / `Mid` / `FixedPrice`).
+  Builder pattern — `RiskConfig::new().with_*(...)` chained.
+- **Three new typed reject variants** on the existing
+  `#[non_exhaustive]` `OrderBookError`:
+  `RiskMaxOpenOrders`, `RiskMaxNotional`, `RiskPriceBand`. Each
+  carries enough context (account, current, limit, deviation) for
+  downstream consumers to act without parsing a string.
+- **`OrderBook::set_risk_config(...)` / `risk_config()` /
+  `disable_risk()`** — operator-driven gating. Check ordering on
+  submit/add: `kill_switch → risk → STP → fees → match`. Market
+  orders bypass the risk layer (no submitted price, no rest);
+  kill switch still gates them.
+- **Allocation-free** on the happy path. Per-account counters are
+  `(AtomicU64, AtomicCell<u128>)` pairs; per-order risk state is a
+  `DashMap<Id, RiskEntry>`.
+- **`OrderBookSnapshotPackage.risk_config: Option<RiskConfig>`** —
+  config persists across snapshot/restore. On restore, per-account
+  counters and the per-order map are rebuilt by walking the
+  snapshot's resting orders. Snapshot format version stays at `2`;
+  the field is additive via `#[serde(default)]`.
+- Example: `examples/src/bin/risk_limits.rs`.
+
 #### v0.7.0 — Operational kill switch
 
 - **New `OrderBook::engage_kill_switch()`,
