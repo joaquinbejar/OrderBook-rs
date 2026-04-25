@@ -7,12 +7,11 @@
 use crate::orderbook::book_change_event::PriceLevelChangedEvent;
 use crate::orderbook::order_state::{CancelReason, OrderStatus};
 use crate::orderbook::pool::MatchingPool;
-use crate::orderbook::risk::RiskState;
 use crate::orderbook::stp::{STPAction, check_stp_at_level};
 use crate::{OrderBook, OrderBookError};
 use either::Either;
 use pricelevel::{Hash32, Id, MatchResult, OrderUpdate, Side};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
 impl<T> OrderBook<T>
 where
@@ -157,7 +156,7 @@ where
                             // Compute actual executed from the sub-match
                             let executed =
                                 match_qty.saturating_sub(price_level_match.remaining_quantity());
-                            Self::process_level_match(
+                            self.process_level_match(
                                 &mut match_result,
                                 &price_level_match,
                                 &mut filled_orders,
@@ -165,11 +164,6 @@ where
                                 price,
                                 price_level,
                                 side,
-                                &self.last_trade_price,
-                                &self.has_traded,
-                                &self.price_level_changed_listener,
-                                &self.engine_seq,
-                                &self.risk_state,
                                 &mut empty_price_levels,
                             );
                             // Correct remaining: process_level_match set it to
@@ -219,7 +213,7 @@ where
                             );
                             let executed =
                                 match_qty.saturating_sub(price_level_match.remaining_quantity());
-                            Self::process_level_match(
+                            self.process_level_match(
                                 &mut match_result,
                                 &price_level_match,
                                 &mut filled_orders,
@@ -227,11 +221,6 @@ where
                                 price,
                                 price_level,
                                 side,
-                                &self.last_trade_price,
-                                &self.has_traded,
-                                &self.price_level_changed_listener,
-                                &self.engine_seq,
-                                &self.risk_state,
                                 &mut empty_price_levels,
                             );
                             // Correct remaining: process_level_match set it to
@@ -266,7 +255,7 @@ where
                 &self.transaction_id_generator,
             );
 
-            Self::process_level_match(
+            self.process_level_match(
                 &mut match_result,
                 &price_level_match,
                 &mut filled_orders,
@@ -274,11 +263,6 @@ where
                 price,
                 price_level,
                 side,
-                &self.last_trade_price,
-                &self.has_traded,
-                &self.price_level_changed_listener,
-                &self.engine_seq,
-                &self.risk_state,
                 &mut empty_price_levels,
             );
 
@@ -356,14 +340,17 @@ where
     /// aggregate match result and bookkeeping vectors.
     ///
     /// Extracted to avoid code duplication between the normal path and
-    /// the STP safe-quantity pre-match path.
+    /// the STP safe-quantity pre-match path. Routes outbound `engine_seq`
+    /// stamping through [`OrderBook::next_engine_seq`] so the minting
+    /// contract has a single source of truth.
     ///
-    /// `risk_state` is threaded through so each emitted trade decrements
+    /// The book's installed `risk_state` is consulted on every trade so
     /// the maker's per-account `resting_notional` (and `open_count` on
-    /// full fill). The hook is a no-op when no `RiskConfig` is installed,
-    /// matching the rest of the risk plumbing.
+    /// full fill) is decremented. The hook is a no-op when no
+    /// `RiskConfig` is installed, matching the rest of the risk plumbing.
     #[allow(clippy::too_many_arguments)]
     fn process_level_match(
+        &self,
         match_result: &mut MatchResult,
         price_level_match: &MatchResult,
         filled_orders: &mut Vec<Id>,
@@ -371,20 +358,13 @@ where
         price: u128,
         price_level: &std::sync::Arc<pricelevel::PriceLevel>,
         side: Side,
-        last_trade_price: &crossbeam::atomic::AtomicCell<u128>,
-        has_traded: &std::sync::atomic::AtomicBool,
-        price_level_changed_listener: &Option<
-            crate::orderbook::book_change_event::PriceLevelChangedListener,
-        >,
-        engine_seq_counter: &AtomicU64,
-        risk_state: &RiskState,
         empty_price_levels: &mut Vec<u128>,
     ) {
         // Process trades if any occurred
         if !price_level_match.trades().as_vec().is_empty() {
             // Update last trade price atomically
-            last_trade_price.store(price);
-            has_traded.store(true, Ordering::Relaxed);
+            self.last_trade_price.store(price);
+            self.has_traded.store(true, Ordering::Relaxed);
 
             // Add trades to result and update per-account risk counters
             // for the maker side of every trade.
@@ -392,7 +372,7 @@ where
                 // add_trade returns Result in v0.7; ignore error since
                 // pricelevel already validated the quantities during matching
                 let _ = match_result.add_trade(*trade);
-                risk_state.on_fill(
+                self.risk_state.on_fill(
                     trade.maker_order_id(),
                     trade.quantity().as_u64(),
                     trade.price().as_u128(),
@@ -400,8 +380,8 @@ where
             }
 
             // Notify price level changes
-            if let Some(listener) = price_level_changed_listener {
-                let engine_seq = super::book::mint_engine_seq(engine_seq_counter);
+            if let Some(listener) = &self.price_level_changed_listener {
+                let engine_seq = self.next_engine_seq();
                 listener(PriceLevelChangedEvent {
                     side: side.opposite(),
                     price: price_level.price(),

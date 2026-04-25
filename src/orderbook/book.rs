@@ -33,17 +33,6 @@ use uuid::Uuid;
 /// One basis point = 0.01% = 0.0001
 const DEFAULT_BASIS_POINTS_MULTIPLIER: f64 = 10_000.0;
 
-/// Single source of truth for minting the next outbound `engine_seq`.
-///
-/// Both [`OrderBook::next_engine_seq`] and the matching helper in
-/// `super::matching::OrderBook::process_level_match` route through this
-/// function so the contract (`fetch_add(1, Relaxed)`) cannot drift between
-/// emission paths.
-#[inline]
-pub(super) fn mint_engine_seq(counter: &AtomicU64) -> u64 {
-    counter.fetch_add(1, Ordering::Relaxed)
-}
-
 /// The OrderBook manages a collection of price levels for both bid and ask sides.
 /// It supports adding, cancelling, and matching orders with lock-free operations where possible.
 pub struct OrderBook<T = ()> {
@@ -470,6 +459,9 @@ where
     /// Called exactly once per outbound event (trade emission, price-level
     /// change emission). Internally an `AtomicU64::fetch_add(1, Relaxed)` —
     /// strict total order across all events of this `OrderBook<T>` instance.
+    /// Single source of truth for the minting contract; every emission
+    /// path in the matching engine routes through this method so the
+    /// counter cannot drift between sites.
     ///
     /// The contract is **per-instance**, not per-journal-stream: replay into
     /// a fresh book produces fresh seqs, not the original ones. Consumers
@@ -477,7 +469,7 @@ where
     /// the journal's `sequence_num` + `timestamp_ns` instead.
     #[inline]
     pub fn next_engine_seq(&self) -> u64 {
-        mint_engine_seq(&self.engine_seq)
+        self.engine_seq.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Current value of the engine sequence counter without advancing.
