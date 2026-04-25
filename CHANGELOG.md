@@ -11,6 +11,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > below group changes by feature; everything ships in the same
 > 0.7.0 publish.
 
+### Added — kill switch (#53)
+
+- **Operational kill switch** on `OrderBook<T>`. New `AtomicBool` on
+  the book and three public methods:
+  `pub fn engage_kill_switch(&self)`,
+  `pub fn release_kill_switch(&self)`,
+  `pub fn is_kill_switch_engaged(&self) -> bool`.
+  While engaged, every public `submit_market_order*`, `add_order`,
+  and non-`Cancel` `update_order` call returns the new
+  `OrderBookError::KillSwitchActive` variant before any matching, fee,
+  or STP work happens — at the cost of a single
+  `AtomicBool::load(Relaxed)` on the gate. Cancel and mass-cancel
+  paths are explicitly **not** gated so operators can drain the
+  resting book in an orderly way. Idempotent.
+- **`OrderBookError::KillSwitchActive`** — new typed reject variant.
+  Additive on the existing `#[non_exhaustive]` enum.
+- **Snapshot persistence**. `OrderBookSnapshotPackage` carries
+  `kill_switch_engaged: bool` (with `#[serde(default)]` for JSON
+  forward-compat). `restore_from_snapshot_package` resumes the
+  operational state. Snapshot format version stays at `2` — the
+  field is purely additive.
+- **`OrderStateTracker` integration**. When a tracker is configured
+  on the book and a kill-switched submit / modify is rejected, the
+  engine records `OrderStatus::Rejected { reason: "kill switch active" }`
+  via the existing `OrderStateTracker::transition`. A future typed
+  `RejectReason` (issue #55) will replace the string code.
+- New example: `examples/src/bin/kill_switch_drain.rs` — operator
+  halt-and-drain demo. Run with
+  `cargo run --bin kill_switch_drain --manifest-path examples/Cargo.toml`.
+- Integration tests: `tests/unit/kill_switch_tests.rs` covers every
+  gated and non-gated entry point plus snapshot round-trip and
+  legacy v2 payload (without the new field) defaulting to `false`.
+
+### Notes — kill switch
+
+- The low-level `OrderBook::match_market_order` /
+  `OrderBook::match_limit_order` entry points are **not** gated.
+  Production flow goes through the `submit_*` / `add_order` /
+  `update_order` public surface; this is documented in the rustdoc on
+  `engage_kill_switch`.
+- The kill switch is operator-driven, not journaled. A book restored
+  via `ReplayEngine::replay_from*` starts with the kill switch
+  disengaged regardless of the original journal author's state.
+  Snapshot/restore preserves it; replay does not.
+
 ### Added — global `engine_seq` (#52)
 
 - **Global monotonic `engine_seq`** across every outbound stream.

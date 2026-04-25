@@ -34,6 +34,28 @@
 //!
 //! ## What's New in Version 0.7.0
 //!
+//! ### v0.7.0 — Operational kill switch
+//!
+//! - **New `OrderBook::engage_kill_switch()`,
+//!   `OrderBook::release_kill_switch()`, and
+//!   `OrderBook::is_kill_switch_engaged()`** — atomic operational halt
+//!   for new flow. While engaged, every `submit_market_order*`,
+//!   `add_order`, and non-`Cancel` `update_order` call returns the new
+//!   [`OrderBookError::KillSwitchActive`] variant before any matching,
+//!   fee, or STP work happens. Cancel and mass-cancel paths are
+//!   explicitly **not** gated so operators can drain the resting book.
+//!   The flag persists across snapshot/restore.
+//! - **`OrderBookError::KillSwitchActive`** — new typed reject variant
+//!   on the existing `#[non_exhaustive]` enum.
+//! - **`OrderBookSnapshotPackage.kill_switch_engaged: bool`** —
+//!   operational state persists across snapshot/restore. Snapshot
+//!   format version stays at `2`; the field is additive via
+//!   `#[serde(default)]`.
+//! - When an `OrderStateTracker` is configured, kill-switched
+//!   rejections are recorded as
+//!   `OrderStatus::Rejected { reason: "kill switch active" }`.
+//! - Example: `examples/src/bin/kill_switch_drain.rs`.
+//!
 //! ### v0.7.0 — Global `engine_seq` across outbound streams
 //!
 //! - **New `OrderBook::next_engine_seq()` and `OrderBook::engine_seq()`**
