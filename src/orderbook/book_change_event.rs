@@ -1,6 +1,6 @@
 //! Price-level change events emitted by the order book.
 //!
-//! Each [`PriceLevelChangedEvent`] carries an `engine_seq` minted by
+//! Each `PriceLevelChangedEvent` carries an `engine_seq` minted by
 //! `OrderBook::next_engine_seq` immediately before emission. The same
 //! counter is shared with `TradeResult`, so the union of trade events
 //! and price-level events emitted by a single `OrderBook<T>` instance

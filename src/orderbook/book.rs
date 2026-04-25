@@ -84,6 +84,15 @@ pub struct OrderBook<T = ()> {
     /// into a fresh book yields fresh seqs, not the originals.
     pub(super) engine_seq: AtomicU64,
 
+    /// Operational kill switch. When `true`, every public `submit_*`,
+    /// `add_order`, and non-cancel `update_order` call short-circuits with
+    /// [`OrderBookError::KillSwitchActive`] before any matching, fee, STP,
+    /// or allocation work happens. Cancel and mass-cancel paths are
+    /// explicitly **not** gated so operators can drain the resting book.
+    /// Persisted across snapshot/restore via
+    /// [`OrderBookSnapshotPackage::kill_switch_engaged`](super::snapshot::OrderBookSnapshotPackage::kill_switch_engaged).
+    pub(super) kill_switch: AtomicBool,
+
     /// The last price at which a trade occurred
     pub(super) last_trade_price: AtomicCell<u128>,
 
@@ -407,6 +416,7 @@ where
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
             engine_seq: AtomicU64::new(0),
+            kill_switch: AtomicBool::new(false),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -468,6 +478,87 @@ where
         self.engine_seq.load(Ordering::Acquire)
     }
 
+    /// Engage the kill switch. While engaged, every public `submit_*`,
+    /// `add_order`, and non-cancel `update_order` call returns
+    /// [`OrderBookError::KillSwitchActive`] before any matching, fee,
+    /// or STP work happens. Cancel and mass-cancel paths are
+    /// explicitly **not** gated so operators can drain the resting book.
+    ///
+    /// The flag persists across snapshot/restore. Idempotent — calling
+    /// while already engaged is a no-op.
+    ///
+    /// Note: the low-level [`Self::match_market_order`] /
+    /// [`Self::match_limit_order`] entry points are not gated.
+    /// Production flow goes through the `submit_*` / `add_order` /
+    /// `update_order` public surface.
+    pub fn engage_kill_switch(&self) {
+        self.kill_switch.store(true, Ordering::Relaxed);
+    }
+
+    /// Release the kill switch and resume accepting new flow.
+    /// Idempotent.
+    pub fn release_kill_switch(&self) {
+        self.kill_switch.store(false, Ordering::Relaxed);
+    }
+
+    /// Current state of the kill switch.
+    #[inline]
+    #[must_use]
+    pub fn is_kill_switch_engaged(&self) -> bool {
+        self.kill_switch.load(Ordering::Relaxed)
+    }
+
+    /// Reject the current operation if the kill switch is engaged,
+    /// recording an `OrderStatus::Rejected` transition for `order_id`
+    /// when an order state tracker is configured.
+    ///
+    /// Use this from **new-flow** entry points (`submit_*`, `add_order`,
+    /// `add_*_with_user`) where `order_id` identifies an order that has
+    /// not yet entered the book — the `Rejected` lifecycle status is
+    /// then accurate and consistent with its documented "rejected during
+    /// validation, never entered" semantic.
+    ///
+    /// For modify / replace paths against orders already resting in the
+    /// book, use [`Self::check_kill_switch`] instead — recording
+    /// `Rejected` against a live order would corrupt the lifecycle
+    /// state (the order remains active, the modification is what was
+    /// rejected).
+    ///
+    /// Returns `Err(OrderBookError::KillSwitchActive)` when engaged so
+    /// callers can early-return before any matching, fee, or STP work.
+    /// Allocation-free on the happy path (no tracker write, no error
+    /// construction); on the cold rejection path the tracker reason
+    /// string is constructed via `to_string`.
+    #[inline]
+    pub(super) fn check_kill_switch_or_reject(&self, order_id: Id) -> Result<(), OrderBookError> {
+        if self.is_kill_switch_engaged() {
+            self.track_state(
+                order_id,
+                super::order_state::OrderStatus::Rejected {
+                    reason: "kill switch active".to_string(),
+                },
+            );
+            return Err(OrderBookError::KillSwitchActive);
+        }
+        Ok(())
+    }
+
+    /// Reject the current operation if the kill switch is engaged
+    /// **without** recording a tracker transition.
+    ///
+    /// Use this from modify / replace paths (`update_order` non-`Cancel`
+    /// variants) where the existing order remains live — recording it
+    /// as `Rejected` would conflict with the documented terminal-state
+    /// semantic (`Rejected` means "never entered the book"). Only the
+    /// modification is rejected; the underlying order stays as-is.
+    #[inline]
+    pub(super) fn check_kill_switch(&self) -> Result<(), OrderBookError> {
+        if self.is_kill_switch_engaged() {
+            return Err(OrderBookError::KillSwitchActive);
+        }
+        Ok(())
+    }
+
     /// Create a new order book for the given symbol with tick size validation.
     ///
     /// Orders added to this book must have prices that are exact multiples
@@ -517,6 +608,7 @@ where
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
             engine_seq: AtomicU64::new(0),
+            kill_switch: AtomicBool::new(false),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -563,6 +655,7 @@ where
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
             engine_seq: AtomicU64::new(0),
+            kill_switch: AtomicBool::new(false),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -2351,6 +2444,7 @@ where
         package.min_order_size = self.min_order_size;
         package.max_order_size = self.max_order_size;
         package.engine_seq = self.engine_seq();
+        package.kill_switch_engaged = self.is_kill_switch_engaged();
         Ok(package)
     }
 
@@ -2363,8 +2457,15 @@ where
     ///
     /// This restores both the order data and the configuration fields
     /// (`fee_schedule`, `stp_mode`, `tick_size`, `lot_size`,
-    /// `min_order_size`, `max_order_size`) that were captured by
+    /// `min_order_size`, `max_order_size`, `engine_seq`,
+    /// `kill_switch_engaged`) that were captured by
     /// [`create_snapshot_package`](Self::create_snapshot_package).
+    ///
+    /// The kill-switch flag is operator-driven and not journaled by
+    /// the sequencer; it travels with snapshot packages only. Replay
+    /// (`ReplayEngine::replay_from*`) starts a fresh book with
+    /// `kill_switch_engaged = false`, and operators must engage it
+    /// explicitly post-replay if needed.
     pub fn restore_from_snapshot_package(
         &mut self,
         package: OrderBookSnapshotPackage,
@@ -2377,6 +2478,7 @@ where
         let min_order_size = package.min_order_size;
         let max_order_size = package.max_order_size;
         let engine_seq = package.engine_seq;
+        let kill_switch_engaged = package.kill_switch_engaged;
 
         self.restore_from_snapshot(package.into_snapshot()?)?;
 
@@ -2393,6 +2495,12 @@ where
         // exactly the snapshotted value, preserving cross-snapshot
         // monotonicity for downstream consumers.
         self.engine_seq.store(engine_seq, Ordering::Release);
+
+        // Restore the operational kill-switch flag so that a book
+        // recovered from disaster snapshot resumes in the same
+        // operational mode it was halted in.
+        self.kill_switch
+            .store(kill_switch_engaged, Ordering::Relaxed);
 
         Ok(())
     }

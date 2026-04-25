@@ -203,6 +203,19 @@ pub struct OrderBookSnapshotPackage {
     /// [`OrderBookSnapshotPackage::validate`].
     #[serde(default)]
     pub engine_seq: u64,
+
+    /// Operational state of the kill switch at the time of snapshot.
+    /// Restored as-is by
+    /// [`OrderBook::restore_from_snapshot_package`](super::book::OrderBook::restore_from_snapshot_package)
+    /// so disaster-recovered books resume in the same operational mode
+    /// they were halted in.
+    ///
+    /// `#[serde(default)]` keeps the format version at `2`: payloads
+    /// written before this field existed deserialize with `false`,
+    /// matching the previous (implicit) behaviour where a restored book
+    /// always came back disengaged.
+    #[serde(default)]
+    pub kill_switch_engaged: bool,
 }
 
 impl OrderBookSnapshotPackage {
@@ -223,6 +236,7 @@ impl OrderBookSnapshotPackage {
             min_order_size: None,
             max_order_size: None,
             engine_seq: 0,
+            kill_switch_engaged: false,
         })
     }
 

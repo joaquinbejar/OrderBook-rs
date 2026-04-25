@@ -42,6 +42,11 @@ pub enum OrderBookError {
         message: String,
     },
 
+    /// New flow (submit / modify / replace) is rejected because the
+    /// kill switch is engaged. Cancel and mass-cancel paths still
+    /// operate so operators can drain the book in an orderly way.
+    KillSwitchActive,
+
     /// Error while serializing snapshot data
     SerializationError {
         /// Underlying error message
@@ -150,6 +155,12 @@ impl fmt::Display for OrderBookError {
             }
             OrderBookError::InvalidOperation { message } => {
                 write!(f, "Invalid operation: {message}")
+            }
+            OrderBookError::KillSwitchActive => {
+                write!(
+                    f,
+                    "kill switch active: new order entry and modifications are halted"
+                )
             }
             OrderBookError::SerializationError { message } => {
                 write!(f, "Serialization error: {message}")
@@ -284,6 +295,7 @@ impl Clone for OrderBookError {
             OrderBookError::InvalidOperation { message } => OrderBookError::InvalidOperation {
                 message: message.clone(),
             },
+            OrderBookError::KillSwitchActive => OrderBookError::KillSwitchActive,
             OrderBookError::SerializationError { message } => OrderBookError::SerializationError {
                 message: message.clone(),
             },
