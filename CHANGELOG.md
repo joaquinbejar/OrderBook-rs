@@ -11,6 +11,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > below group changes by feature; everything ships in the same
 > 0.7.0 publish.
 
+### Added — feature-gated binary wire protocol (#59)
+
+- **New `wire` feature flag** in `Cargo.toml` plus an optional
+  dependency on `zerocopy = "0.8"` (with `derive`). Disabled by
+  default; the crate's existing JSON and bincode paths are
+  unchanged — the wire protocol is purely additive.
+- **Length-prefixed framing** — every frame on the wire is
+  `[len:u32 LE | kind:u8 | payload]`. `len` covers `kind + payload`
+  (it does NOT include the 4-byte `len` prefix itself). All
+  multi-byte integers are little-endian. Implementation in
+  `src/wire/framing.rs` with `encode_frame` / `decode_frame`.
+- **`MessageKind` enum** (`#[repr(u8)]`, `#[non_exhaustive]`) with
+  stable explicit discriminants documented as stable across
+  `0.7.x`:
+
+  | Code   | Direction | Message         | Payload size |
+  |--------|-----------|-----------------|-------------:|
+  | `0x01` | inbound   | `NewOrder`      | 48 B         |
+  | `0x02` | inbound   | `CancelOrder`   | 24 B         |
+  | `0x03` | inbound   | `CancelReplace` | 40 B         |
+  | `0x04` | inbound   | `MassCancel`    | 24 B         |
+  | `0x81` | outbound  | `ExecReport`    | 44 B         |
+  | `0x82` | outbound  | `TradePrint`    | 48 B         |
+  | `0x83` | outbound  | `BookUpdate`    | 32 B         |
+
+- **Inbound messages** are `#[repr(C, packed)]` and derive the
+  `zerocopy` traits (`FromBytes`, `IntoBytes`, `Unaligned`,
+  `Immutable`, `KnownLayout`). Decoding is safe — the crate keeps
+  `#![deny(unsafe_code)]` on the lib root. Each struct ships a
+  compile-time `const _: () = assert!(size_of::<…>() == N)` size
+  guard. Exposed: `NewOrderWire`, `CancelOrderWire`,
+  `CancelReplaceWire`, `MassCancelWire` and the matching
+  `decode_*` helpers.
+- **Outbound messages** use explicit byte-cursor encoders
+  (`Vec<u8>::extend_from_slice`) rather than packed structs.
+  Outbound is I/O-dominated so the cost of a few dozen bytes of
+  field-by-field copy is dwarfed by socket overhead, and the
+  layout is free to evolve. Exposed: `ExecReport` +
+  `encode_exec_report` + `status_to_wire`,
+  `TradePrintWire` + `encode_trade_print`,
+  `BookUpdateWire` + `encode_book_update`.
+- **Wire ↔ domain mapping** at the boundary —
+  `impl TryFrom<&NewOrderWire> for OrderType<()>` performs the
+  conversion, copies each packed field into a local first
+  (taking a reference to a packed field is undefined behaviour),
+  and returns `WireError::InvalidPayload` on unknown
+  side / TIF / order_type bytes or a negative price.
+- **Errors** routed through a manual-`Display`
+  `#[non_exhaustive] WireError` (no `thiserror`, matches the
+  crate's existing manual style for the wire surface): variants
+  `Truncated`, `UnknownKind(u8)`, `InvalidPayload(&'static str)`.
+- **`doc/wire-protocol.md`** with per-message offset / size /
+  field / type / notes tables, the `MessageKind` discriminant
+  table, the framing rule, and the LE-endianness statement.
+- **Round-trip `proptest` tests** in every
+  `src/wire/{inbound,outbound}/*.rs` module — encode through the
+  framer, decode back, assert byte-for-byte equality.
+- **Crate-root re-exports** under `#[cfg(feature = "wire")]` —
+  callers reach types via `orderbook_rs::wire::*`.
+- **Example** `examples/src/bin/wire_roundtrip.rs` (gated by
+  `required-features = ["wire"]`) — builds a `NewOrderWire`,
+  encodes it through the framer, decodes it back, converts to a
+  domain `OrderType<()>`, and prints every field via
+  `tracing::info!`.
+
 ### Added — HDR-histogram tail-latency bench suite (#56)
 
 - **Six new bench binaries** under `benches/order_book/*_hdr.rs` that

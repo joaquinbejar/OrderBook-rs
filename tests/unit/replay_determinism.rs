@@ -5,7 +5,10 @@
 
 #[cfg(feature = "journal")]
 mod replay_determinism {
-    use orderbook_rs::orderbook::sequencer::{InMemoryJournal, Journal, ReplayEngine, snapshots_match, SequencerCommand, SequencerEvent, SequencerResult};
+    use orderbook_rs::orderbook::sequencer::{
+        InMemoryJournal, Journal, ReplayEngine, SequencerCommand, SequencerEvent, SequencerResult,
+        snapshots_match,
+    };
     use pricelevel::{Hash32, Id, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs};
     use proptest::prelude::*;
 
@@ -59,7 +62,10 @@ mod replay_determinism {
         // Snapshots should match structurally (via snapshots_match oracle).
         let snap1 = book1.create_snapshot(usize::MAX);
         let snap2 = book2.create_snapshot(usize::MAX);
-        assert!(snapshots_match(&snap1, &snap2), "replayed snapshots should match");
+        assert!(
+            snapshots_match(&snap1, &snap2),
+            "replayed snapshots should match"
+        );
     }
 
     /// Proptest: random sequence of adds deterministically replays.
