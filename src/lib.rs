@@ -34,6 +34,41 @@
 //!
 //! ## What's New in Version 0.7.0
 //!
+//! ### v0.7.0 — Feature-gated binary wire protocol
+//!
+//! - **New `wire` feature flag** behind which a small,
+//!   length-prefixed binary protocol lives — every frame is
+//!   `[len:u32 LE | kind:u8 | payload]`, `len` covers
+//!   `kind + payload`, and all multi-byte integers are
+//!   little-endian. Disabled by default; the existing JSON and
+//!   bincode paths are unchanged. The protocol is additive.
+//! - **`MessageKind`** — `#[repr(u8)]` enum with stable explicit
+//!   discriminants. Inbound: `NewOrder = 0x01`,
+//!   `CancelOrder = 0x02`, `CancelReplace = 0x03`,
+//!   `MassCancel = 0x04`. Outbound: `ExecReport = 0x81`,
+//!   `TradePrint = 0x82`, `BookUpdate = 0x83`.
+//! - **Zero-copy inbound** — `NewOrderWire`, `CancelOrderWire`,
+//!   `CancelReplaceWire`, `MassCancelWire` are
+//!   `#[repr(C, packed)]` with `zerocopy::{FromBytes, IntoBytes,
+//!   Unaligned, Immutable, KnownLayout}` derives. Each ships a
+//!   `const _: () = assert!(size_of::<…>() == N)` guard. Decoding
+//!   is safe — `#![deny(unsafe_code)]` stays on.
+//! - **Byte-cursor outbound** — `ExecReport`, `TradePrintWire`,
+//!   `BookUpdateWire` are encoded via explicit
+//!   `extend_from_slice` calls. Outbound is I/O-dominated; this
+//!   keeps the layout free to evolve.
+//! - **`TryFrom<&NewOrderWire> for OrderType<()>`** — boundary
+//!   mapping that copies each packed field into a stack local
+//!   first (taking a reference to a packed field is UB), validates
+//!   the side / TIF / order_type discriminants, and rejects
+//!   negative prices via `WireError::InvalidPayload`.
+//! - **`doc/wire-protocol.md`** with per-message layout tables,
+//!   discriminant table, framing rule, and endianness statement.
+//! - **Round-trip `proptest` coverage** in every
+//!   `src/wire/{inbound,outbound}/*.rs` module.
+//! - Example: `examples/src/bin/wire_roundtrip.rs`
+//!   (`required-features = ["wire"]`).
+//!
 //! ### v0.7.0 — HDR-histogram tail-latency bench suite
 //!
 //! - **Six new `*_hdr` bench binaries** under
@@ -396,6 +431,19 @@ pub mod orderbook;
 
 pub mod prelude;
 mod utils;
+
+/// Feature-gated binary wire protocol.
+///
+/// Length-prefixed `[len:u32 LE | kind:u8 | payload]` framing with
+/// fixed-size, little-endian payloads. Inbound messages are
+/// `#[repr(C, packed)]` and decode via `zerocopy`; outbound messages
+/// use explicit byte-cursor encoders. See `doc/wire-protocol.md` for
+/// the canonical layout tables.
+///
+/// Enabled with `--features wire`. The protocol is additive — JSON and
+/// bincode paths are unchanged.
+#[cfg(feature = "wire")]
+pub mod wire;
 
 #[cfg(feature = "bincode")]
 pub use orderbook::BincodeEventSerializer;
