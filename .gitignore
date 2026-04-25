@@ -38,3 +38,4 @@ tmp_reply.json
 # Internal documentation (never commit)
 .internalDoc/
 /.windsurfrules
+.full_engine_diff.patch
