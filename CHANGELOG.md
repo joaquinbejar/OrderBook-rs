@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > below group changes by feature; everything ships in the same
 > 0.7.0 publish.
 
+### Added — HDR-histogram tail-latency bench suite (#56)
+
+- **Six new bench binaries** under `benches/order_book/*_hdr.rs` that
+  record per-sample latency into an `hdrhistogram::Histogram` and
+  emit `p50` / `p99` / `p99.9` / `p99.99` + min / max + sample count
+  to stdout. Scenarios: `add_only`, `cancel_only`,
+  `aggressive_walk`, `mixed_70_20_10`, `thin_book_sweep`,
+  `mass_cancel_burst`. Each is a `harness = false` binary that
+  coexists with the existing Criterion benches.
+- **Shared helpers** in `benches/order_book/hdr_common.rs`
+  (`new_histogram`, `record`, `report`, `persist`) and a
+  self-contained xorshift PRNG so the bench tree pulls no extra
+  runtime dependency beyond `hdrhistogram`.
+- **`hdrhistogram` ^7** as a dev-dependency.
+- **`make bench-hdr`** target — runs all six scenarios in series.
+- **`BENCH.md`** at repo root with methodology (warmup, closed-loop
+  vs open-loop disclosure), reproducibility steps, run conditions
+  block, and an honest table of the headline numbers from a single
+  M4 Max run plus a one-paragraph "where the tail comes from"
+  paragraph per scenario. Format-version stays at `2`.
+- Raw histograms persist to `target/bench-hdr/<scenario>.hgrm` (V2
+  HDR format, gitignored under `target/`).
+
+### Notes — HDR bench
+
+- **Closed-loop service time only.** The driver waits for each call
+  before issuing the next — tail latencies under saturation will be
+  worse than what these numbers report. Used as a regression signal
+  and a lower-bound on production tail, not as a published SLO.
+  Open-loop measurement is a follow-up.
+- The Criterion benches under `benches/order_book/` (`add_orders.rs`,
+  `match_orders.rs`, etc.) are unchanged.
+
 ### Added — closed `RejectReason` enum (#55)
 
 - **New `RejectReason`** closed `#[non_exhaustive] #[repr(u16)]` enum

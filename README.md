@@ -48,6 +48,20 @@ This order book engine is built with the following design principles:
 
 ### What's New in Version 0.7.0
 
+#### v0.7.0 — HDR-histogram tail-latency bench suite
+
+- **Six new `*_hdr` bench binaries** under
+  `benches/order_book/`: `add_only`, `cancel_only`,
+  `aggressive_walk`, `mixed_70_20_10`, `thin_book_sweep`,
+  `mass_cancel_burst`. Each records per-sample nanosecond
+  latencies into an `hdrhistogram::Histogram` and emits
+  `p50` / `p99` / `p99.9` / `p99.99` + `min` / `max`. Coexists
+  with the existing Criterion benches.
+- **`make bench-hdr`** convenience target.
+- **Headline numbers + methodology** in `BENCH.md` at the repo
+  root, with a closed-loop disclosure block (the suite measures
+  service time, not load-induced tail).
+
 #### v0.7.0 — Closed `RejectReason` enum
 
 - **New [`RejectReason`]** — closed
