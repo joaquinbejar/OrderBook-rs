@@ -102,7 +102,8 @@
 //!   `#[repr(C, packed)]` with `zerocopy::{FromBytes, IntoBytes,
 //!   Unaligned, Immutable, KnownLayout}` derives. Each ships a
 //!   `const _: () = assert!(size_of::<…>() == N)` guard. Decoding
-//!   is safe — `#![deny(unsafe_code)]` stays on.
+//!   is safe — `zerocopy` performs the layout validation, no
+//!   `unsafe` is required at any wire call site.
 //! - **Byte-cursor outbound** — `ExecReport`, `TradePrintWire`,
 //!   `BookUpdateWire` are encoded via explicit
 //!   `extend_from_slice` calls. Outbound is I/O-dominated; this

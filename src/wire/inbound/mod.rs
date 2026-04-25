@@ -5,8 +5,17 @@
 //! reference without copying. The decoder helpers (`decode_*`) verify the
 //! payload length and return an owned, packed copy of the wire struct.
 //!
-//! All fields are little-endian primitives. See `doc/wire-protocol.md` for
-//! the canonical layout tables.
+//! All fields are little-endian primitives — the packed struct memory
+//! layout matches the on-wire byte order only on little-endian targets.
+//! See `doc/wire-protocol.md` for the canonical layout tables.
+
+#[cfg(target_endian = "big")]
+compile_error!(
+    "feature `wire` requires a little-endian target; the inbound zerocopy \
+     structs are interpreted directly from protocol bytes and would decode \
+     incorrectly on big-endian platforms. Use endian-aware field types \
+     before enabling this feature on big-endian hosts."
+);
 
 pub mod cancel;
 pub mod cancel_replace;

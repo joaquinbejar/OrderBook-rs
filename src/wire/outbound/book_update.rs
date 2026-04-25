@@ -83,8 +83,17 @@ pub fn decode_book_update(payload: &[u8]) -> Result<BookUpdateWire, WireError> {
 
     let engine_seq = read_u64(0)?;
     let side = *payload.get(8).ok_or(WireError::Truncated)?;
+    if side != SIDE_BUY && side != SIDE_SELL {
+        return Err(WireError::InvalidPayload("BookUpdate: unknown side"));
+    }
     let price = read_i64(9)?;
     let qty = read_u64(17)?;
+    let pad = payload.get(25..32).ok_or(WireError::Truncated)?;
+    if pad.iter().any(|&byte| byte != 0) {
+        return Err(WireError::InvalidPayload(
+            "BookUpdate: non-zero reserved padding",
+        ));
+    }
     Ok(BookUpdateWire {
         engine_seq,
         side,

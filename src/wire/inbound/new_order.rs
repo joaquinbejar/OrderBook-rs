@@ -105,7 +105,13 @@ impl TryFrom<&NewOrderWire> for OrderType<()> {
         let side_byte = { value.side };
         let tif_byte = { value.time_in_force };
         let kind_byte = { value.order_type };
+        let pad = { value._pad };
 
+        if pad.iter().any(|&byte| byte != 0) {
+            return Err(WireError::InvalidPayload(
+                "NewOrder: non-zero reserved padding",
+            ));
+        }
         if price_raw < 0 {
             return Err(WireError::InvalidPayload("NewOrder: negative price"));
         }
@@ -130,7 +136,7 @@ impl TryFrom<&NewOrderWire> for OrderType<()> {
             ));
         }
 
-        // Encode the numeric account_id into the high 8 bytes of a Hash32 so
+        // Encode the numeric account_id into the low 8 bytes of a Hash32 so
         // it is preserved across the wire/domain boundary without colliding
         // with `Hash32::zero()` (which is the "no STP" sentinel).
         let mut user_bytes = [0u8; 32];

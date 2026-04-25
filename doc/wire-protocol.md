@@ -51,8 +51,8 @@ occupy the high half (`0x80..=0xFF`). Code `0x00` is reserved as a
 Inbound messages are `#[repr(C, packed)]` and derive
 `zerocopy::{FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout}`,
 so the gateway can validate-and-cast `&[u8]` into a typed reference
-without copying. Decoding is safe — the crate has
-`#![deny(unsafe_code)]` on the lib root.
+without copying. Decoding is safe — `zerocopy` performs the layout
+validation, no `unsafe` is required at any wire call site.
 
 ### `NewOrder` (`0x01`) — 48 B
 
@@ -70,7 +70,7 @@ without copying. Decoding is safe — the crate has
 | **48** |      | **total**       |      |                                      |
 
 `TryFrom<&NewOrderWire> for OrderType<()>` performs the wire → domain
-conversion. `account_id` is encoded into the high 8 bytes of the
+conversion. `account_id` is encoded into the low 8 bytes of the
 domain `Hash32` `user_id` so the field round-trips across the
 boundary; gateways performing STP must use a non-zero `account_id`.
 
@@ -171,11 +171,14 @@ the wire code.
 
 ## Endianness
 
-All multi-byte integers are little-endian. The packed struct memory
-layout matches the on-wire byte order on every supported target
-(little-endian only). Consumers on big-endian hosts must explicitly
-byte-swap when reading the integers — the `decode_*` helpers in this
-crate handle that for you.
+All multi-byte integers are little-endian. The packed inbound structs
+use native-endian primitives, so their memory layout matches the
+on-wire byte order only on little-endian targets — accordingly,
+`feature = "wire"` is currently restricted to little-endian platforms
+via a `compile_error!` in `src/wire/inbound/mod.rs`. Big-endian
+support would require switching the packed inbound fields to
+endian-aware types (e.g. `zerocopy::little_endian::*`) and is not
+implemented in `0.7.x`.
 
 ## Round-trip tests
 

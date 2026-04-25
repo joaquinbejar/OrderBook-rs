@@ -55,16 +55,41 @@ impl MassCancelWire {
 /// # Errors
 ///
 /// Returns [`WireError::InvalidPayload`] when the buffer length differs from
-/// 24 bytes, or when the `scope` byte is outside the documented range.
+/// 24 bytes, when the `scope` byte is outside the documented range, or when
+/// reserved padding bits are non-zero (for `BySide` only the low bit of
+/// `_pad[0]` is allowed).
 #[inline]
 pub fn decode_mass_cancel(payload: &[u8]) -> Result<MassCancelWire, WireError> {
     let view = MassCancelWire::ref_from_bytes(payload)
         .map_err(|_| WireError::InvalidPayload("MassCancel: payload size mismatch"))?;
     let scope = { view.scope };
+    let pad = { view._pad };
     match scope {
-        SCOPE_ALL | SCOPE_BY_ACCOUNT | SCOPE_BY_SIDE => Ok(*view),
-        _ => Err(WireError::InvalidPayload("MassCancel: unknown scope")),
+        SCOPE_ALL | SCOPE_BY_ACCOUNT => {
+            if pad.iter().any(|&byte| byte != 0) {
+                return Err(WireError::InvalidPayload(
+                    "MassCancel: non-zero reserved padding",
+                ));
+            }
+        }
+        SCOPE_BY_SIDE => {
+            // Only the low bit of `_pad[0]` carries the side; every other
+            // padding bit must be zero.
+            let head = *pad.first().ok_or(WireError::Truncated)?;
+            if head & !1 != 0 {
+                return Err(WireError::InvalidPayload(
+                    "MassCancel: reserved bits set in BySide pad[0]",
+                ));
+            }
+            if pad.iter().skip(1).any(|&byte| byte != 0) {
+                return Err(WireError::InvalidPayload(
+                    "MassCancel: non-zero reserved padding",
+                ));
+            }
+        }
+        _ => return Err(WireError::InvalidPayload("MassCancel: unknown scope")),
     }
+    Ok(*view)
 }
 
 #[cfg(test)]

@@ -31,20 +31,26 @@ const MIN_FRAME_SIZE: usize = LEN_PREFIX + KIND_SIZE;
 ///
 /// # Errors
 ///
-/// Propagates any [`io::Error`] returned by the underlying writer.
+/// Propagates any [`io::Error`] returned by the underlying writer, and
+/// returns [`io::ErrorKind::InvalidInput`] when `kind + payload` does not
+/// fit in the wire-format `u32` length prefix — guarantees the declared
+/// frame length always matches the bytes written.
 ///
 /// # Panics
 ///
-/// Does not panic. Payloads larger than `u32::MAX - 1` bytes are not
-/// representable on this wire and would saturate to `u32::MAX`; in practice
-/// no message in this protocol is anywhere near that size, so this case is
-/// not validated at the framer level. Callers building unbounded payloads
-/// should guard before calling.
+/// Does not panic.
 #[inline]
 pub fn encode_frame<W: Write>(kind: u8, payload: &[u8], out: &mut W) -> io::Result<()> {
-    // `len` is the size of `kind + payload`. `KIND_SIZE` is a `u8`, so the
-    // total fits in `u32` for any payload up to `u32::MAX - 1` bytes.
-    let body_len = u32::try_from(payload.len().saturating_add(KIND_SIZE)).unwrap_or(u32::MAX);
+    // `len` is the size of `kind + payload`. Reject payloads whose encoded
+    // body length cannot be represented in the wire-format `u32` prefix so we
+    // never emit a frame whose declared length disagrees with the bytes
+    // written.
+    let body_len_usize = payload
+        .len()
+        .checked_add(KIND_SIZE)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "frame payload too large"))?;
+    let body_len = u32::try_from(body_len_usize)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "frame payload too large"))?;
     out.write_all(&body_len.to_le_bytes())?;
     out.write_all(&[kind])?;
     out.write_all(payload)?;

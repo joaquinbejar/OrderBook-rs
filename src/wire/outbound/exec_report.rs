@@ -128,11 +128,19 @@ pub fn decode_exec_report(payload: &[u8]) -> Result<ExecReport, WireError> {
     let engine_seq = read_u64(0)?;
     let order_id = read_u64(8)?;
     let status = *payload.get(16).ok_or(WireError::Truncated)?;
+    if status > STATUS_REJECTED {
+        return Err(WireError::InvalidPayload("ExecReport: unknown status"));
+    }
     let filled_qty = read_u64(17)?;
     let remaining_qty = read_u64(25)?;
     let price = read_i64(33)?;
     let reject_reason = read_u16(41)?;
     let pad = *payload.get(43).ok_or(WireError::Truncated)?;
+    if pad != 0 {
+        return Err(WireError::InvalidPayload(
+            "ExecReport: non-zero reserved padding",
+        ));
+    }
     Ok(ExecReport {
         engine_seq,
         order_id,
