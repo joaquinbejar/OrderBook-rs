@@ -234,12 +234,18 @@ where
     ///
     /// This convenience method bypasses STP (uses `Hash32::zero()`).
     /// Use [`Self::submit_market_order_with_user`] when STP is needed.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
+    /// is engaged. The check happens at the top of the function before
+    /// any matching, fee, or STP work.
     pub fn submit_market_order(
         &self,
         id: Id,
         quantity: u64,
         side: Side,
     ) -> Result<MatchResult, OrderBookError> {
+        self.check_kill_switch_or_reject(id)?;
         trace!("Submitting market order {} {} {}", id, quantity, side);
         OrderBook::<T>::match_market_order(self, id, quantity, side)
     }
@@ -258,7 +264,10 @@ where
     ///
     /// # Errors
     /// Returns [`OrderBookError::SelfTradePrevented`] when STP cancels the
-    /// taker before any fills occur.
+    /// taker before any fills occur. Returns
+    /// [`OrderBookError::KillSwitchActive`] when the kill switch is
+    /// engaged; the check happens at the top of the function before any
+    /// matching, fee, or STP work.
     pub fn submit_market_order_with_user(
         &self,
         id: Id,
@@ -266,6 +275,7 @@ where
         side: Side,
         user_id: Hash32,
     ) -> Result<MatchResult, OrderBookError> {
+        self.check_kill_switch_or_reject(id)?;
         trace!(
             "Submitting market order {} {} {} (user: {})",
             id, quantity, side, user_id

@@ -518,11 +518,7 @@ where
     /// construction); on the cold rejection path the tracker reason
     /// string is constructed via `to_string`.
     #[inline]
-    #[allow(dead_code)]
-    pub(super) fn check_kill_switch_or_reject(
-        &self,
-        order_id: Id,
-    ) -> Result<(), OrderBookError> {
+    pub(super) fn check_kill_switch_or_reject(&self, order_id: Id) -> Result<(), OrderBookError> {
         if self.is_kill_switch_engaged() {
             self.track_state(
                 order_id,

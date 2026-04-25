@@ -7,6 +7,7 @@ mod engine_seq_monotonic_tests;
 mod filejournal_edge_case_tests;
 mod implied_volatility_tests;
 mod integration_workflow_tests;
+mod kill_switch_tests;
 mod manager_coverage_tests;
 mod mass_cancel_tests;
 mod matching_coverage_tests;

@@ -118,10 +118,29 @@ where
     T: Clone + Send + Sync + Default + 'static,
 {
     /// Update an order's price and/or quantity
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
+    /// is engaged and the update is anything other than
+    /// [`OrderUpdate::Cancel`]. Cancels are explicitly allowed so that
+    /// operators can drain resting orders while new flow is halted.
     pub fn update_order(
         &self,
         update: OrderUpdate,
     ) -> Result<Option<Arc<OrderType<T>>>, OrderBookError> {
+        // Gate non-cancel variants on the kill switch. Cancel passes
+        // through unchanged so operators can drain the book.
+        let gated_id = match &update {
+            OrderUpdate::Cancel { .. } => None,
+            OrderUpdate::UpdatePrice { order_id, .. }
+            | OrderUpdate::UpdateQuantity { order_id, .. }
+            | OrderUpdate::UpdatePriceAndQuantity { order_id, .. }
+            | OrderUpdate::Replace { order_id, .. } => Some(*order_id),
+        };
+        if let Some(id) = gated_id {
+            self.check_kill_switch_or_reject(id)?;
+        }
+
         self.cache.invalidate();
         trace!("Order book {}: Updating order {:?}", self.symbol, update);
         match update {
@@ -554,7 +573,13 @@ where
     }
 
     /// Add a new order to the book, automatically matching it if it's aggressive.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
+    /// is engaged. The check runs before any cache invalidation, STP
+    /// validation, tick/lot validation, or matching work.
     pub fn add_order(&self, mut order: OrderType<T>) -> Result<Arc<OrderType<T>>, OrderBookError> {
+        self.check_kill_switch_or_reject(order.id())?;
         self.cache.invalidate();
 
         trace!(
