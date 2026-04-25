@@ -70,6 +70,10 @@ where
         // Track the order in the user_orders index for efficient user-based cancellation
         self.track_user_order(order.user_id(), order_id);
 
+        // Refresh the operational depth gauges. No-op when the
+        // `metrics` feature is disabled.
+        self.record_depth_metric();
+
         Ok(order)
     }
 

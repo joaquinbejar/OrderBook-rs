@@ -489,6 +489,19 @@ where
         self.engine_seq.load(Ordering::Acquire)
     }
 
+    /// Refresh the operational depth gauges with the current count
+    /// of distinct bid / ask price levels.
+    ///
+    /// Compiles to a no-op when the `metrics` feature is disabled —
+    /// see [`super::metrics::record_depth`]. Hooked from every
+    /// structural mutation site so the published gauge tracks the
+    /// book's true level count without affecting matching latency on
+    /// the happy path.
+    #[inline]
+    pub(super) fn record_depth_metric(&self) {
+        super::metrics::record_depth(self.bids.len() as u64, self.asks.len() as u64);
+    }
+
     /// Engage the kill switch. While engaged, every public `submit_*`,
     /// `add_order`, and non-cancel `update_order` call returns
     /// [`OrderBookError::KillSwitchActive`] before any matching, fee,
@@ -2380,17 +2393,22 @@ where
         let match_result =
             OrderBook::<T>::match_order_with_user(self, order_id, side, quantity, None, user_id)?;
 
-        // Trigger trade listener if there are transactions
-        if !match_result.trades().as_vec().is_empty()
-            && let Some(ref listener) = self.trade_listener
-        {
-            let mut trade_result = TradeResult::with_fees(
-                self.symbol.clone(),
-                match_result.clone(),
-                self.fee_schedule,
-            );
-            trade_result.engine_seq = self.next_engine_seq();
-            listener(&trade_result);
+        // Emit trade-count metric and trigger trade listener if any
+        // transactions printed. The metric is independent of whether
+        // a listener is configured; the listener emission still gates
+        // on `Some(ref listener)`.
+        let trades_emitted = match_result.trades().as_vec().len() as u64;
+        if trades_emitted > 0 {
+            super::metrics::record_trades(trades_emitted);
+            if let Some(ref listener) = self.trade_listener {
+                let mut trade_result = TradeResult::with_fees(
+                    self.symbol.clone(),
+                    match_result.clone(),
+                    self.fee_schedule,
+                );
+                trade_result.engine_seq = self.next_engine_seq();
+                listener(&trade_result);
+            }
         }
 
         Ok(match_result)
@@ -2456,17 +2474,22 @@ where
             user_id,
         )?;
 
-        // Trigger trade listener if there are transactions
-        if !match_result.trades().as_vec().is_empty()
-            && let Some(ref listener) = self.trade_listener
-        {
-            let mut trade_result = TradeResult::with_fees(
-                self.symbol.clone(),
-                match_result.clone(),
-                self.fee_schedule,
-            );
-            trade_result.engine_seq = self.next_engine_seq();
-            listener(&trade_result);
+        // Emit trade-count metric and trigger trade listener if any
+        // transactions printed. The metric is independent of whether
+        // a listener is configured; the listener emission still gates
+        // on `Some(ref listener)`.
+        let trades_emitted = match_result.trades().as_vec().len() as u64;
+        if trades_emitted > 0 {
+            super::metrics::record_trades(trades_emitted);
+            if let Some(ref listener) = self.trade_listener {
+                let mut trade_result = TradeResult::with_fees(
+                    self.symbol.clone(),
+                    match_result.clone(),
+                    self.fee_schedule,
+                );
+                trade_result.engine_seq = self.next_engine_seq();
+                listener(&trade_result);
+            }
         }
 
         Ok(match_result)
