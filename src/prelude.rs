@@ -53,6 +53,9 @@ pub use crate::orderbook::order_state::{
     CancelReason, OrderStateListener, OrderStateTracker, OrderStatus,
 };
 
+// Pre-trade risk layer types
+pub use crate::orderbook::risk::{ReferencePriceSource, RiskConfig, RiskState};
+
 // Event serialization types
 #[cfg(feature = "bincode")]
 pub use crate::orderbook::serialization::BincodeEventSerializer;

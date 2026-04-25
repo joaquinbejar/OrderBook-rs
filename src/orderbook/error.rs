@@ -1,6 +1,6 @@
 //! Order book error types
 
-use pricelevel::{PriceLevelError, Side};
+use pricelevel::{Hash32, PriceLevelError, Side};
 use std::fmt;
 
 /// Errors that can occur within the OrderBook
@@ -112,6 +112,53 @@ pub enum OrderBookError {
         user_id: pricelevel::Hash32,
     },
 
+    /// Per-account open-order limit breached.
+    ///
+    /// Returned by limit-order admission when the requesting account
+    /// already has `current` resting orders and the configured ceiling
+    /// is `limit`. `current >= limit` always holds when this variant
+    /// is constructed.
+    RiskMaxOpenOrders {
+        /// Account that breached the limit.
+        account: Hash32,
+        /// Account's current resting-order count at check time.
+        current: u64,
+        /// Configured maximum.
+        limit: u64,
+    },
+
+    /// Per-account notional limit would be breached by this admission.
+    ///
+    /// `current + attempted > limit` always holds when this variant
+    /// is constructed. `attempted` is computed as
+    /// `submitted_quantity * submitted_price`.
+    RiskMaxNotional {
+        /// Account that breached the limit.
+        account: Hash32,
+        /// Account's current resting notional at check time (raw ticks).
+        current: u128,
+        /// Notional this submission would add (raw ticks).
+        attempted: u128,
+        /// Configured maximum (raw ticks).
+        limit: u128,
+    },
+
+    /// Submitted price exceeds the configured price band against the
+    /// reference price.
+    ///
+    /// `deviation_bps > limit_bps` always holds when this variant is
+    /// constructed.
+    RiskPriceBand {
+        /// Limit price submitted by the caller (raw ticks).
+        submitted: u128,
+        /// Resolved reference price at check time (raw ticks).
+        reference: u128,
+        /// Computed deviation in basis points. Saturates at `u32::MAX`.
+        deviation_bps: u32,
+        /// Configured maximum allowed deviation in basis points.
+        limit_bps: u32,
+    },
+
     /// Failed to publish a trade event to NATS JetStream.
     #[cfg(feature = "nats")]
     NatsPublishError {
@@ -206,6 +253,38 @@ impl fmt::Display for OrderBookError {
                 write!(
                     f,
                     "self-trade prevented ({mode}): taker {taker_order_id}, user {user_id}"
+                )
+            }
+            OrderBookError::RiskMaxOpenOrders {
+                account,
+                current,
+                limit,
+            } => {
+                write!(
+                    f,
+                    "risk: account {account} has {current} open orders (limit {limit})"
+                )
+            }
+            OrderBookError::RiskMaxNotional {
+                account,
+                current,
+                attempted,
+                limit,
+            } => {
+                write!(
+                    f,
+                    "risk: account {account} notional {current} + attempted {attempted} would exceed limit {limit}"
+                )
+            }
+            OrderBookError::RiskPriceBand {
+                submitted,
+                reference,
+                deviation_bps,
+                limit_bps,
+            } => {
+                write!(
+                    f,
+                    "risk: submitted price {submitted} deviates {deviation_bps} bps from reference {reference} (limit {limit_bps} bps)"
                 )
             }
             #[cfg(feature = "nats")]
@@ -340,6 +419,37 @@ impl Clone for OrderBookError {
                 mode: *mode,
                 taker_order_id: *taker_order_id,
                 user_id: *user_id,
+            },
+            OrderBookError::RiskMaxOpenOrders {
+                account,
+                current,
+                limit,
+            } => OrderBookError::RiskMaxOpenOrders {
+                account: *account,
+                current: *current,
+                limit: *limit,
+            },
+            OrderBookError::RiskMaxNotional {
+                account,
+                current,
+                attempted,
+                limit,
+            } => OrderBookError::RiskMaxNotional {
+                account: *account,
+                current: *current,
+                attempted: *attempted,
+                limit: *limit,
+            },
+            OrderBookError::RiskPriceBand {
+                submitted,
+                reference,
+                deviation_bps,
+                limit_bps,
+            } => OrderBookError::RiskPriceBand {
+                submitted: *submitted,
+                reference: *reference,
+                deviation_bps: *deviation_bps,
+                limit_bps: *limit_bps,
             },
             #[cfg(feature = "nats")]
             OrderBookError::NatsPublishError { message } => OrderBookError::NatsPublishError {
