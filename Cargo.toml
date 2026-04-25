@@ -55,6 +55,7 @@ special_orders = []
 nats = ["dep:async-nats", "dep:bytes"]
 bincode = ["dep:bincode"]
 journal = ["dep:crc32fast", "dep:memmap2"]
+alloc-counters = []
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -98,9 +99,20 @@ name = "mass_cancel_burst_hdr"
 path = "benches/order_book/mass_cancel_burst_hdr.rs"
 harness = false
 
+[[bench]]
+name = "alloc_count"
+path = "benches/order_book/alloc_count.rs"
+harness = false
+required-features = ["alloc-counters"]
+
 [[test]]
 name = "tests"
 path = "tests/unit/mod.rs"
+
+[[test]]
+name = "alloc_budget"
+path = "tests/alloc_budget.rs"
+required-features = ["alloc-counters"]
 
 
 [lib]

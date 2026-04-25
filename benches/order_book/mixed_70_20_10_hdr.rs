@@ -20,10 +20,13 @@ enum Op {
 }
 
 fn pick_op(rng: &mut Rng) -> Op {
-    match rng.next() % 100 {
-        0..70 => Op::Submit,
-        70..90 => Op::Cancel,
-        _ => Op::Aggressive,
+    let v = rng.next() % 100;
+    if v < 70 {
+        Op::Submit
+    } else if v < 90 {
+        Op::Cancel
+    } else {
+        Op::Aggressive
     }
 }
 
