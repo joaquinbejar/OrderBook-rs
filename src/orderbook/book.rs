@@ -6,6 +6,7 @@ use super::error::OrderBookError;
 use super::fees::FeeSchedule;
 use super::iterators::{LevelInfo, LevelsInRange, LevelsUntilDepth, LevelsWithCumulativeDepth};
 use super::market_impact::{MarketImpact, OrderSimulation};
+use super::risk::{ReferencePriceSource, RiskConfig, RiskState};
 use super::snapshot::{EnrichedSnapshot, MetricFlags, OrderBookSnapshot, OrderBookSnapshotPackage};
 use super::statistics::{DepthStats, DistributionBin};
 use crate::orderbook::book_change_event::PriceLevelChangedListener;
@@ -92,6 +93,15 @@ pub struct OrderBook<T = ()> {
     /// Persisted across snapshot/restore via
     /// [`OrderBookSnapshotPackage::kill_switch_engaged`](super::snapshot::OrderBookSnapshotPackage::kill_switch_engaged).
     pub(super) kill_switch: AtomicBool,
+
+    /// Pre-trade risk state: optional [`RiskConfig`] plus per-account
+    /// counters and per-order entries. When the embedded config is
+    /// `None` (default), every check is a passthrough and every hook
+    /// is a no-op. Always present so that [`Self::set_risk_config`]
+    /// can engage the gates without constructor changes. The config
+    /// is persisted across snapshot/restore; counters are rebuilt
+    /// post-restore by walking the snapshot's resting orders.
+    pub(super) risk_state: RiskState,
 
     /// The last price at which a trade occurred
     pub(super) last_trade_price: AtomicCell<u128>,
@@ -417,6 +427,7 @@ where
             next_order_id: AtomicU64::new(1),
             engine_seq: AtomicU64::new(0),
             kill_switch: AtomicBool::new(false),
+            risk_state: RiskState::new(),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -559,6 +570,78 @@ where
         Ok(())
     }
 
+    /// Install or replace the active risk configuration on this book.
+    ///
+    /// Counters and per-order risk state are preserved so that history
+    /// from a previously-installed config remains consistent. Pass an
+    /// empty [`RiskConfig`] (built via [`RiskConfig::new`]) to leave
+    /// every gate disabled while keeping counters live for inspection.
+    ///
+    /// Risk gates run in the documented order
+    /// `kill_switch → risk → STP → fees → match`, before any matching,
+    /// fee, or STP work happens.
+    pub fn set_risk_config(&mut self, config: RiskConfig) {
+        self.risk_state.set_config(config);
+    }
+
+    /// Read-only access to the active risk configuration, if any.
+    #[inline]
+    #[must_use]
+    pub fn risk_config(&self) -> Option<&RiskConfig> {
+        self.risk_state.config()
+    }
+
+    /// Drop the active risk configuration. Counters and per-order risk
+    /// state are retained so a subsequent [`Self::set_risk_config`]
+    /// re-engages the gates without dropping history.
+    pub fn disable_risk(&mut self) {
+        self.risk_state.disable();
+    }
+
+    /// Resolve the reference price for the price-band check.
+    ///
+    /// `LastTrade` reads the atomic `last_trade_price` and returns
+    /// `None` when no trade has executed yet on this book. `Mid`
+    /// returns the integer midpoint of the best bid and ask when both
+    /// are present; otherwise it falls back to `LastTrade`.
+    /// `FixedPrice` always returns the operator-pinned value.
+    #[inline]
+    #[must_use]
+    pub(super) fn resolve_reference_price(&self, source: ReferencePriceSource) -> Option<u128> {
+        match source {
+            ReferencePriceSource::LastTrade => self.last_trade_price(),
+            ReferencePriceSource::Mid => match (self.best_bid(), self.best_ask()) {
+                (Some(bid), Some(ask)) => Some((bid + ask) / 2),
+                _ => self.last_trade_price(),
+            },
+            ReferencePriceSource::FixedPrice(p) => Some(p),
+        }
+    }
+
+    /// Apply the pre-trade risk gates to a limit-order admission.
+    ///
+    /// Returns `Ok(())` immediately when no risk config is installed.
+    /// Otherwise resolves the reference price (when the price band is
+    /// configured) and delegates to
+    /// [`RiskState::check_limit_admission`]. Allocation-free on the
+    /// happy path; cold rejection allocates one error variant.
+    #[inline]
+    pub(super) fn check_risk_limit_admission(
+        &self,
+        account: pricelevel::Hash32,
+        price: u128,
+        quantity: u64,
+    ) -> Result<(), OrderBookError> {
+        let Some(cfg) = self.risk_state.config() else {
+            return Ok(());
+        };
+        let reference = cfg
+            .reference_price
+            .and_then(|src| self.resolve_reference_price(src));
+        self.risk_state
+            .check_limit_admission(account, price, quantity, reference)
+    }
+
     /// Create a new order book for the given symbol with tick size validation.
     ///
     /// Orders added to this book must have prices that are exact multiples
@@ -609,6 +692,7 @@ where
             next_order_id: AtomicU64::new(1),
             engine_seq: AtomicU64::new(0),
             kill_switch: AtomicBool::new(false),
+            risk_state: RiskState::new(),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -656,6 +740,7 @@ where
             next_order_id: AtomicU64::new(1),
             engine_seq: AtomicU64::new(0),
             kill_switch: AtomicBool::new(false),
+            risk_state: RiskState::new(),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -2445,6 +2530,7 @@ where
         package.max_order_size = self.max_order_size;
         package.engine_seq = self.engine_seq();
         package.kill_switch_engaged = self.is_kill_switch_engaged();
+        package.risk_config = self.risk_state.config().cloned();
         Ok(package)
     }
 
@@ -2479,8 +2565,30 @@ where
         let max_order_size = package.max_order_size;
         let engine_seq = package.engine_seq;
         let kill_switch_engaged = package.kill_switch_engaged;
+        let risk_config = package.risk_config.clone();
 
-        self.restore_from_snapshot(package.into_snapshot()?)?;
+        // Take ownership of the validated snapshot. We hold it locally
+        // so that the per-account risk counters can be rebuilt from
+        // `snapshot.bids` / `snapshot.asks` before
+        // `restore_from_snapshot` consumes the snapshot's level vectors.
+        let snapshot = package.into_snapshot()?;
+
+        // Preserve the persisted risk-installation state exactly:
+        // install + rebuild only when a config was snapshotted,
+        // otherwise explicitly disable risk so a `risk_config()` call
+        // post-restore returns `None` rather than `Some(empty)`. The
+        // rebuild walks the snapshot's resting orders before
+        // `restore_from_snapshot` consumes the snapshot so we avoid
+        // cloning all level snapshots.
+        if let Some(risk_config) = risk_config {
+            self.risk_state.set_config(risk_config);
+            self.risk_state
+                .rebuild_from_snapshot(&snapshot.bids, &snapshot.asks);
+        } else {
+            self.risk_state.disable();
+        }
+
+        self.restore_from_snapshot(snapshot)?;
 
         // Apply configuration that was captured in the package.
         self.fee_schedule = fee_schedule;

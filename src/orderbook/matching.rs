@@ -7,6 +7,7 @@
 use crate::orderbook::book_change_event::PriceLevelChangedEvent;
 use crate::orderbook::order_state::{CancelReason, OrderStatus};
 use crate::orderbook::pool::MatchingPool;
+use crate::orderbook::risk::RiskState;
 use crate::orderbook::stp::{STPAction, check_stp_at_level};
 use crate::{OrderBook, OrderBookError};
 use either::Either;
@@ -165,6 +166,7 @@ where
                                 &self.has_traded,
                                 &self.price_level_changed_listener,
                                 &self.engine_seq,
+                                &self.risk_state,
                                 &mut empty_price_levels,
                             );
                             // Correct remaining: process_level_match set it to
@@ -226,6 +228,7 @@ where
                                 &self.has_traded,
                                 &self.price_level_changed_listener,
                                 &self.engine_seq,
+                                &self.risk_state,
                                 &mut empty_price_levels,
                             );
                             // Correct remaining: process_level_match set it to
@@ -272,6 +275,7 @@ where
                 &self.has_traded,
                 &self.price_level_changed_listener,
                 &self.engine_seq,
+                &self.risk_state,
                 &mut empty_price_levels,
             );
 
@@ -337,6 +341,11 @@ where
     ///
     /// Extracted to avoid code duplication between the normal path and
     /// the STP safe-quantity pre-match path.
+    ///
+    /// `risk_state` is threaded through so each emitted trade decrements
+    /// the maker's per-account `resting_notional` (and `open_count` on
+    /// full fill). The hook is a no-op when no `RiskConfig` is installed,
+    /// matching the rest of the risk plumbing.
     #[allow(clippy::too_many_arguments)]
     fn process_level_match(
         match_result: &mut MatchResult,
@@ -352,6 +361,7 @@ where
             crate::orderbook::book_change_event::PriceLevelChangedListener,
         >,
         engine_seq_counter: &AtomicU64,
+        risk_state: &RiskState,
         empty_price_levels: &mut Vec<u128>,
     ) {
         // Process trades if any occurred
@@ -360,11 +370,17 @@ where
             last_trade_price.store(price);
             has_traded.store(true, Ordering::Relaxed);
 
-            // Add trades to result
+            // Add trades to result and update per-account risk counters
+            // for the maker side of every trade.
             for trade in price_level_match.trades().as_vec() {
                 // add_trade returns Result in v0.7; ignore error since
                 // pricelevel already validated the quantities during matching
                 let _ = match_result.add_trade(*trade);
+                risk_state.on_fill(
+                    trade.maker_order_id(),
+                    trade.quantity().as_u64(),
+                    trade.price().as_u128(),
+                );
             }
 
             // Notify price level changes

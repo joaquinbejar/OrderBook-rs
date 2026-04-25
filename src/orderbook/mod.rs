@@ -41,6 +41,9 @@ pub mod mass_cancel;
 /// Order state machine for explicit lifecycle tracking.
 pub mod order_state;
 
+/// Pre-trade risk layer: per-account counters, configurable limits.
+pub mod risk;
+
 /// Pluggable event serialization for NATS publishers and consumers.
 pub mod serialization;
 
@@ -77,6 +80,7 @@ pub use nats_book_change::{BookChangeBatch, BookChangeEntry, NatsBookChangePubli
 pub use order_state::{CancelReason, OrderStateListener, OrderStateTracker, OrderStatus};
 #[cfg(feature = "special_orders")]
 pub use repricing::{RepricingOperations, RepricingResult, SpecialOrderTracker};
+pub use risk::{ReferencePriceSource, RiskConfig, RiskState};
 #[cfg(feature = "journal")]
 pub use sequencer::FileJournal;
 pub use sequencer::journal::{Journal, JournalEntry};

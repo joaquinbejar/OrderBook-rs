@@ -255,6 +255,11 @@ where
         side: Side,
     ) -> Result<MatchResult, OrderBookError> {
         self.check_kill_switch_or_reject(id)?;
+        // Pre-trade risk gate. Per design decision C, market orders
+        // currently bypass every check (no submitted price; no rest);
+        // the call exists to keep the gate ordering consistent across
+        // submit and add paths.
+        self.risk_state.check_market_admission(Hash32::zero())?;
         trace!("Submitting market order {} {} {}", id, quantity, side);
         OrderBook::<T>::match_market_order(self, id, quantity, side)
     }
@@ -285,6 +290,10 @@ where
         user_id: Hash32,
     ) -> Result<MatchResult, OrderBookError> {
         self.check_kill_switch_or_reject(id)?;
+        // Pre-trade risk gate. Per design decision C, market orders
+        // currently bypass every check; the call exists to keep the
+        // gate ordering consistent across submit and add paths.
+        self.risk_state.check_market_admission(user_id)?;
         trace!(
             "Submitting market order {} {} {} (user: {})",
             id, quantity, side, user_id
