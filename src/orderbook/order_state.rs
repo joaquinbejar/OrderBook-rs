@@ -22,27 +22,13 @@
 //! IOC/FOK insufficient liquidity   → Cancelled { InsufficientLiquidity }
 //! ```
 
+use super::clock::{Clock, MonotonicClock};
 use dashmap::DashMap;
 use pricelevel::Id;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-/// Returns the current time in nanoseconds since the Unix epoch.
-///
-/// Returns `0` if the system clock is before the Unix epoch.
-/// If the duration exceeds `u64::MAX` nanoseconds (~584 years from epoch)
-/// the value is capped at `u64::MAX`. This matches the fallback used
-/// by [`OrderStateTracker::purge_terminal_older_than`] so comparisons
-/// remain consistent.
-#[inline]
-fn nanos_since_epoch() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
-}
 
 /// Reason for order cancellation.
 ///
@@ -228,12 +214,14 @@ const DEFAULT_RETENTION_CAPACITY: usize = 10_000;
 pub struct OrderStateTracker {
     /// Current status of each tracked order.
     states: DashMap<Id, OrderStatus>,
-    /// Timestamped transition history per order: `(timestamp_ns, status)`.
+    /// Timestamped transition history per order: `(timestamp_ms, status)`.
     ///
-    /// History grows linearly with transitions for each order (e.g. many
-    /// partial fills). Entries are evicted together with their state both
-    /// by capacity-based eviction in [`enqueue_terminal`](Self::enqueue_terminal)
-    /// and by [`purge_terminal_older_than`](Self::purge_terminal_older_than).
+    /// Timestamps are the millisecond values returned by the installed
+    /// [`Clock`]. History grows linearly with transitions for each order
+    /// (e.g. many partial fills). Entries are evicted together with
+    /// their state both by capacity-based eviction in
+    /// [`enqueue_terminal`](Self::enqueue_terminal) and by
+    /// [`purge_terminal_older_than`](Self::purge_terminal_older_than).
     history: DashMap<Id, Vec<(u64, OrderStatus)>>,
     /// FIFO queue of terminal-state order IDs for eviction.
     terminal_queue: Mutex<VecDeque<Id>>,
@@ -241,6 +229,13 @@ pub struct OrderStateTracker {
     retention_capacity: usize,
     /// Optional listener invoked on every state transition.
     listener: Option<OrderStateListener>,
+    /// Pluggable source of millisecond timestamps used when recording
+    /// transition history and when computing cutoffs for
+    /// [`purge_terminal_older_than`](Self::purge_terminal_older_than).
+    /// Defaults to [`MonotonicClock`]; tests and sequencer replay can
+    /// inject a [`super::clock::StubClock`] via [`Self::with_clock`] or
+    /// [`Self::with_capacity_and_clock`].
+    clock: Arc<dyn Clock>,
 }
 
 impl std::fmt::Debug for OrderStateTracker {
@@ -261,14 +256,27 @@ impl Default for OrderStateTracker {
 
 impl OrderStateTracker {
     /// Create a new tracker with default retention capacity (10,000).
+    ///
+    /// The tracker uses a [`MonotonicClock`] to stamp transition history.
+    /// Use [`Self::with_clock`] to inject a different [`Clock`]
+    /// implementation (e.g. a
+    /// [`super::clock::StubClock`] for deterministic tests).
     #[must_use]
     pub fn new() -> Self {
+        Self::with_clock(Arc::new(MonotonicClock) as Arc<dyn Clock>)
+    }
+
+    /// Create a new tracker with default retention capacity and a
+    /// caller-provided [`Clock`] implementation.
+    #[must_use]
+    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
         Self {
             states: DashMap::new(),
             history: DashMap::new(),
             terminal_queue: Mutex::new(VecDeque::new()),
             retention_capacity: DEFAULT_RETENTION_CAPACITY,
             listener: None,
+            clock,
         }
     }
 
@@ -280,12 +288,23 @@ impl OrderStateTracker {
     ///   to retain. When exceeded, the oldest entries are evicted.
     #[must_use]
     pub fn with_capacity(retention_capacity: usize) -> Self {
+        Self::with_capacity_and_clock(
+            retention_capacity,
+            Arc::new(MonotonicClock) as Arc<dyn Clock>,
+        )
+    }
+
+    /// Create a new tracker with a custom retention capacity and a
+    /// caller-provided [`Clock`] implementation.
+    #[must_use]
+    pub fn with_capacity_and_clock(retention_capacity: usize, clock: Arc<dyn Clock>) -> Self {
         Self {
             states: DashMap::new(),
             history: DashMap::new(),
             terminal_queue: Mutex::new(VecDeque::new()),
             retention_capacity,
             listener: None,
+            clock,
         }
     }
 
@@ -335,8 +354,10 @@ impl OrderStateTracker {
 
         self.states.insert(order_id, new_status.clone());
 
-        // Record timestamped history
-        let ts = nanos_since_epoch();
+        // Record timestamped history. The timestamp is in milliseconds,
+        // sourced from the installed [`Clock`] (wall-clock in production,
+        // logical counter under replay / tests).
+        let ts = self.clock.now_millis().as_u64();
         self.history
             .entry(order_id)
             .or_default()
@@ -375,8 +396,10 @@ impl OrderStateTracker {
 
     /// Returns the full transition history for an order.
     ///
-    /// Each entry is a `(timestamp_ns, OrderStatus)` pair in chronological
-    /// order. Returns `None` if the order ID was never submitted.
+    /// Each entry is a `(timestamp_ms, OrderStatus)` pair in chronological
+    /// order. Timestamps come from the installed [`Clock`]
+    /// ([`MonotonicClock`] by default). Returns `None` if the order ID
+    /// was never submitted.
     ///
     /// # Examples
     ///
@@ -425,14 +448,16 @@ impl OrderStateTracker {
     /// # Arguments
     ///
     /// * `older_than` — entries with a last-transition timestamp older
-    ///   than `now - older_than` nanoseconds are removed.
+    ///   than `now - older_than` (milliseconds, per the installed
+    ///   [`Clock`]) are removed.
     ///
     /// # Returns
     ///
     /// The number of entries purged.
     pub fn purge_terminal_older_than(&self, older_than: Duration) -> usize {
-        let cutoff = nanos_since_epoch()
-            .saturating_sub(u64::try_from(older_than.as_nanos()).unwrap_or(u64::MAX));
+        let now_ms = self.clock.now_millis().as_u64();
+        let cutoff =
+            now_ms.saturating_sub(u64::try_from(older_than.as_millis()).unwrap_or(u64::MAX));
 
         let mut purged = 0usize;
         // Collect IDs to remove (avoid holding DashMap iterators during mutation)
@@ -445,11 +470,15 @@ impl OrderStateTracker {
                 if !status.is_terminal() {
                     return None;
                 }
-                // Check the last history entry's timestamp
+                // Check the last history entry's timestamp. The test
+                // contract is that `older_than = 0` removes every terminal
+                // entry — so the comparison is `<=` rather than `<` to
+                // handle the degenerate case where `ts == cutoff` under
+                // millisecond resolution.
                 let is_old = self
                     .history
                     .get(&id)
-                    .and_then(|h| h.value().last().map(|(ts, _)| *ts < cutoff))
+                    .and_then(|h| h.value().last().map(|(ts, _)| *ts <= cutoff))
                     .unwrap_or(false);
                 if is_old { Some(id) } else { None }
             })

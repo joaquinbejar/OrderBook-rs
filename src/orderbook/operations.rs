@@ -2,9 +2,7 @@
 
 use super::book::OrderBook;
 use super::error::OrderBookError;
-use pricelevel::{
-    Hash32, Id, MatchResult, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs,
-};
+use pricelevel::{Hash32, Id, MatchResult, OrderType, Price, Quantity, Side, TimeInForce};
 use std::sync::Arc;
 use tracing::trace;
 
@@ -75,7 +73,7 @@ where
             quantity: Quantity::new(quantity),
             side,
             user_id,
-            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
+            timestamp: self.clock().now_millis(),
             time_in_force,
             extra_fields,
         };
@@ -151,7 +149,7 @@ where
             hidden_quantity: Quantity::new(hidden_quantity),
             side,
             user_id,
-            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
+            timestamp: self.clock().now_millis(),
             time_in_force,
             extra_fields,
         };
@@ -221,7 +219,7 @@ where
             quantity: Quantity::new(quantity),
             side,
             user_id,
-            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
+            timestamp: self.clock().now_millis(),
             time_in_force,
             extra_fields,
         };

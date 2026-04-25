@@ -46,7 +46,28 @@ This order book engine is built with the following design principles:
 - **Research**: Platform for studying market microstructure and order flow
 - **Educational**: Reference implementation for understanding modern exchange architecture
 
-### What's New in Version 0.6.2
+### What's New in Version 0.7.0
+
+#### v0.7.0 — `Clock` trait for deterministic replay
+
+- **New [`Clock`] trait** with two implementations, [`MonotonicClock`]
+  (production, wraps `SystemTime::now`) and [`StubClock`] (replay /
+  tests, monotonic `AtomicU64` counter with configurable start and
+  step). Re-exported at the crate root and via [`prelude`].
+- **[`OrderBook::with_clock`]** constructor plus `set_clock` and
+  `clock()` accessors. The default [`OrderBook::new`] keeps wrapping
+  [`MonotonicClock`] internally — existing callers observe no
+  behavioural change.
+- **`ReplayEngine::replay_from_with_clock`** for byte-identical
+  replay tests and disaster-recovery pipelines that must reproduce
+  engine timestamps deterministically.
+- Wall-clock reads are no longer present inside the matching core —
+  every stamp flows through `self.clock().now_millis()`.
+- **Behavioural change (same type signature)**:
+  `OrderStateTracker::get_history` and `OrderBook::get_order_history`
+  now return `Vec<(u64 /* milliseconds */, OrderStatus)>` instead of
+  nanoseconds; the `Clock::now_millis` unit is the only one the trait
+  exposes.
 
 #### v0.6.2 — Dependency Bumps & Bincode 2.x Migration
 
