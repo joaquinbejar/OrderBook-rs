@@ -201,6 +201,7 @@ where
                 symbol: trade_result.symbol.clone(),
                 trade_result: trade_result.clone(),
                 timestamp: crate::current_time_millis(),
+                engine_seq: trade_result.engine_seq,
             };
 
             if let Err(e) = sender.send(trade_event) {
@@ -387,6 +388,7 @@ where
                 symbol: trade_result.symbol.clone(),
                 trade_result: trade_result.clone(),
                 timestamp: crate::current_time_millis(),
+                engine_seq: trade_result.engine_seq,
             };
 
             if let Err(e) = sender.send(trade_event) {

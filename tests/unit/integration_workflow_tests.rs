@@ -238,6 +238,7 @@ fn json_serializer_book_change_round_trip() {
         side: Side::Buy,
         price: 3000,
         quantity: 100,
+        engine_seq: 0,
     };
 
     let bytes = serializer.serialize_book_change(&event);

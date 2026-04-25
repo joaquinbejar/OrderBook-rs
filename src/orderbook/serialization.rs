@@ -270,6 +270,7 @@ mod tests {
             side: Side::Buy,
             price: 50_000_000,
             quantity: 1_000,
+            engine_seq: 0,
         }
     }
 

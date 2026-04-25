@@ -57,14 +57,20 @@ const DEFAULT_MIN_PUBLISH_INTERVAL_MS: u64 = 0;
 /// A batched order book change payload published to NATS JetStream.
 ///
 /// Each batch contains one or more [`BookChangeEntry`] values collected within
-/// the configured batch window. Consumers use the `sequence` field for ordering
-/// and gap detection.
+/// the configured batch window. Consumers use [`BookChangeBatch::sequence`]
+/// (the publisher's per-batch counter) for batch-level ordering, and
+/// [`BookChangeEntry::engine_seq`] for per-event gap detection across all
+/// outbound streams of the source `OrderBook<T>`.
 #[derive(Debug, Clone, Serialize)]
 pub struct BookChangeBatch {
     /// The symbol this batch belongs to.
     pub symbol: String,
 
-    /// Monotonically increasing sequence number for this batch.
+    /// Monotonically increasing **publisher-side** sequence number for this
+    /// batch. Independent of [`BookChangeEntry::engine_seq`]: batches are
+    /// minted by the NATS publisher when it flushes, while each entry's
+    /// `engine_seq` was minted by the upstream `OrderBook<T>` at emission
+    /// time.
     pub sequence: u64,
 
     /// Unix timestamp in milliseconds when the batch was flushed.
@@ -88,6 +94,12 @@ pub struct BookChangeEntry {
 
     /// The new visible quantity at this price level after the change.
     pub quantity: u64,
+
+    /// Strictly monotonic global engine sequence number for this entry.
+    /// Inherited from [`PriceLevelChangedEvent::engine_seq`] at conversion
+    /// time. Independent of [`BookChangeBatch::sequence`] (which is the
+    /// publisher's per-batch counter).
+    pub engine_seq: u64,
 }
 
 impl From<PriceLevelChangedEvent> for BookChangeEntry {
@@ -97,6 +109,7 @@ impl From<PriceLevelChangedEvent> for BookChangeEntry {
             side: event.side,
             price: event.price,
             quantity: event.quantity,
+            engine_seq: event.engine_seq,
         }
     }
 }
@@ -674,11 +687,16 @@ mod tests {
             side: Side::Buy,
             price: 50_000,
             quantity: 100,
+            engine_seq: 7,
         };
         let entry = BookChangeEntry::from(event);
         assert_eq!(entry.side, Side::Buy);
         assert_eq!(entry.price, 50_000);
         assert_eq!(entry.quantity, 100);
+        assert_eq!(
+            entry.engine_seq, 7,
+            "BookChangeEntry must propagate engine_seq from the source event"
+        );
     }
 
     #[test]
@@ -687,12 +705,14 @@ mod tests {
             side: Side::Buy,
             price: 50_000,
             quantity: 100,
+            engine_seq: 11,
         };
         let result = serde_json::to_value(&entry);
         assert!(result.is_ok());
         let value = result.unwrap_or(serde_json::Value::Null);
         assert_eq!(value.get("price").and_then(|v| v.as_u64()), Some(50_000));
         assert_eq!(value.get("quantity").and_then(|v| v.as_u64()), Some(100));
+        assert_eq!(value.get("engine_seq").and_then(|v| v.as_u64()), Some(11));
         assert!(value.get("side").is_some());
     }
 
@@ -708,11 +728,13 @@ mod tests {
                     side: Side::Buy,
                     price: 50_000,
                     quantity: 100,
+                    engine_seq: 1,
                 },
                 BookChangeEntry {
                     side: Side::Sell,
                     price: 50_100,
                     quantity: 200,
+                    engine_seq: 2,
                 },
             ],
         };
@@ -738,6 +760,7 @@ mod tests {
                 side: Side::Sell,
                 price: 2_000,
                 quantity: 50,
+                engine_seq: 3,
             }],
         };
         let json = serde_json::to_value(&batch);
@@ -834,6 +857,7 @@ mod tests {
             side: Side::Buy,
             price: 42_000,
             quantity: 500,
+            engine_seq: 0,
         };
         let result = serde_json::to_value(&event);
         assert!(result.is_ok());

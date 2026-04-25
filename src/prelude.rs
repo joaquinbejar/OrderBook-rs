@@ -39,6 +39,9 @@ pub use crate::orderbook::trade::{
     TradeEvent, TradeInfo, TradeListener, TradeResult, TransactionInfo,
 };
 
+// Book change event types
+pub use crate::orderbook::book_change_event::{PriceLevelChangedEvent, PriceLevelChangedListener};
+
 // Order types and enums from pricelevel
 pub use pricelevel::{Id, OrderType, Side, TimeInForce};
 

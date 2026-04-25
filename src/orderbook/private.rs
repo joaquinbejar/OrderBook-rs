@@ -56,10 +56,12 @@ where
 
         // notify price level changes
         if let Some(ref listener) = self.price_level_changed_listener {
+            let engine_seq = self.next_engine_seq();
             listener(PriceLevelChangedEvent {
                 side,
                 price: price_level.price(),
                 quantity: price_level.visible_quantity(),
+                engine_seq,
             })
         }
         // The location is stored as (price, side) for efficient retrieval in cancel_order

@@ -48,6 +48,27 @@ This order book engine is built with the following design principles:
 
 ### What's New in Version 0.7.0
 
+#### v0.7.0 — Global `engine_seq` across outbound streams
+
+- **New `OrderBook::next_engine_seq()` and `OrderBook::engine_seq()`**
+  accessors backed by an `AtomicU64` counter. Every outbound emission
+  (trade event, price-level change event) mints exactly one seq, in
+  emission order, so external consumers can perform cross-stream gap
+  detection and merge events from `TradeListener` and
+  `PriceLevelChangedListener` into a single ordered view.
+- **`engine_seq: u64` field** added to every outbound event type:
+  `TradeResult`, `TradeEvent`, `PriceLevelChangedEvent`, and the NATS
+  `BookChangeEntry`. JSON payloads are forward-compatible
+  (`#[serde(default)]` falls back to `0` for v0.6.x payloads).
+- **Snapshot format version bumped to `2`**.
+  `OrderBookSnapshotPackage` carries `engine_seq` so that
+  `restore_from_snapshot_package` resumes monotonicity exactly from the
+  snapshotted point. `version: 1` packages are rejected by `validate()`.
+- **`BookChangeBatch.sequence`** retains its existing per-batch
+  publisher-counter semantics; cross-stream gap detection moves to the
+  per-event `BookChangeEntry.engine_seq`. Both fields ship in the same
+  payload for incremental adoption.
+
 #### v0.7.0 — `Clock` trait for deterministic replay
 
 - **New [`Clock`] trait** with two implementations, [`MonotonicClock`]

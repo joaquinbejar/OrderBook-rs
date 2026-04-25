@@ -32,6 +32,17 @@ use uuid::Uuid;
 /// One basis point = 0.01% = 0.0001
 const DEFAULT_BASIS_POINTS_MULTIPLIER: f64 = 10_000.0;
 
+/// Single source of truth for minting the next outbound `engine_seq`.
+///
+/// Both [`OrderBook::next_engine_seq`] and the matching helper in
+/// `super::matching::OrderBook::process_level_match` route through this
+/// function so the contract (`fetch_add(1, Relaxed)`) cannot drift between
+/// emission paths.
+#[inline]
+pub(super) fn mint_engine_seq(counter: &AtomicU64) -> u64 {
+    counter.fetch_add(1, Ordering::Relaxed)
+}
+
 /// The OrderBook manages a collection of price levels for both bid and ask sides.
 /// It supports adding, cancelling, and matching orders with lock-free operations where possible.
 pub struct OrderBook<T = ()> {
@@ -65,6 +76,13 @@ pub struct OrderBook<T = ()> {
     /// Counter for generating sequential order IDs
     #[allow(dead_code)]
     pub(super) next_order_id: AtomicU64,
+
+    /// Strictly monotonic sequence counter minted by [`Self::next_engine_seq`]
+    /// and stamped on every outbound event (`TradeResult`,
+    /// `PriceLevelChangedEvent`) so consumers can perform cross-stream gap
+    /// detection and temporal ordering. Per `OrderBook<T>` instance — replay
+    /// into a fresh book yields fresh seqs, not the originals.
+    pub(super) engine_seq: AtomicU64,
 
     /// The last price at which a trade occurred
     pub(super) last_trade_price: AtomicCell<u128>,
@@ -388,6 +406,7 @@ where
             user_orders: DashMap::new(),
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
+            engine_seq: AtomicU64::new(0),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -423,6 +442,30 @@ where
     #[must_use]
     pub fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
+    }
+
+    /// Mint the next monotonic outbound sequence number.
+    ///
+    /// Called exactly once per outbound event (trade emission, price-level
+    /// change emission). Internally an `AtomicU64::fetch_add(1, Relaxed)` —
+    /// strict total order across all events of this `OrderBook<T>` instance.
+    ///
+    /// The contract is **per-instance**, not per-journal-stream: replay into
+    /// a fresh book produces fresh seqs, not the original ones. Consumers
+    /// that need to replay the exact original outbound stream should use
+    /// the journal's `sequence_num` + `timestamp_ns` instead.
+    #[inline]
+    pub fn next_engine_seq(&self) -> u64 {
+        mint_engine_seq(&self.engine_seq)
+    }
+
+    /// Current value of the engine sequence counter without advancing.
+    ///
+    /// Used by snapshotting to capture the counter for later restore.
+    #[inline]
+    #[must_use]
+    pub fn engine_seq(&self) -> u64 {
+        self.engine_seq.load(Ordering::Acquire)
     }
 
     /// Create a new order book for the given symbol with tick size validation.
@@ -473,6 +516,7 @@ where
             user_orders: DashMap::new(),
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
+            engine_seq: AtomicU64::new(0),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -518,6 +562,7 @@ where
             user_orders: DashMap::new(),
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
+            engine_seq: AtomicU64::new(0),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -2161,11 +2206,12 @@ where
         if !match_result.trades().as_vec().is_empty()
             && let Some(ref listener) = self.trade_listener
         {
-            let trade_result = TradeResult::with_fees(
+            let mut trade_result = TradeResult::with_fees(
                 self.symbol.clone(),
                 match_result.clone(),
                 self.fee_schedule,
             );
+            trade_result.engine_seq = self.next_engine_seq();
             listener(&trade_result);
         }
 
@@ -2236,11 +2282,12 @@ where
         if !match_result.trades().as_vec().is_empty()
             && let Some(ref listener) = self.trade_listener
         {
-            let trade_result = TradeResult::with_fees(
+            let mut trade_result = TradeResult::with_fees(
                 self.symbol.clone(),
                 match_result.clone(),
                 self.fee_schedule,
             );
+            trade_result.engine_seq = self.next_engine_seq();
             listener(&trade_result);
         }
 
@@ -2303,6 +2350,7 @@ where
         package.lot_size = self.lot_size;
         package.min_order_size = self.min_order_size;
         package.max_order_size = self.max_order_size;
+        package.engine_seq = self.engine_seq();
         Ok(package)
     }
 
@@ -2328,6 +2376,7 @@ where
         let lot_size = package.lot_size;
         let min_order_size = package.min_order_size;
         let max_order_size = package.max_order_size;
+        let engine_seq = package.engine_seq;
 
         self.restore_from_snapshot(package.into_snapshot()?)?;
 
@@ -2338,6 +2387,12 @@ where
         self.lot_size = lot_size;
         self.min_order_size = min_order_size;
         self.max_order_size = max_order_size;
+
+        // Restore the engine's outbound monotonic counter so that the
+        // first `next_engine_seq()` call on this restored book returns
+        // exactly the snapshotted value, preserving cross-snapshot
+        // monotonicity for downstream consumers.
+        self.engine_seq.store(engine_seq, Ordering::Release);
 
         Ok(())
     }
