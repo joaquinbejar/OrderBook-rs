@@ -61,10 +61,41 @@ criterion = { version = "0.8", features = ["html_reports"] }
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "time"] }
 tempfile = "3"
 proptest = "1.7"
+hdrhistogram = "^7"
 
 [[bench]]
 name = "benches"
 path = "benches/mod.rs"
+harness = false
+
+[[bench]]
+name = "add_only_hdr"
+path = "benches/order_book/add_only_hdr.rs"
+harness = false
+
+[[bench]]
+name = "cancel_only_hdr"
+path = "benches/order_book/cancel_only_hdr.rs"
+harness = false
+
+[[bench]]
+name = "aggressive_walk_hdr"
+path = "benches/order_book/aggressive_walk_hdr.rs"
+harness = false
+
+[[bench]]
+name = "mixed_70_20_10_hdr"
+path = "benches/order_book/mixed_70_20_10_hdr.rs"
+harness = false
+
+[[bench]]
+name = "thin_book_sweep_hdr"
+path = "benches/order_book/thin_book_sweep_hdr.rs"
+harness = false
+
+[[bench]]
+name = "mass_cancel_burst_hdr"
+path = "benches/order_book/mass_cancel_burst_hdr.rs"
 harness = false
 
 [[test]]

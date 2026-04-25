@@ -167,6 +167,15 @@ bench-json: check-cargo-criterion
 bench-clean:
 	rm -rf target/criterion
 
+.PHONY: bench-hdr
+bench-hdr:
+	cargo bench --bench add_only_hdr
+	cargo bench --bench cancel_only_hdr
+	cargo bench --bench aggressive_walk_hdr
+	cargo bench --bench mixed_70_20_10_hdr
+	cargo bench --bench thin_book_sweep_hdr
+	cargo bench --bench mass_cancel_burst_hdr
+
 
 .PHONY: workflow-coverage
 workflow-coverage:
