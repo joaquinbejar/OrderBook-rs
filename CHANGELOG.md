@@ -5,9 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.0] — 2026-04-24
+## [0.7.0] — unreleased
 
-### Added
+> 0.7.0 is unreleased and accumulates issues #51..#60. Sub-headings
+> below group changes by feature; everything ships in the same
+> 0.7.0 publish.
+
+### Added — global `engine_seq` (#52)
+
+- **Global monotonic `engine_seq`** across every outbound stream.
+  `OrderBook<T>` gains an internal `AtomicU64` counter and two public
+  accessors: `pub fn next_engine_seq(&self) -> u64` (mints the next
+  value via `fetch_add(1, Relaxed)`) and `pub fn engine_seq(&self) -> u64`
+  (current value, used by snapshotting). The counter is incremented
+  exactly once per outbound emission, in emission order. Per-instance
+  contract — replay into a fresh book produces fresh seqs, not the
+  original ones; consumers needing the original outbound stream use
+  the journal's `SequencerEvent.sequence_num`.
+- **`engine_seq: u64` field** on every outbound event type. JSON
+  payloads are forward-compatible via `#[serde(default)]` where
+  applicable:
+  - `TradeResult.engine_seq`
+  - `TradeEvent.engine_seq`
+  - `PriceLevelChangedEvent.engine_seq`
+  - `BookChangeEntry.engine_seq` (NATS path, `Serialize`-only)
+- **Snapshot package persistence** — `OrderBookSnapshotPackage` carries
+  `engine_seq: u64` so `restore_from_snapshot_package` resumes
+  monotonicity exactly from the snapshotted point.
+- Integration proptest `tests/unit/engine_seq_monotonic_tests.rs`
+  (256 cases) asserts the cross-stream monotonicity contract.
+
+### Changed — global `engine_seq` (#52)
+
+- **`ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bumped from `1` to `2`.**
+  Snapshot packages with `version: 1` are now rejected by `validate()`
+  with the existing `Unsupported snapshot version` error. JSON payloads
+  at `version: 2` that omit `engine_seq` deserialize with `engine_seq = 0`.
+- **`BookChangeBatch.sequence`** retains its existing per-batch
+  publisher-counter semantics. Cross-stream gap detection now uses the
+  new per-event `BookChangeEntry.engine_seq` instead. Both fields ship
+  in the same payload; consumers can adopt the new field incrementally.
+
+### Added — `Clock` trait (#51)
 
 - **`Clock` trait** (`src/orderbook/clock.rs`) — pluggable timestamp source
   injected at the operations edge so matching stays deterministic under
@@ -48,13 +87,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- Non-breaking public API surface. `cargo-semver-checks` should classify
-  this release as a minor bump; the version jump to `0.7.0` is a
-  deliberate marker that the `Clock` extensibility surface is now public.
-- Replay determinism: `ReplayEngine::replay_from` continues to behave as
-  before (production stamping via `MonotonicClock`). Byte-identical
+- Non-breaking public API surface for the Clock trait. The
+  `engine_seq` field adds (#52) extend public structs that consumers
+  may construct via struct literals; while `cargo-semver-checks` may
+  flag those, the `0.6.x → 0.7.x` delta in `0.x` semver permits
+  minor breaking changes.
+- Replay determinism: `ReplayEngine::replay_from` continues to behave
+  as before (production stamping via `MonotonicClock`). Byte-identical
   replay requires the new `replay_from_with_clock` entry point with a
   caller-supplied `Arc<StubClock>` and a fixed start value.
+- Snapshot format version bumped to `2`. Older `version: 1` snapshots
+  do not load. Re-snapshot under 0.7.0 to migrate.
 
 ## [0.6.2] — 2026-04-20
 
