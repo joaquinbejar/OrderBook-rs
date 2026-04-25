@@ -157,7 +157,10 @@ impl fmt::Display for OrderBookError {
                 write!(f, "Invalid operation: {message}")
             }
             OrderBookError::KillSwitchActive => {
-                write!(f, "kill switch active: new order entry is halted")
+                write!(
+                    f,
+                    "kill switch active: new order entry and modifications are halted"
+                )
             }
             OrderBookError::SerializationError { message } => {
                 write!(f, "Serialization error: {message}")

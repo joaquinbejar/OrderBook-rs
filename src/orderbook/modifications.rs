@@ -129,16 +129,20 @@ where
         update: OrderUpdate,
     ) -> Result<Option<Arc<OrderType<T>>>, OrderBookError> {
         // Gate non-cancel variants on the kill switch. Cancel passes
-        // through unchanged so operators can drain the book.
-        let gated_id = match &update {
-            OrderUpdate::Cancel { .. } => None,
-            OrderUpdate::UpdatePrice { order_id, .. }
-            | OrderUpdate::UpdateQuantity { order_id, .. }
-            | OrderUpdate::UpdatePriceAndQuantity { order_id, .. }
-            | OrderUpdate::Replace { order_id, .. } => Some(*order_id),
-        };
-        if let Some(id) = gated_id {
-            self.check_kill_switch_or_reject(id)?;
+        // through unchanged so operators can drain the book. The
+        // existing order stays live — only the modification is
+        // rejected — so we use `check_kill_switch` (no tracker
+        // recording) rather than `check_kill_switch_or_reject` (which
+        // would mark a live order as terminal-Rejected).
+        let is_modify = matches!(
+            &update,
+            OrderUpdate::UpdatePrice { .. }
+                | OrderUpdate::UpdateQuantity { .. }
+                | OrderUpdate::UpdatePriceAndQuantity { .. }
+                | OrderUpdate::Replace { .. }
+        );
+        if is_modify {
+            self.check_kill_switch()?;
         }
 
         self.cache.invalidate();

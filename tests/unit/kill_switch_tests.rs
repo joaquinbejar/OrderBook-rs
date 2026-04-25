@@ -119,6 +119,26 @@ mod tests_kill_switch {
     }
 
     #[test]
+    fn update_order_price_and_quantity_under_kill_switch_returns_kill_switch_active() {
+        let book = new_book();
+        let order_id = Id::new_uuid();
+        book.add_limit_order(order_id, 100, 10, Side::Buy, TimeInForce::Gtc, None)
+            .expect("seed bid");
+
+        book.engage_kill_switch();
+
+        let result = book.update_order(OrderUpdate::UpdatePriceAndQuantity {
+            order_id,
+            new_price: Price::new(99),
+            new_quantity: Quantity::new(7),
+        });
+        assert!(
+            matches!(result, Err(OrderBookError::KillSwitchActive)),
+            "expected KillSwitchActive, got {result:?}"
+        );
+    }
+
+    #[test]
     fn update_order_replace_under_kill_switch_returns_kill_switch_active() {
         let book = new_book();
         let order_id = Id::new_uuid();

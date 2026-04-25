@@ -66,6 +66,9 @@ where
         user_id: Hash32,
         extra_fields: Option<T>,
     ) -> Result<Arc<OrderType<T>>, OrderBookError> {
+        // Top-of-fn kill-switch gate so we skip the clock read and
+        // extra_fields / OrderType construction below when halted.
+        self.check_kill_switch_or_reject(id)?;
         let extra_fields: T = extra_fields.unwrap_or_default();
         let order = OrderType::Standard {
             id,
@@ -141,6 +144,9 @@ where
         user_id: Hash32,
         extra_fields: Option<T>,
     ) -> Result<Arc<OrderType<T>>, OrderBookError> {
+        // Top-of-fn kill-switch gate so we skip the clock read and
+        // extra_fields / OrderType construction below when halted.
+        self.check_kill_switch_or_reject(id)?;
         let extra_fields: T = extra_fields.unwrap_or_default();
         let order = OrderType::IcebergOrder {
             id,
@@ -212,6 +218,9 @@ where
         user_id: Hash32,
         extra_fields: Option<T>,
     ) -> Result<Arc<OrderType<T>>, OrderBookError> {
+        // Top-of-fn kill-switch gate so we skip the clock read and
+        // extra_fields / OrderType construction below when halted.
+        self.check_kill_switch_or_reject(id)?;
         let extra_fields: T = extra_fields.unwrap_or_default();
         let order = OrderType::PostOnly {
             id,

@@ -512,6 +512,18 @@ where
     /// recording an `OrderStatus::Rejected` transition for `order_id`
     /// when an order state tracker is configured.
     ///
+    /// Use this from **new-flow** entry points (`submit_*`, `add_order`,
+    /// `add_*_with_user`) where `order_id` identifies an order that has
+    /// not yet entered the book — the `Rejected` lifecycle status is
+    /// then accurate and consistent with its documented "rejected during
+    /// validation, never entered" semantic.
+    ///
+    /// For modify / replace paths against orders already resting in the
+    /// book, use [`Self::check_kill_switch`] instead — recording
+    /// `Rejected` against a live order would corrupt the lifecycle
+    /// state (the order remains active, the modification is what was
+    /// rejected).
+    ///
     /// Returns `Err(OrderBookError::KillSwitchActive)` when engaged so
     /// callers can early-return before any matching, fee, or STP work.
     /// Allocation-free on the happy path (no tracker write, no error
@@ -526,6 +538,22 @@ where
                     reason: "kill switch active".to_string(),
                 },
             );
+            return Err(OrderBookError::KillSwitchActive);
+        }
+        Ok(())
+    }
+
+    /// Reject the current operation if the kill switch is engaged
+    /// **without** recording a tracker transition.
+    ///
+    /// Use this from modify / replace paths (`update_order` non-`Cancel`
+    /// variants) where the existing order remains live — recording it
+    /// as `Rejected` would conflict with the documented terminal-state
+    /// semantic (`Rejected` means "never entered the book"). Only the
+    /// modification is rejected; the underlying order stays as-is.
+    #[inline]
+    pub(super) fn check_kill_switch(&self) -> Result<(), OrderBookError> {
+        if self.is_kill_switch_engaged() {
             return Err(OrderBookError::KillSwitchActive);
         }
         Ok(())
