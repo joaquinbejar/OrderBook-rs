@@ -260,4 +260,73 @@ mod tests_kill_switch {
             other => panic!("expected Rejected with kill switch reason, got {other:?}"),
         }
     }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Snapshot round-trip
+    // ───────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn kill_switch_state_round_trips_through_snapshot() {
+        let original = OrderBook::<()>::new("TEST");
+        original
+            .add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None)
+            .expect("seed bid");
+        original.engage_kill_switch();
+        assert!(original.is_kill_switch_engaged());
+
+        // Serialize to JSON, deserialize, restore — the canonical disaster
+        // recovery path.
+        let json = original
+            .snapshot_to_json(10)
+            .expect("serialize snapshot to json");
+
+        let mut restored = OrderBook::<()>::new("TEST");
+        restored
+            .restore_from_snapshot_json(&json)
+            .expect("restore from json");
+
+        assert!(
+            restored.is_kill_switch_engaged(),
+            "kill switch state must round-trip through snapshot/restore"
+        );
+
+        // And: the restored book actually enforces the gate.
+        let result =
+            restored.add_limit_order(Id::new_uuid(), 99, 5, Side::Buy, TimeInForce::Gtc, None);
+        assert!(
+            matches!(result, Err(OrderBookError::KillSwitchActive)),
+            "restored book with engaged kill switch must reject new flow; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_v2_snapshot_without_kill_switch_field_defaults_to_false() {
+        // Build a fresh package and drop the `kill_switch_engaged` key
+        // from the JSON to simulate a v2 payload written before this
+        // field existed. `#[serde(default)]` should fill it back in
+        // with `false` on deserialization.
+        let book = OrderBook::<()>::new("TEST");
+        book.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None)
+            .expect("seed bid");
+
+        let json = book.snapshot_to_json(10).expect("serialize");
+        let mut value: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+        let obj = value.as_object_mut().expect("top level object");
+        obj.remove("kill_switch_engaged");
+        let stripped = serde_json::to_string(&value).expect("re-serialize");
+        assert!(
+            !stripped.contains("kill_switch_engaged"),
+            "preflight: stripped JSON must not carry the new field"
+        );
+
+        let mut restored = OrderBook::<()>::new("TEST");
+        restored
+            .restore_from_snapshot_json(&stripped)
+            .expect("restore stripped json");
+
+        assert!(
+            !restored.is_kill_switch_engaged(),
+            "missing field must default to false"
+        );
+    }
 }

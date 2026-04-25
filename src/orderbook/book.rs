@@ -2416,6 +2416,7 @@ where
         package.min_order_size = self.min_order_size;
         package.max_order_size = self.max_order_size;
         package.engine_seq = self.engine_seq();
+        package.kill_switch_engaged = self.is_kill_switch_engaged();
         Ok(package)
     }
 
@@ -2428,8 +2429,15 @@ where
     ///
     /// This restores both the order data and the configuration fields
     /// (`fee_schedule`, `stp_mode`, `tick_size`, `lot_size`,
-    /// `min_order_size`, `max_order_size`) that were captured by
+    /// `min_order_size`, `max_order_size`, `engine_seq`,
+    /// `kill_switch_engaged`) that were captured by
     /// [`create_snapshot_package`](Self::create_snapshot_package).
+    ///
+    /// The kill-switch flag is operator-driven and not journaled by
+    /// the sequencer; it travels with snapshot packages only. Replay
+    /// (`ReplayEngine::replay_from*`) starts a fresh book with
+    /// `kill_switch_engaged = false`, and operators must engage it
+    /// explicitly post-replay if needed.
     pub fn restore_from_snapshot_package(
         &mut self,
         package: OrderBookSnapshotPackage,
@@ -2442,6 +2450,7 @@ where
         let min_order_size = package.min_order_size;
         let max_order_size = package.max_order_size;
         let engine_seq = package.engine_seq;
+        let kill_switch_engaged = package.kill_switch_engaged;
 
         self.restore_from_snapshot(package.into_snapshot()?)?;
 
@@ -2458,6 +2467,12 @@ where
         // exactly the snapshotted value, preserving cross-snapshot
         // monotonicity for downstream consumers.
         self.engine_seq.store(engine_seq, Ordering::Release);
+
+        // Restore the operational kill-switch flag so that a book
+        // recovered from disaster snapshot resumes in the same
+        // operational mode it was halted in.
+        self.kill_switch
+            .store(kill_switch_engaged, Ordering::Relaxed);
 
         Ok(())
     }
