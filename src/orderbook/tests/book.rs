@@ -1138,4 +1138,50 @@ mod test_book_specific {
             "order submitted after set_clock must use the new clock source"
         );
     }
+
+    #[test]
+    fn test_next_engine_seq_starts_at_zero_and_advances_by_one() {
+        let book: OrderBook<()> = OrderBook::new("TEST");
+        assert_eq!(book.next_engine_seq(), 0);
+        assert_eq!(book.next_engine_seq(), 1);
+        assert_eq!(book.next_engine_seq(), 2);
+        assert_eq!(book.engine_seq(), 3);
+    }
+
+    #[test]
+    fn test_next_engine_seq_is_monotonic_under_concurrent_calls() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let book: Arc<OrderBook<()>> = Arc::new(OrderBook::new("TEST"));
+        let threads = 4usize;
+        let per_thread = 1000usize;
+        let mut handles = Vec::with_capacity(threads);
+
+        for _ in 0..threads {
+            let b = Arc::clone(&book);
+            handles.push(thread::spawn(move || {
+                let mut local = Vec::with_capacity(per_thread);
+                for _ in 0..per_thread {
+                    local.push(b.next_engine_seq());
+                }
+                local
+            }));
+        }
+
+        let mut all: Vec<u64> = Vec::with_capacity(threads * per_thread);
+        for h in handles {
+            let part = h.join().expect("thread panicked");
+            all.extend(part);
+        }
+
+        use std::collections::HashSet;
+        let set: HashSet<u64> = all.iter().copied().collect();
+        assert_eq!(
+            set.len(),
+            threads * per_thread,
+            "every observed seq must be unique"
+        );
+        assert_eq!(book.engine_seq(), (threads * per_thread) as u64);
+    }
 }

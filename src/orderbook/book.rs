@@ -66,6 +66,13 @@ pub struct OrderBook<T = ()> {
     #[allow(dead_code)]
     pub(super) next_order_id: AtomicU64,
 
+    /// Strictly monotonic sequence counter minted by [`Self::next_engine_seq`]
+    /// and stamped on every outbound event (`TradeResult`,
+    /// `PriceLevelChangedEvent`) so consumers can perform cross-stream gap
+    /// detection and temporal ordering. Per `OrderBook<T>` instance — replay
+    /// into a fresh book yields fresh seqs, not the originals.
+    pub(super) engine_seq: AtomicU64,
+
     /// The last price at which a trade occurred
     pub(super) last_trade_price: AtomicCell<u128>,
 
@@ -388,6 +395,7 @@ where
             user_orders: DashMap::new(),
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
+            engine_seq: AtomicU64::new(0),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -423,6 +431,30 @@ where
     #[must_use]
     pub fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
+    }
+
+    /// Mint the next monotonic outbound sequence number.
+    ///
+    /// Called exactly once per outbound event (trade emission, price-level
+    /// change emission). Internally an `AtomicU64::fetch_add(1, Relaxed)` —
+    /// strict total order across all events of this `OrderBook<T>` instance.
+    ///
+    /// The contract is **per-instance**, not per-journal-stream: replay into
+    /// a fresh book produces fresh seqs, not the original ones. Consumers
+    /// that need to replay the exact original outbound stream should use
+    /// the journal's `sequence_num` + `timestamp_ns` instead.
+    #[inline]
+    pub fn next_engine_seq(&self) -> u64 {
+        self.engine_seq.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Current value of the engine sequence counter without advancing.
+    ///
+    /// Used by snapshotting to capture the counter for later restore.
+    #[inline]
+    #[must_use]
+    pub fn engine_seq(&self) -> u64 {
+        self.engine_seq.load(Ordering::Acquire)
     }
 
     /// Create a new order book for the given symbol with tick size validation.
@@ -473,6 +505,7 @@ where
             user_orders: DashMap::new(),
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
+            engine_seq: AtomicU64::new(0),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
@@ -518,6 +551,7 @@ where
             user_orders: DashMap::new(),
             transaction_id_generator: UuidGenerator::new(namespace),
             next_order_id: AtomicU64::new(1),
+            engine_seq: AtomicU64::new(0),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
             market_close_timestamp: AtomicU64::new(0),
