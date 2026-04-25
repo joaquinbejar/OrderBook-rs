@@ -143,17 +143,21 @@ where
         // 2. Emit PriceLevelChangedEvent (qty → 0) for every affected level
         if let Some(ref listener) = self.price_level_changed_listener {
             for entry in self.bids.iter() {
+                let engine_seq = self.next_engine_seq();
                 listener(PriceLevelChangedEvent {
                     side: Side::Buy,
                     price: *entry.key(),
                     quantity: 0,
+                    engine_seq,
                 });
             }
             for entry in self.asks.iter() {
+                let engine_seq = self.next_engine_seq();
                 listener(PriceLevelChangedEvent {
                     side: Side::Sell,
                     price: *entry.key(),
                     quantity: 0,
+                    engine_seq,
                 });
             }
         }

@@ -11,7 +11,7 @@ use crate::orderbook::stp::{STPAction, check_stp_at_level};
 use crate::{OrderBook, OrderBookError};
 use either::Either;
 use pricelevel::{Hash32, Id, MatchResult, OrderUpdate, Side};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 impl<T> OrderBook<T>
 where
@@ -164,6 +164,7 @@ where
                                 &self.last_trade_price,
                                 &self.has_traded,
                                 &self.price_level_changed_listener,
+                                &self.engine_seq,
                                 &mut empty_price_levels,
                             );
                             // Correct remaining: process_level_match set it to
@@ -224,6 +225,7 @@ where
                                 &self.last_trade_price,
                                 &self.has_traded,
                                 &self.price_level_changed_listener,
+                                &self.engine_seq,
                                 &mut empty_price_levels,
                             );
                             // Correct remaining: process_level_match set it to
@@ -269,6 +271,7 @@ where
                 &self.last_trade_price,
                 &self.has_traded,
                 &self.price_level_changed_listener,
+                &self.engine_seq,
                 &mut empty_price_levels,
             );
 
@@ -348,6 +351,7 @@ where
         price_level_changed_listener: &Option<
             crate::orderbook::book_change_event::PriceLevelChangedListener,
         >,
+        engine_seq_counter: &AtomicU64,
         empty_price_levels: &mut Vec<u128>,
     ) {
         // Process trades if any occurred
@@ -365,10 +369,12 @@ where
 
             // Notify price level changes
             if let Some(listener) = price_level_changed_listener {
+                let engine_seq = engine_seq_counter.fetch_add(1, Ordering::Relaxed);
                 listener(PriceLevelChangedEvent {
                     side: side.opposite(),
                     price: price_level.price(),
                     quantity: price_level.visible_quantity(),
+                    engine_seq,
                 });
             }
         }

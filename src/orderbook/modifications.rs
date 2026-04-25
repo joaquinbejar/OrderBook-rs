@@ -204,10 +204,12 @@ where
                         {
                             // notify price level changes
                             if let Some(ref listener) = self.price_level_changed_listener {
+                                let engine_seq = self.next_engine_seq();
                                 listener(PriceLevelChangedEvent {
                                     side,
                                     price: price_level.price(),
                                     quantity: price_level.visible_quantity(),
+                                    engine_seq,
                                 })
                             }
                             result = Some(Arc::new(self.convert_from_unit_type(&order)));
@@ -304,10 +306,12 @@ where
                                 && let Ok(updated_order) = result
                                 && updated_order.is_some()
                             {
+                                let engine_seq = self.next_engine_seq();
                                 listener(PriceLevelChangedEvent {
                                     side,
                                     price: price_level.price(),
                                     quantity: price_level.visible_quantity(),
+                                    engine_seq,
                                 })
                             }
                             is_empty = price_level.order_count() == 0;
@@ -490,10 +494,12 @@ where
                     if result.is_some()
                         && let Some(ref listener) = self.price_level_changed_listener
                     {
+                        let engine_seq = self.next_engine_seq();
                         listener(PriceLevelChangedEvent {
                             side,
                             price: price_level.price(),
                             quantity: price_level.visible_quantity(),
+                            engine_seq,
                         })
                     }
 
@@ -711,11 +717,12 @@ where
         if !match_result.trades().as_vec().is_empty()
             && let Some(ref listener) = self.trade_listener
         {
-            let trade_result = TradeResult::with_fees(
+            let mut trade_result = TradeResult::with_fees(
                 self.symbol.clone(),
                 match_result.clone(),
                 self.fee_schedule,
             );
+            trade_result.engine_seq = self.next_engine_seq();
             listener(&trade_result) // emit trade events to listener
         }
 
@@ -767,10 +774,12 @@ where
             let unit_order_arc = price_level.value().add_order(unit_order);
             // notify price level changes
             if let Some(ref listener) = self.price_level_changed_listener {
+                let engine_seq = self.next_engine_seq();
                 listener(PriceLevelChangedEvent {
                     side,
                     price: level.price(),
                     quantity: level.visible_quantity(),
+                    engine_seq,
                 })
             }
             self.order_locations

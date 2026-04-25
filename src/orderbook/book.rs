@@ -2195,11 +2195,12 @@ where
         if !match_result.trades().as_vec().is_empty()
             && let Some(ref listener) = self.trade_listener
         {
-            let trade_result = TradeResult::with_fees(
+            let mut trade_result = TradeResult::with_fees(
                 self.symbol.clone(),
                 match_result.clone(),
                 self.fee_schedule,
             );
+            trade_result.engine_seq = self.next_engine_seq();
             listener(&trade_result);
         }
 
@@ -2270,11 +2271,12 @@ where
         if !match_result.trades().as_vec().is_empty()
             && let Some(ref listener) = self.trade_listener
         {
-            let trade_result = TradeResult::with_fees(
+            let mut trade_result = TradeResult::with_fees(
                 self.symbol.clone(),
                 match_result.clone(),
                 self.fee_schedule,
             );
+            trade_result.engine_seq = self.next_engine_seq();
             listener(&trade_result);
         }
 

@@ -1184,4 +1184,161 @@ mod test_book_specific {
         );
         assert_eq!(book.engine_seq(), (threads * per_thread) as u64);
     }
+
+    #[test]
+    fn test_trade_result_carries_engine_seq() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        let captured: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_for_listener = Arc::clone(&captured);
+        let listener: crate::orderbook::trade::TradeListener =
+            Arc::new(move |trade_result: &crate::orderbook::trade::TradeResult| {
+                if let Ok(mut guard) = captured_for_listener.lock() {
+                    guard.push(trade_result.engine_seq);
+                }
+            });
+        let mut book: OrderBook<()> = OrderBook::with_trade_listener("TEST", listener);
+        // No price-level listener so trades are the only outbound events.
+        book.remove_price_level_listener();
+
+        // Resting sell at 1000.
+        let resting_id = create_order_id();
+        book.add_limit_order(resting_id, 1000, 100, Side::Sell, TimeInForce::Gtc, None)
+            .expect("seed resting sell");
+
+        // First market buy fills.
+        let taker_a = create_order_id();
+        let _ = book
+            .match_market_order(taker_a, 10, Side::Buy)
+            .expect("first market buy");
+
+        // Resting sell again.
+        let resting_b = create_order_id();
+        book.add_limit_order(resting_b, 1000, 100, Side::Sell, TimeInForce::Gtc, None)
+            .expect("seed second resting sell");
+
+        // Second market buy fills.
+        let taker_b = create_order_id();
+        let _ = book
+            .match_market_order(taker_b, 10, Side::Buy)
+            .expect("second market buy");
+
+        let observed = captured.lock().expect("lock captured trades").clone();
+        assert_eq!(
+            observed.len(),
+            2,
+            "expected exactly two trade events, got {observed:?}"
+        );
+        assert!(
+            observed[1] > observed[0],
+            "second trade engine_seq ({}) must be > first ({}); observed: {observed:?}",
+            observed[1],
+            observed[0]
+        );
+    }
+
+    #[test]
+    fn test_price_level_event_carries_monotonic_engine_seq() {
+        use crate::orderbook::book_change_event::{
+            PriceLevelChangedEvent, PriceLevelChangedListener,
+        };
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        let captured: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_for_listener = Arc::clone(&captured);
+        let listener: PriceLevelChangedListener = Arc::new(move |event: PriceLevelChangedEvent| {
+            if let Ok(mut guard) = captured_for_listener.lock() {
+                guard.push(event.engine_seq);
+            }
+        });
+        let mut book: OrderBook<()> = OrderBook::new("TEST");
+        book.set_price_level_listener(listener);
+
+        // Open two distinct price levels — each emits one event.
+        book.add_limit_order(
+            create_order_id(),
+            1000,
+            5,
+            Side::Buy,
+            TimeInForce::Gtc,
+            None,
+        )
+        .expect("first level");
+        book.add_limit_order(
+            create_order_id(),
+            1100,
+            5,
+            Side::Buy,
+            TimeInForce::Gtc,
+            None,
+        )
+        .expect("second level");
+
+        let observed = captured.lock().expect("lock captured events").clone();
+        assert_eq!(
+            observed.len(),
+            2,
+            "expected exactly two price-level events, got {observed:?}"
+        );
+        assert!(
+            observed[1] > observed[0],
+            "second price-level engine_seq ({}) must be > first ({}); observed: {observed:?}",
+            observed[1],
+            observed[0]
+        );
+    }
+
+    #[test]
+    fn test_engine_seq_strictly_monotonic_across_trade_and_book_change() {
+        use crate::orderbook::book_change_event::{
+            PriceLevelChangedEvent, PriceLevelChangedListener,
+        };
+        use crate::orderbook::trade::{TradeListener, TradeResult};
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        let captured: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let captured_trades = Arc::clone(&captured);
+        let trade_listener: TradeListener = Arc::new(move |trade_result: &TradeResult| {
+            if let Ok(mut guard) = captured_trades.lock() {
+                guard.push(trade_result.engine_seq);
+            }
+        });
+
+        let captured_levels = Arc::clone(&captured);
+        let level_listener: PriceLevelChangedListener =
+            Arc::new(move |event: PriceLevelChangedEvent| {
+                if let Ok(mut guard) = captured_levels.lock() {
+                    guard.push(event.engine_seq);
+                }
+            });
+
+        let book: OrderBook<()> =
+            OrderBook::with_trade_and_price_level_listener("TEST", trade_listener, level_listener);
+
+        // Resting sell at 1000.
+        let resting_id = create_order_id();
+        book.add_limit_order(resting_id, 1000, 50, Side::Sell, TimeInForce::Gtc, None)
+            .expect("seed resting sell");
+
+        // Aggressive buy crosses, producing both a trade event and a
+        // price-level event (qty change at the resting level).
+        let taker = create_order_id();
+        let _ = book
+            .match_limit_order(taker, 25, Side::Buy, 1000)
+            .expect("aggressive limit cross");
+
+        let observed = captured.lock().expect("lock captured events").clone();
+        assert!(
+            observed.len() >= 2,
+            "expected at least two combined events (trade + book change), got {observed:?}"
+        );
+        assert!(
+            observed.windows(2).all(|w| w[0] < w[1]),
+            "engine_seq must be strictly monotonic across all outbound streams: {observed:?}"
+        );
+    }
 }

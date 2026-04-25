@@ -23,6 +23,18 @@ pub struct TradeResult {
     /// unit as the notional (price × quantity). Zero when no `FeeSchedule`
     /// is configured.
     pub total_taker_fees: i128,
+    /// Strictly monotonic global sequence number across every outbound
+    /// stream of this `OrderBook<T>` instance: the `TradeListener`
+    /// callback, the `PriceLevelChangedListener` callback, and the NATS
+    /// publishers. Use it for cross-stream gap detection and temporal
+    /// ordering. Always strictly increasing within a single book; replay
+    /// into a fresh book yields fresh seqs, not the originals. Stamped at
+    /// emission time by `OrderBook::next_engine_seq`.
+    ///
+    /// Defaults to `0` when deserializing payloads from format versions
+    /// that pre-date `engine_seq` so existing consumers keep parsing.
+    #[serde(default)]
+    pub engine_seq: u64,
 }
 
 impl TradeResult {
@@ -36,6 +48,7 @@ impl TradeResult {
             match_result,
             total_maker_fees: 0,
             total_taker_fees: 0,
+            engine_seq: 0,
         }
     }
 
@@ -81,6 +94,7 @@ impl TradeResult {
             match_result,
             total_maker_fees,
             total_taker_fees,
+            engine_seq: 0,
         }
     }
 
@@ -109,6 +123,10 @@ pub struct TradeEvent {
     pub trade_result: TradeResult,
     /// Unix timestamp in milliseconds when the trade occurred
     pub timestamp: u64,
+    /// Mirrors [`TradeResult::engine_seq`]. Exposed on the envelope so the
+    /// outbound payload carries the engine sequence directly without
+    /// forcing consumers to reach into `trade_result`.
+    pub engine_seq: u64,
 }
 
 /// Structure to store trade information for later display
@@ -289,5 +307,69 @@ mod tests {
 
         assert_eq!(info.maker_fee, -25);
         assert_eq!(info.taker_fee, 50);
+    }
+
+    #[test]
+    fn test_trade_result_engine_seq_default_zero() {
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
+        let tr = TradeResult::new("BTC/USD".to_string(), mr);
+        assert_eq!(tr.engine_seq, 0);
+    }
+
+    #[test]
+    fn test_trade_result_json_roundtrip_preserves_engine_seq() {
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
+        let mut tr = TradeResult::new("BTC/USD".to_string(), mr);
+        tr.engine_seq = 42;
+
+        let json = serde_json::to_vec(&tr).expect("serialize trade");
+        let decoded: TradeResult = serde_json::from_slice(&json).expect("deserialize trade");
+
+        assert_eq!(decoded.engine_seq, 42);
+        assert_eq!(decoded.symbol, tr.symbol);
+        assert_eq!(decoded.total_maker_fees, tr.total_maker_fees);
+        assert_eq!(decoded.total_taker_fees, tr.total_taker_fees);
+    }
+
+    #[test]
+    fn test_trade_result_json_missing_engine_seq_defaults_zero() {
+        // Build a JSON payload that mirrors the pre-engine_seq schema by
+        // first serializing a TradeResult and then stripping the field.
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
+        let mut tr = TradeResult::new("BTC/USD".to_string(), mr);
+        tr.engine_seq = 99;
+
+        let mut value: serde_json::Value =
+            serde_json::to_value(&tr).expect("serialize trade to value");
+        // Remove the field to simulate a payload from before engine_seq.
+        if let Some(map) = value.as_object_mut() {
+            map.remove("engine_seq");
+        }
+        let bytes = serde_json::to_vec(&value).expect("serialize stripped value");
+
+        let decoded: TradeResult =
+            serde_json::from_slice(&bytes).expect("deserialize stripped trade");
+        assert_eq!(
+            decoded.engine_seq, 0,
+            "missing engine_seq must default to 0 via #[serde(default)]"
+        );
+    }
+
+    #[cfg(feature = "bincode")]
+    #[test]
+    fn test_trade_result_bincode_roundtrip_preserves_engine_seq() {
+        use bincode::config::standard;
+        use bincode::serde::{decode_from_slice, encode_to_vec};
+
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
+        let mut tr = TradeResult::new("BTC/USD".to_string(), mr);
+        tr.engine_seq = 7;
+
+        let bytes = encode_to_vec(&tr, standard()).expect("bincode encode");
+        let (decoded, consumed): (TradeResult, usize) =
+            decode_from_slice(&bytes, standard()).expect("bincode decode");
+        assert_eq!(consumed, bytes.len(), "no trailing bytes expected");
+        assert_eq!(decoded.engine_seq, 7);
+        assert_eq!(decoded.symbol, tr.symbol);
     }
 }
