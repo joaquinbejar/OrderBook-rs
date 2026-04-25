@@ -492,15 +492,23 @@ where
     /// Refresh the operational depth gauges with the current count
     /// of distinct bid / ask price levels.
     ///
-    /// Compiles to a no-op when the `metrics` feature is disabled —
-    /// see [`super::metrics::record_depth`]. Hooked from every
-    /// structural mutation site so the published gauge tracks the
-    /// book's true level count without affecting matching latency on
-    /// the happy path.
+    /// Hooked from every structural mutation site so the published
+    /// gauge tracks the book's true level count without affecting
+    /// matching latency on the happy path.
+    ///
+    /// When the `metrics` feature is disabled this compiles to an
+    /// empty function so the `bids.len()` / `asks.len()` reads are
+    /// also elided — every caller is a true zero-cost no-op.
+    #[cfg(feature = "metrics")]
     #[inline]
     pub(super) fn record_depth_metric(&self) {
         super::metrics::record_depth(self.bids.len() as u64, self.asks.len() as u64);
     }
+
+    /// No-op variant when the `metrics` feature is disabled.
+    #[cfg(not(feature = "metrics"))]
+    #[inline]
+    pub(super) fn record_depth_metric(&self) {}
 
     /// Engage the kill switch. While engaged, every public `submit_*`,
     /// `add_order`, and non-cancel `update_order` call returns
@@ -2397,7 +2405,7 @@ where
         // transactions printed. The metric is independent of whether
         // a listener is configured; the listener emission still gates
         // on `Some(ref listener)`.
-        let trades_emitted = match_result.trades().as_vec().len() as u64;
+        let trades_emitted = match_result.trades().len() as u64;
         if trades_emitted > 0 {
             super::metrics::record_trades(trades_emitted);
             if let Some(ref listener) = self.trade_listener {
@@ -2478,7 +2486,7 @@ where
         // transactions printed. The metric is independent of whether
         // a listener is configured; the listener emission still gates
         // on `Some(ref listener)`.
-        let trades_emitted = match_result.trades().as_vec().len() as u64;
+        let trades_emitted = match_result.trades().len() as u64;
         if trades_emitted > 0 {
             super::metrics::record_trades(trades_emitted);
             if let Some(ref listener) = self.trade_listener {

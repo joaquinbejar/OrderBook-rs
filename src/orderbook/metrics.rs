@@ -103,7 +103,7 @@ mod tests {
 
     /// All four call-sites must compile and run without panicking
     /// regardless of feature state. The actual counter behaviour is
-    /// covered by `tests/unit/metrics_tests.rs` (feature-gated).
+    /// covered by `tests/metrics/` (feature-gated).
     #[test]
     fn helpers_are_callable_unconditionally() {
         record_reject(RejectReason::KillSwitchActive);

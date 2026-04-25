@@ -144,8 +144,8 @@ where
         order_id: pricelevel::Id,
         status: super::order_state::OrderStatus,
     ) {
-        if let super::order_state::OrderStatus::Rejected { reason } = status {
-            super::metrics::record_reject(reason);
+        if let super::order_state::OrderStatus::Rejected { reason } = &status {
+            super::metrics::record_reject(*reason);
         }
         if let Some(ref tracker) = self.order_state_tracker {
             tracker.transition(order_id, status);

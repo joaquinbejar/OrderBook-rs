@@ -1,0 +1,324 @@
+diff --git a/src/orderbook/book.rs b/src/orderbook/book.rs
+index f2a4076..52b0290 100644
+--- a/src/orderbook/book.rs
++++ b/src/orderbook/book.rs
+@@ -489,6 +489,20 @@ where
+         self.engine_seq.load(Ordering::Acquire)
+     }
+ 
++    /// Refresh the operational depth gauges with the current count
++    /// of distinct bid / ask price levels.
++    ///
++    /// Compiles to a no-op when the `metrics` feature is disabled —
++    /// see [`super::metrics::record_depth`]. Hooked from every
++    /// structural mutation site (`cache.invalidate()` callers and
++    /// the snapshot restore path) so the published gauge tracks the
++    /// book's true level count without affecting matching latency on
++    /// the happy path.
++    #[inline]
++    pub(super) fn record_depth_metric(&self) {
++        super::metrics::record_depth(self.bids.len() as u64, self.asks.len() as u64);
++    }
++
+     /// Engage the kill switch. While engaged, every public `submit_*`,
+     /// `add_order`, and non-cancel `update_order` call returns
+     /// [`OrderBookError::KillSwitchActive`] before any matching, fee,
+@@ -2380,17 +2394,22 @@ where
+         let match_result =
+             OrderBook::<T>::match_order_with_user(self, order_id, side, quantity, None, user_id)?;
+ 
+-        // Trigger trade listener if there are transactions
+-        if !match_result.trades().as_vec().is_empty()
+-            && let Some(ref listener) = self.trade_listener
+-        {
+-            let mut trade_result = TradeResult::with_fees(
+-                self.symbol.clone(),
+-                match_result.clone(),
+-                self.fee_schedule,
+-            );
+-            trade_result.engine_seq = self.next_engine_seq();
+-            listener(&trade_result);
++        // Emit trade-count metric and trigger trade listener if any
++        // transactions printed. The metric is independent of whether
++        // a listener is configured; the listener emission still gates
++        // on `Some(ref listener)`.
++        let trades_emitted = match_result.trades().as_vec().len() as u64;
++        if trades_emitted > 0 {
++            super::metrics::record_trades(trades_emitted);
++            if let Some(ref listener) = self.trade_listener {
++                let mut trade_result = TradeResult::with_fees(
++                    self.symbol.clone(),
++                    match_result.clone(),
++                    self.fee_schedule,
++                );
++                trade_result.engine_seq = self.next_engine_seq();
++                listener(&trade_result);
++            }
+         }
+ 
+         Ok(match_result)
+@@ -2456,17 +2475,22 @@ where
+             user_id,
+         )?;
+ 
+-        // Trigger trade listener if there are transactions
+-        if !match_result.trades().as_vec().is_empty()
+-            && let Some(ref listener) = self.trade_listener
+-        {
+-            let mut trade_result = TradeResult::with_fees(
+-                self.symbol.clone(),
+-                match_result.clone(),
+-                self.fee_schedule,
+-            );
+-            trade_result.engine_seq = self.next_engine_seq();
+-            listener(&trade_result);
++        // Emit trade-count metric and trigger trade listener if any
++        // transactions printed. The metric is independent of whether
++        // a listener is configured; the listener emission still gates
++        // on `Some(ref listener)`.
++        let trades_emitted = match_result.trades().as_vec().len() as u64;
++        if trades_emitted > 0 {
++            super::metrics::record_trades(trades_emitted);
++            if let Some(ref listener) = self.trade_listener {
++                let mut trade_result = TradeResult::with_fees(
++                    self.symbol.clone(),
++                    match_result.clone(),
++                    self.fee_schedule,
++                );
++                trade_result.engine_seq = self.next_engine_seq();
++                listener(&trade_result);
++            }
+         }
+ 
+         Ok(match_result)
+diff --git a/src/orderbook/mass_cancel.rs b/src/orderbook/mass_cancel.rs
+index 89df3c6..31b02b2 100644
+--- a/src/orderbook/mass_cancel.rs
++++ b/src/orderbook/mass_cancel.rs
+@@ -192,6 +192,8 @@ where
+         self.special_order_tracker.clear();
+ 
+         self.cache.invalidate();
++        // Refresh the depth gauges; both sides are now empty.
++        self.record_depth_metric();
+ 
+         MassCancelResult {
+             cancelled_count,
+diff --git a/src/orderbook/matching.rs b/src/orderbook/matching.rs
+index afca1da..30679c6 100644
+--- a/src/orderbook/matching.rs
++++ b/src/orderbook/matching.rs
+@@ -81,6 +81,9 @@ where
+         // Early exit if the opposite side is empty
+         if match_side.is_empty() {
+             if limit_price.is_none() {
++                crate::orderbook::metrics::record_reject(
++                    crate::orderbook::reject_reason::RejectReason::InsufficientLiquidity,
++                );
+                 return Err(OrderBookError::InsufficientLiquidity {
+                     side,
+                     requested: quantity,
+@@ -286,9 +289,16 @@ where
+         }
+ 
+         // Batch remove empty price levels
++        let levels_removed = !empty_price_levels.is_empty();
+         for price in &empty_price_levels {
+             match_side.remove(price);
+         }
++        if levels_removed {
++            // Refresh the operational depth gauges now that levels may
++            // have been removed. No-op when the `metrics` feature is
++            // disabled.
++            self.record_depth_metric();
++        }
+ 
+         // Batch remove filled orders from tracking and update state
+         for filled_id in &filled_orders {
+@@ -316,6 +326,9 @@ where
+                     reason: CancelReason::SelfTradePrevention,
+                 },
+             );
++            crate::orderbook::metrics::record_reject(
++                crate::orderbook::reject_reason::RejectReason::SelfTradePrevention,
++            );
+             return Err(OrderBookError::SelfTradePrevented {
+                 mode: self.stp_mode,
+                 taker_order_id: order_id,
+@@ -325,6 +338,9 @@ where
+ 
+         // Check for insufficient liquidity in market orders
+         if limit_price.is_none() && remaining_quantity == quantity {
++            crate::orderbook::metrics::record_reject(
++                crate::orderbook::reject_reason::RejectReason::InsufficientLiquidity,
++            );
+             return Err(OrderBookError::InsufficientLiquidity {
+                 side,
+                 requested: quantity,
+diff --git a/src/orderbook/modifications.rs b/src/orderbook/modifications.rs
+index 0f81d12..ffed092 100644
+--- a/src/orderbook/modifications.rs
++++ b/src/orderbook/modifications.rs
+@@ -250,6 +250,11 @@ where
+                     }
+ 
+                     self.cache.invalidate();
++                    if is_empty {
++                        // Refresh depth gauges now that a level was
++                        // removed during the modification path.
++                        self.record_depth_metric();
++                    }
+                     Ok(result)
+                 } else {
+                     Ok(None) // Order not found
+@@ -575,6 +580,10 @@ where
+                 // If the level became empty, remove it
+                 if empty_level {
+                     price_levels.remove(&price);
++                    // Refresh the depth gauges now that a level was
++                    // removed. No-op when the `metrics` feature is
++                    // disabled.
++                    self.record_depth_metric();
+                 }
+             }
+ 
+@@ -660,12 +669,14 @@ where
+                     ..
+                 } => {
+                     if visible_quantity.as_u64() % lot != 0 {
++                        crate::orderbook::metrics::record_reject(RejectReason::InvalidQuantity);
+                         return Err(OrderBookError::InvalidLotSize {
+                             quantity: visible_quantity.as_u64(),
+                             lot_size: lot,
+                         });
+                     }
+                     if hidden_quantity.as_u64() % lot != 0 {
++                        crate::orderbook::metrics::record_reject(RejectReason::InvalidQuantity);
+                         return Err(OrderBookError::InvalidLotSize {
+                             quantity: hidden_quantity.as_u64(),
+                             lot_size: lot,
+@@ -674,6 +685,7 @@ where
+                 }
+                 _ => {
+                     if order.total_quantity() % lot != 0 {
++                        crate::orderbook::metrics::record_reject(RejectReason::InvalidQuantity);
+                         return Err(OrderBookError::InvalidLotSize {
+                             quantity: order.total_quantity(),
+                             lot_size: lot,
+@@ -688,6 +700,7 @@ where
+         if let Some(min) = self.min_order_size
+             && qty < min
+         {
++            crate::orderbook::metrics::record_reject(RejectReason::OrderSizeOutOfRange);
+             return Err(OrderBookError::OrderSizeOutOfRange {
+                 quantity: qty,
+                 min: Some(min),
+@@ -697,6 +710,7 @@ where
+         if let Some(max) = self.max_order_size
+             && qty > max
+         {
++            crate::orderbook::metrics::record_reject(RejectReason::OrderSizeOutOfRange);
+             return Err(OrderBookError::OrderSizeOutOfRange {
+                 quantity: qty,
+                 min: self.min_order_size,
+@@ -743,6 +757,7 @@ where
+                         reason: CancelReason::InsufficientLiquidity,
+                     },
+                 );
++                crate::orderbook::metrics::record_reject(RejectReason::InsufficientLiquidity);
+                 return Err(OrderBookError::InsufficientLiquidity {
+                     side: order.side(),
+                     requested: order.total_quantity(),
+@@ -761,16 +776,18 @@ where
+             order.user_id(),
+         )?;
+ 
+-        if !match_result.trades().as_vec().is_empty()
+-            && let Some(ref listener) = self.trade_listener
+-        {
+-            let mut trade_result = TradeResult::with_fees(
+-                self.symbol.clone(),
+-                match_result.clone(),
+-                self.fee_schedule,
+-            );
+-            trade_result.engine_seq = self.next_engine_seq();
+-            listener(&trade_result) // emit trade events to listener
++        let trades_emitted = match_result.trades().as_vec().len() as u64;
++        if trades_emitted > 0 {
++            crate::orderbook::metrics::record_trades(trades_emitted);
++            if let Some(ref listener) = self.trade_listener {
++                let mut trade_result = TradeResult::with_fees(
++                    self.symbol.clone(),
++                    match_result.clone(),
++                    self.fee_schedule,
++                );
++                trade_result.engine_seq = self.next_engine_seq();
++                listener(&trade_result) // emit trade events to listener
++            }
+         }
+ 
+         // Track the incoming order's state based on matching result
+@@ -790,6 +807,7 @@ where
+                         reason: CancelReason::InsufficientLiquidity,
+                     },
+                 );
++                crate::orderbook::metrics::record_reject(RejectReason::InsufficientLiquidity);
+                 return Err(OrderBookError::InsufficientLiquidity {
+                     side: order.side(),
+                     requested: order.quantity(), // Now uses the trait method
+@@ -832,6 +850,12 @@ where
+             self.order_locations
+                 .insert(unit_order_arc.id(), (price, side));
+ 
++            // Refresh the depth gauges. The level may be brand-new
++            // (`get_or_insert` created it) or pre-existing — either
++            // way the gauge reflects current state. No-op when the
++            // `metrics` feature is disabled.
++            self.record_depth_metric();
++
+             // Pre-trade risk hook: register the resting order with
+             // the risk state so per-account counters are updated and
+             // future checks see the new contribution. No-op when no
+diff --git a/src/orderbook/private.rs b/src/orderbook/private.rs
+index d13a186..4af139e 100644
+--- a/src/orderbook/private.rs
++++ b/src/orderbook/private.rs
+@@ -70,6 +70,10 @@ where
+         // Track the order in the user_orders index for efficient user-based cancellation
+         self.track_user_order(order.user_id(), order_id);
+ 
++        // Refresh the operational depth gauges. No-op when the
++        // `metrics` feature is disabled.
++        self.record_depth_metric();
++
+         Ok(order)
+     }
+ 
+@@ -124,15 +128,25 @@ where
+         }
+     }
+ 
+-    /// Record an order state transition if a tracker is configured.
++    /// Record an order state transition if a tracker is configured,
++    /// and emit operational metrics when the transition is a
++    /// rejection.
+     ///
+-    /// This is a no-op when `order_state_tracker` is `None`.
++    /// Tracker recording is a no-op when `order_state_tracker` is
++    /// `None`. Metrics emission is unconditional but compiles to a
++    /// no-op when the `metrics` feature is disabled — see
++    /// [`crate::orderbook::metrics`]. Hooking the metric here keeps
++    /// every reject path in the engine on the same single emission
++    /// point.
+     #[inline]
+     pub(super) fn track_state(
+         &self,
+         order_id: pricelevel::Id,
+         status: super::order_state::OrderStatus,
+     ) {
++        if let super::order_state::OrderStatus::Rejected { reason } = status {
++            super::metrics::record_reject(reason);
++        }
+         if let Some(ref tracker) = self.order_state_tracker {
+             tracker.transition(order_id, status);
+         }
