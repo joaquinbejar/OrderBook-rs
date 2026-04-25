@@ -552,6 +552,13 @@ where
                 // Remove the order from the locations map
                 self.order_locations.remove(&order_id);
 
+                // Pre-trade risk hook: drop the per-account counter
+                // contribution before the order leaves the index. Does
+                // not depend on `cancelled_order` because the risk
+                // state already stores `account` and `remaining_qty`.
+                // No-op when no `RiskConfig` is installed.
+                self.risk_state.on_cancel(order_id);
+
                 // Remove the order from the user_orders index
                 self.untrack_user_order(cancelled_order.user_id(), &order_id);
 
@@ -821,6 +828,17 @@ where
             }
             self.order_locations
                 .insert(unit_order_arc.id(), (price, side));
+
+            // Pre-trade risk hook: register the resting order with
+            // the risk state so per-account counters are updated and
+            // future checks see the new contribution. No-op when no
+            // `RiskConfig` is installed.
+            self.risk_state.on_admission(
+                unit_order_arc.id(),
+                order.user_id(),
+                price,
+                match_result.remaining_quantity(),
+            );
 
             // Track the order in the user_orders index
             self.track_user_order(order.user_id(), unit_order_arc.id());

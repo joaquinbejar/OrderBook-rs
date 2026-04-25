@@ -208,6 +208,370 @@ mod tests_risk_layer {
     // Market-order bypass
     // ───────────────────────────────────────────────────────────────
 
+    // ───────────────────────────────────────────────────────────────
+    // Per-account counter state (commit 3 — admission/fill/cancel hooks)
+    // ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn submit_above_max_open_orders_returns_risk_max_open() {
+        let mut book = new_book();
+        book.set_risk_config(
+            RiskConfig::new().with_max_open_orders_per_account(2),
+        );
+        let acct = account(11);
+
+        // Two admissions consume the quota.
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("first order admitted");
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            101,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("second order admitted");
+
+        // Third is rejected.
+        let result = book.add_limit_order_with_user(
+            Id::new_uuid(),
+            102,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        );
+        match result {
+            Err(OrderBookError::RiskMaxOpenOrders {
+                account: a,
+                current,
+                limit,
+            }) => {
+                assert_eq!(a, acct);
+                assert_eq!(current, 2);
+                assert_eq!(limit, 2);
+            }
+            other => panic!("expected RiskMaxOpenOrders, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn submit_within_max_open_orders_succeeds() {
+        let mut book = new_book();
+        book.set_risk_config(
+            RiskConfig::new().with_max_open_orders_per_account(3),
+        );
+        let acct = account(12);
+
+        for i in 0..3 {
+            book.add_limit_order_with_user(
+                Id::new_uuid(),
+                100 + i,
+                1,
+                Side::Buy,
+                TimeInForce::Gtc,
+                acct,
+                None,
+            )
+            .unwrap_or_else(|err| panic!("admission {i} failed: {err:?}"));
+        }
+    }
+
+    #[test]
+    fn submit_above_max_notional_returns_risk_max_notional() {
+        let mut book = new_book();
+        // 1_000 notional ceiling per account.
+        book.set_risk_config(
+            RiskConfig::new().with_max_notional_per_account(1_000),
+        );
+        let acct = account(13);
+
+        // 8 * 100 = 800 notional consumed.
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            8,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("first admission within budget");
+
+        // 3 * 100 = 300 attempted; 800 + 300 > 1_000 → reject.
+        let result = book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            3,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        );
+        match result {
+            Err(OrderBookError::RiskMaxNotional {
+                account: a,
+                current,
+                attempted,
+                limit,
+            }) => {
+                assert_eq!(a, acct);
+                assert_eq!(current, 800);
+                assert_eq!(attempted, 300);
+                assert_eq!(limit, 1_000);
+            }
+            other => panic!("expected RiskMaxNotional, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn submit_within_max_notional_succeeds() {
+        let mut book = new_book();
+        book.set_risk_config(
+            RiskConfig::new().with_max_notional_per_account(1_000),
+        );
+        let acct = account(14);
+
+        // 8 * 100 = 800 in budget.
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            8,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("first within budget");
+
+        // 2 * 100 = 200; 800 + 200 = 1_000, exactly at the limit, so
+        // accepted (`current + attempted > limit` is the gate, strict).
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            2,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("second hits ceiling exactly and is accepted");
+    }
+
+    #[test]
+    fn cancel_decrements_counters() {
+        let mut book = new_book();
+        book.set_risk_config(
+            RiskConfig::new().with_max_open_orders_per_account(1),
+        );
+        let acct = account(15);
+
+        let order_id = Id::new_uuid();
+        book.add_limit_order_with_user(
+            order_id,
+            100,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("first admission");
+
+        // Second is rejected because the quota is full.
+        assert!(
+            matches!(
+                book.add_limit_order_with_user(
+                    Id::new_uuid(),
+                    100,
+                    1,
+                    Side::Buy,
+                    TimeInForce::Gtc,
+                    acct,
+                    None,
+                ),
+                Err(OrderBookError::RiskMaxOpenOrders { .. })
+            ),
+            "second should be rejected"
+        );
+
+        // Cancel and retry; should now succeed.
+        book.cancel_order(order_id)
+            .expect("cancel returns Ok")
+            .expect("cancel returns Some");
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("cancel must drop the counter and re-open the slot");
+    }
+
+    #[test]
+    fn partial_fill_decrements_notional_and_keeps_count() {
+        let mut book = new_book();
+        // High open ceiling, tight notional ceiling: we want the
+        // partial fill to free notional headroom for a follow-up.
+        book.set_risk_config(
+            RiskConfig::new()
+                .with_max_open_orders_per_account(10)
+                .with_max_notional_per_account(2_000),
+        );
+        let maker_acct = account(16);
+        let taker_acct = account(17);
+
+        // Maker rests 10 @ 100 (1_000 notional).
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            10,
+            Side::Buy,
+            TimeInForce::Gtc,
+            maker_acct,
+            None,
+        )
+        .expect("maker admitted");
+
+        // Taker (different account) submits an aggressive sell that
+        // partially fills the maker (qty 4 of 10 at price 100).
+        book.submit_market_order_with_user(Id::new_uuid(), 4, Side::Sell, taker_acct)
+            .expect("aggressive sell fills 4 of 10");
+
+        // Maker now has 600 notional (6 * 100). New maker admission
+        // for 14 * 100 = 1_400 notional must succeed: 600 + 1_400 =
+        // 2_000 (== limit, accepted by strict `>` gate). A larger one
+        // (15 * 100 = 1_500) would be rejected.
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            99,
+            14,
+            Side::Buy,
+            TimeInForce::Gtc,
+            maker_acct,
+            None,
+        )
+        .expect("partial fill must free notional headroom");
+
+        let breach = book.add_limit_order_with_user(
+            Id::new_uuid(),
+            98,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            maker_acct,
+            None,
+        );
+        assert!(
+            matches!(breach, Err(OrderBookError::RiskMaxNotional { .. })),
+            "ceiling already hit; expected RiskMaxNotional, got {breach:?}"
+        );
+    }
+
+    #[test]
+    fn full_fill_decrements_open_count() {
+        let mut book = new_book();
+        book.set_risk_config(
+            RiskConfig::new().with_max_open_orders_per_account(1),
+        );
+        let maker_acct = account(18);
+        let taker_acct = account(19);
+
+        // Maker uses the only slot.
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            5,
+            Side::Buy,
+            TimeInForce::Gtc,
+            maker_acct,
+            None,
+        )
+        .expect("maker admitted");
+
+        // Aggressive sell fully consumes the maker.
+        book.submit_market_order_with_user(Id::new_uuid(), 5, Side::Sell, taker_acct)
+            .expect("aggressive sell fills the maker fully");
+
+        // Maker's slot must be free again.
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            maker_acct,
+            None,
+        )
+        .expect("full fill must drop open_count and re-open the slot");
+    }
+
+    #[test]
+    fn disable_risk_clears_gates_keeps_counters() {
+        let mut book = new_book();
+        book.set_risk_config(
+            RiskConfig::new().with_max_open_orders_per_account(1),
+        );
+        let acct = account(20);
+
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("first admitted");
+        // Quota full → second rejected.
+        assert!(
+            matches!(
+                book.add_limit_order_with_user(
+                    Id::new_uuid(),
+                    100,
+                    1,
+                    Side::Buy,
+                    TimeInForce::Gtc,
+                    acct,
+                    None,
+                ),
+                Err(OrderBookError::RiskMaxOpenOrders { .. })
+            ),
+            "expected rejection at quota"
+        );
+
+        book.disable_risk();
+
+        // After disable, gate is lifted and admission succeeds even
+        // though the per-account counter still reads 1 underneath.
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("disable_risk lifts the gate");
+        assert!(book.risk_config().is_none());
+    }
+
     #[test]
     fn market_orders_bypass_risk_checks() {
         let mut book = new_book();

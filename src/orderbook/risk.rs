@@ -149,7 +149,6 @@ pub(super) struct RiskEntry {
 /// "no reference price available" code path. All public operations
 /// are no-ops when `config` is `None`.
 #[derive(Debug, Default)]
-#[allow(dead_code)] // counters/orders/warned_no_reference are wired by book.rs in commits 2-3
 pub struct RiskState {
     pub(super) config: Option<RiskConfig>,
     pub(super) counters: DashMap<Hash32, RiskCounters>,
@@ -157,7 +156,6 @@ pub struct RiskState {
     pub(super) warned_no_reference: AtomicBool,
 }
 
-#[allow(dead_code)] // wired by book.rs / modifications.rs / matching.rs in commits 2-3
 impl RiskState {
     /// Construct an empty state with no configuration installed.
     #[inline]
@@ -395,6 +393,7 @@ impl RiskState {
     /// snapshot's resting orders have been re-installed into the book.
     /// Iteration is in input-vector order, which is deterministic and
     /// does not affect outbound emissions.
+    #[allow(dead_code)] // wired in commit 4 (snapshot persistence)
     pub(super) fn rebuild_from_snapshot(
         &self,
         bids: &[PriceLevelSnapshot],
