@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 default = []
 special_orders = ["orderbook-rs/special_orders"]
+metrics = ["orderbook-rs/metrics", "dep:metrics", "dep:metrics-exporter-prometheus"]
 
 [dependencies]
 orderbook-rs = { workspace = true }
@@ -15,7 +16,13 @@ uuid = { workspace = true }
 pricelevel = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+metrics = { version = "0.24", optional = true }
+metrics-exporter-prometheus = { version = "0.18", optional = true, default-features = false }
 
 [[bin]]
 name = "special_orders_demo"
 required-features = ["special_orders"]
+
+[[bin]]
+name = "prometheus_export"
+required-features = ["metrics"]

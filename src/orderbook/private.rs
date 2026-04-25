@@ -70,6 +70,10 @@ where
         // Track the order in the user_orders index for efficient user-based cancellation
         self.track_user_order(order.user_id(), order_id);
 
+        // Refresh the operational depth gauges. No-op when the
+        // `metrics` feature is disabled.
+        self.record_depth_metric();
+
         Ok(order)
     }
 
@@ -124,15 +128,25 @@ where
         }
     }
 
-    /// Record an order state transition if a tracker is configured.
+    /// Record an order state transition if a tracker is configured,
+    /// and emit operational metrics when the transition is a
+    /// rejection.
     ///
-    /// This is a no-op when `order_state_tracker` is `None`.
+    /// Tracker recording is a no-op when `order_state_tracker` is
+    /// `None`. Metrics emission is unconditional but compiles to a
+    /// no-op when the `metrics` feature is disabled — see
+    /// [`crate::orderbook::metrics`]. Hooking the metric here keeps
+    /// every reject path in the engine on the same single emission
+    /// point.
     #[inline]
     pub(super) fn track_state(
         &self,
         order_id: pricelevel::Id,
         status: super::order_state::OrderStatus,
     ) {
+        if let super::order_state::OrderStatus::Rejected { reason } = &status {
+            super::metrics::record_reject(*reason);
+        }
         if let Some(ref tracker) = self.order_state_tracker {
             tracker.transition(order_id, status);
         }

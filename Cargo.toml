@@ -48,6 +48,7 @@ bytes = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
 crc32fast = { workspace = true, optional = true }
 memmap2 = { workspace = true, optional = true }
+metrics = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -56,6 +57,7 @@ nats = ["dep:async-nats", "dep:bytes"]
 bincode = ["dep:bincode"]
 journal = ["dep:crc32fast", "dep:memmap2"]
 alloc-counters = []
+metrics = ["dep:metrics"]
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -114,6 +116,11 @@ name = "alloc_budget"
 path = "tests/alloc_budget.rs"
 required-features = ["alloc-counters"]
 
+[[test]]
+name = "metrics_tests"
+path = "tests/metrics/mod.rs"
+required-features = ["metrics"]
+
 
 [lib]
 name = "orderbook_rs"
@@ -146,3 +153,4 @@ bytes = "1"
 bincode = { version = "2.0", features = ["serde"] }
 crc32fast = "1"
 memmap2 = "0.9"
+metrics = "0.24"

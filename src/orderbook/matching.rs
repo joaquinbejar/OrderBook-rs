@@ -81,6 +81,9 @@ where
         // Early exit if the opposite side is empty
         if match_side.is_empty() {
             if limit_price.is_none() {
+                crate::orderbook::metrics::record_reject(
+                    crate::orderbook::reject_reason::RejectReason::InsufficientLiquidity,
+                );
                 return Err(OrderBookError::InsufficientLiquidity {
                     side,
                     requested: quantity,
@@ -286,8 +289,15 @@ where
         }
 
         // Batch remove empty price levels
+        let levels_removed = !empty_price_levels.is_empty();
         for price in &empty_price_levels {
             match_side.remove(price);
+        }
+        if levels_removed {
+            // Refresh the operational depth gauges now that levels may
+            // have been removed. No-op when the `metrics` feature is
+            // disabled.
+            self.record_depth_metric();
         }
 
         // Batch remove filled orders from tracking and update state
@@ -316,6 +326,9 @@ where
                     reason: CancelReason::SelfTradePrevention,
                 },
             );
+            crate::orderbook::metrics::record_reject(
+                crate::orderbook::reject_reason::RejectReason::SelfTradePrevention,
+            );
             return Err(OrderBookError::SelfTradePrevented {
                 mode: self.stp_mode,
                 taker_order_id: order_id,
@@ -325,6 +338,9 @@ where
 
         // Check for insufficient liquidity in market orders
         if limit_price.is_none() && remaining_quantity == quantity {
+            crate::orderbook::metrics::record_reject(
+                crate::orderbook::reject_reason::RejectReason::InsufficientLiquidity,
+            );
             return Err(OrderBookError::InsufficientLiquidity {
                 side,
                 requested: quantity,

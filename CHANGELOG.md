@@ -47,6 +47,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and confined to the wrapper module; every `unsafe` block
   delegates immediately to the inner allocator.
 
+### Added — Prometheus metrics feature (#60)
+
+- **New optional `metrics` feature flag** (default off). When
+  enabled, the matching core emits Prometheus-style counters and
+  gauges through the [`metrics`](https://docs.rs/metrics) crate's
+  global facade. Any compatible recorder (Prometheus exporter,
+  OpenTelemetry bridge, custom collector) can scrape them.
+- **Surface (stable across `0.7.x`):**
+  - `orderbook_rejects_total{reason="..."}` — counter,
+    incremented exactly once per rejection. Label value is the
+    `RejectReason` `Display` string.
+  - `orderbook_depth_levels_bid` / `orderbook_depth_levels_ask`
+    — gauges, current count of distinct price levels per side,
+    refreshed on every add / cancel / modify / fill.
+  - `orderbook_trades_total` — counter, monotonic count of every
+    emitted trade transaction (one increment per `MatchResult`
+    transaction, summed across all listener-emitted and
+    internal-only matches).
+- **Out-of-band emission.** Allocation-free on the happy path,
+  no influence on matching outcomes, no recorder dependency on
+  the core engine. `restore_from_snapshot_package` does **not**
+  rehydrate counters — operational only, process-lifetime.
+- **Compile-time no-op when the feature is disabled.** Every
+  helper in `orderbook::metrics` compiles down to an empty
+  function so call-sites in the matching hot path stay
+  unconditional.
+- **`metrics = "0.24"`** is the new optional dependency.
+- Integration test `tests/metrics/` (its own test binary so the
+  global recorder isn't perturbed by the rest of the suite)
+  covers reject counts, trade counts, depth gauges, and a
+  determinism guard that proves metrics emission does not alter
+  byte-identical snapshots.
+- Example `examples/src/bin/prometheus_export.rs` demonstrates
+  installing `metrics-exporter-prometheus` and dumping the
+  exposition payload.
+
 ### Added — HDR-histogram tail-latency bench suite (#56)
 
 - **Six new bench binaries** under `benches/order_book/*_hdr.rs` that

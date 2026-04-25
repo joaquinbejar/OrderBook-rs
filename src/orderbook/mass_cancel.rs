@@ -192,6 +192,8 @@ where
         self.special_order_tracker.clear();
 
         self.cache.invalidate();
+        // Refresh the depth gauges; both sides are now empty.
+        self.record_depth_metric();
 
         MassCancelResult {
             cancelled_count,

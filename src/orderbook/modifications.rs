@@ -250,6 +250,11 @@ where
                     }
 
                     self.cache.invalidate();
+                    if is_empty {
+                        // Refresh depth gauges now that a level was
+                        // removed during the modification path.
+                        self.record_depth_metric();
+                    }
                     Ok(result)
                 } else {
                     Ok(None) // Order not found
@@ -575,6 +580,10 @@ where
                 // If the level became empty, remove it
                 if empty_level {
                     price_levels.remove(&price);
+                    // Refresh the depth gauges now that a level was
+                    // removed. No-op when the `metrics` feature is
+                    // disabled.
+                    self.record_depth_metric();
                 }
             }
 
@@ -660,12 +669,24 @@ where
                     ..
                 } => {
                     if visible_quantity.as_u64() % lot != 0 {
+                        self.track_state(
+                            order.id(),
+                            OrderStatus::Rejected {
+                                reason: RejectReason::InvalidQuantity,
+                            },
+                        );
                         return Err(OrderBookError::InvalidLotSize {
                             quantity: visible_quantity.as_u64(),
                             lot_size: lot,
                         });
                     }
                     if hidden_quantity.as_u64() % lot != 0 {
+                        self.track_state(
+                            order.id(),
+                            OrderStatus::Rejected {
+                                reason: RejectReason::InvalidQuantity,
+                            },
+                        );
                         return Err(OrderBookError::InvalidLotSize {
                             quantity: hidden_quantity.as_u64(),
                             lot_size: lot,
@@ -674,6 +695,12 @@ where
                 }
                 _ => {
                     if order.total_quantity() % lot != 0 {
+                        self.track_state(
+                            order.id(),
+                            OrderStatus::Rejected {
+                                reason: RejectReason::InvalidQuantity,
+                            },
+                        );
                         return Err(OrderBookError::InvalidLotSize {
                             quantity: order.total_quantity(),
                             lot_size: lot,
@@ -688,6 +715,12 @@ where
         if let Some(min) = self.min_order_size
             && qty < min
         {
+            self.track_state(
+                order.id(),
+                OrderStatus::Rejected {
+                    reason: RejectReason::OrderSizeOutOfRange,
+                },
+            );
             return Err(OrderBookError::OrderSizeOutOfRange {
                 quantity: qty,
                 min: Some(min),
@@ -697,6 +730,12 @@ where
         if let Some(max) = self.max_order_size
             && qty > max
         {
+            self.track_state(
+                order.id(),
+                OrderStatus::Rejected {
+                    reason: RejectReason::OrderSizeOutOfRange,
+                },
+            );
             return Err(OrderBookError::OrderSizeOutOfRange {
                 quantity: qty,
                 min: self.min_order_size,
@@ -743,6 +782,7 @@ where
                         reason: CancelReason::InsufficientLiquidity,
                     },
                 );
+                crate::orderbook::metrics::record_reject(RejectReason::InsufficientLiquidity);
                 return Err(OrderBookError::InsufficientLiquidity {
                     side: order.side(),
                     requested: order.total_quantity(),
@@ -761,16 +801,18 @@ where
             order.user_id(),
         )?;
 
-        if !match_result.trades().as_vec().is_empty()
-            && let Some(ref listener) = self.trade_listener
-        {
-            let mut trade_result = TradeResult::with_fees(
-                self.symbol.clone(),
-                match_result.clone(),
-                self.fee_schedule,
-            );
-            trade_result.engine_seq = self.next_engine_seq();
-            listener(&trade_result) // emit trade events to listener
+        let trades_emitted = match_result.trades().len() as u64;
+        if trades_emitted > 0 {
+            crate::orderbook::metrics::record_trades(trades_emitted);
+            if let Some(ref listener) = self.trade_listener {
+                let mut trade_result = TradeResult::with_fees(
+                    self.symbol.clone(),
+                    match_result.clone(),
+                    self.fee_schedule,
+                );
+                trade_result.engine_seq = self.next_engine_seq();
+                listener(&trade_result) // emit trade events to listener
+            }
         }
 
         // Track the incoming order's state based on matching result
@@ -790,6 +832,7 @@ where
                         reason: CancelReason::InsufficientLiquidity,
                     },
                 );
+                crate::orderbook::metrics::record_reject(RejectReason::InsufficientLiquidity);
                 return Err(OrderBookError::InsufficientLiquidity {
                     side: order.side(),
                     requested: order.quantity(), // Now uses the trait method
@@ -831,6 +874,12 @@ where
             }
             self.order_locations
                 .insert(unit_order_arc.id(), (price, side));
+
+            // Refresh the depth gauges. The level may be brand-new
+            // (`get_or_insert` created it) or pre-existing — either
+            // way the gauge reflects current state. No-op when the
+            // `metrics` feature is disabled.
+            self.record_depth_metric();
 
             // Pre-trade risk hook: register the resting order with
             // the risk state so per-account counters are updated and
