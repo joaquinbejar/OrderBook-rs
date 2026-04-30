@@ -39,6 +39,26 @@ pub enum SequencerCommand<T> {
         side: Side,
     },
 
+    /// Submit an aggressive market order specified by quote-notional
+    /// amount. Walks the opposite side until `amount` is consumed, the
+    /// book is exhausted, or — when `lot_size` is configured on the
+    /// destination book — the residual notional cannot fund another
+    /// whole lot. This is the additive Binance-style `quoteOrderQty`
+    /// counterpart to [`Self::MarketOrder`].
+    ///
+    /// Adding this variant is non-breaking: existing journals replay
+    /// unchanged. Journals carrying `MarketOrderByAmount` will fail to
+    /// decode against older binaries — this matches the precedent for
+    /// previous `SequencerCommand` variant rollouts.
+    MarketOrderByAmount {
+        /// The order identifier.
+        id: Id,
+        /// The quote-asset value to consume from the book.
+        amount: u128,
+        /// The side of the market order (Buy sweeps asks, Sell sweeps bids).
+        side: Side,
+    },
+
     /// Cancel all orders in the book.
     CancelAll,
 

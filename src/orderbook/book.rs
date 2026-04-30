@@ -2414,6 +2414,89 @@ where
         Ok(match_result)
     }
 
+    /// Match a market order specified by quote-notional amount.
+    ///
+    /// Walks the opposite side until the requested `amount` is consumed,
+    /// the book is exhausted, or — when [`Self::lot_size`] is configured —
+    /// the remaining notional cannot fund another whole lot. This is the
+    /// classic Binance-style `quoteOrderQty` semantics: callers say "buy
+    /// ~$1,000 of BTC" without converting to base quantity.
+    ///
+    /// Bypasses STP (uses `Hash32::zero()`); use
+    /// [`Self::match_market_order_by_amount_with_user`] when STP is
+    /// needed.
+    ///
+    /// # Fees
+    ///
+    /// Fees are **exclusive** of `amount`. The caller pays
+    /// `amount + taker_fee`; the book consumes exactly `amount` of quote
+    /// liquidity (modulo any residual dust below one lot).
+    ///
+    /// # Returns
+    ///
+    /// `Ok(MatchResult)` whenever at least one transaction occurred.
+    /// Inspect [`pricelevel::MatchResult::executed_value`] for the actual
+    /// notional consumed; the residual dust returned to the caller is
+    /// `requested - executed_value`. The accompanying `TradeResult`
+    /// emitted to the trade listener carries `quote_notional` populated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrderBookError::InsufficientLiquidityNotional`] when the
+    /// book had zero matchable depth (empty or all levels priced beyond
+    /// the per-level lot affordable from `amount`).
+    pub fn match_market_order_by_amount(
+        &self,
+        order_id: Id,
+        amount: u128,
+        side: Side,
+    ) -> Result<MatchResult, OrderBookError> {
+        self.match_market_order_by_amount_with_user(order_id, amount, side, Hash32::zero())
+    }
+
+    /// Match a quote-notional market order with Self-Trade Prevention.
+    ///
+    /// See [`Self::match_market_order_by_amount`] for the amount / lot /
+    /// fee semantics. When STP is enabled and `user_id` is non-zero, the
+    /// matching engine checks resting orders for same-user conflicts
+    /// before executing fills.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrderBookError::InsufficientLiquidityNotional`] when no
+    /// liquidity is available, or [`OrderBookError::SelfTradePrevented`]
+    /// when STP cancels the taker before any fills occur.
+    pub fn match_market_order_by_amount_with_user(
+        &self,
+        order_id: Id,
+        amount: u128,
+        side: Side,
+        user_id: Hash32,
+    ) -> Result<MatchResult, OrderBookError> {
+        trace!(
+            "Order book {}: Matching notional market order {} for {} at side {:?}",
+            self.symbol, order_id, amount, side
+        );
+        let match_result =
+            OrderBook::<T>::match_order_by_amount_with_user(self, order_id, side, amount, user_id)?;
+
+        let trades_emitted = match_result.trades().len() as u64;
+        if trades_emitted > 0 {
+            super::metrics::record_trades(trades_emitted);
+            if let Some(ref listener) = self.trade_listener {
+                let mut trade_result = TradeResult::with_fees(
+                    self.symbol.clone(),
+                    match_result.clone(),
+                    self.fee_schedule,
+                );
+                trade_result.engine_seq = self.next_engine_seq();
+                listener(&trade_result);
+            }
+        }
+
+        Ok(match_result)
+    }
+
     /// Attempts to match a limit order in the order book.
     ///
     /// This is a convenience wrapper that bypasses STP (uses `Hash32::zero()`).

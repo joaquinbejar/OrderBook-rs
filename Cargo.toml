@@ -89,6 +89,11 @@ path = "benches/order_book/aggressive_walk_hdr.rs"
 harness = false
 
 [[bench]]
+name = "notional_walk_hdr"
+path = "benches/order_book/notional_walk_hdr.rs"
+harness = false
+
+[[bench]]
 name = "mixed_70_20_10_hdr"
 path = "benches/order_book/mixed_70_20_10_hdr.rs"
 harness = false

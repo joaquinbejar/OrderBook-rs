@@ -331,6 +331,13 @@ where
                         source: e,
                     })?;
             }
+            SequencerCommand::MarketOrderByAmount { id, amount, side } => {
+                book.submit_market_order_by_amount(*id, *amount, *side)
+                    .map_err(|e| ReplayError::OrderBookError {
+                        sequence_num: event.sequence_num,
+                        source: e,
+                    })?;
+            }
             SequencerCommand::CancelAll => {
                 let _ = book.cancel_all_orders();
             }
@@ -512,6 +519,127 @@ mod tests {
                 other
             ),
             Ok(_) => panic!("expected SequenceGap {{ expected: 3, found: 4 }}, got Ok(_)"),
+        }
+    }
+
+    #[test]
+    fn test_replay_market_order_by_amount_matches_live_book() {
+        // Build a journal: seed an ask wall, then take it with a
+        // notional market order. Replay against a fresh book and
+        // require the resulting snapshot to match the live one — proves
+        // the additive variant dispatches identically to the live path.
+        let journal: InMemoryJournal<()> = InMemoryJournal::new();
+        let mut seq = 0u64;
+
+        // Three asks at 100, 101, 102 — each size 10.
+        for price in [100u128, 101, 102] {
+            let ev = make_add_event(seq, Id::new_uuid(), price, 10, Side::Sell);
+            assert!(journal.append(&ev).is_ok());
+            seq += 1;
+        }
+
+        // Notional buy: $1500 sweeps 10@100 + 10@101 = $2010 total — but
+        // we cap at $1500 so only 10@100 + 4@101 (=$1404) lands. The
+        // residual $96 is dust < 1*101 = 101 still — actually it can buy
+        // 0 more at 101 → stop short of the third level. Exact behavior
+        // doesn't matter for this test; what matters is replay parity.
+        let taker_id = Id::new_uuid();
+        let ev = SequencerEvent::<()> {
+            sequence_num: seq,
+            timestamp_ns: 0,
+            command: SequencerCommand::MarketOrderByAmount {
+                id: taker_id,
+                amount: 1_500,
+                side: Side::Buy,
+            },
+            // Result is informational for replay — replay re-executes
+            // the command against a fresh book.
+            result: SequencerResult::Rejected {
+                reason: "ignored".to_string(),
+            },
+        };
+        // Replace the Rejected placeholder with something replay won't
+        // skip. SequencerResult::Rejected entries are explicitly skipped
+        // by replay (see replay_from inner match).
+        let ev = SequencerEvent::<()> {
+            result: SequencerResult::OrderAdded { order_id: taker_id },
+            ..ev
+        };
+        assert!(journal.append(&ev).is_ok());
+
+        // Drive the live book through the same sequence so we have a
+        // ground-truth snapshot.
+        let live_book: crate::OrderBook<()> = crate::OrderBook::new("TEST");
+        for price in [100u128, 101, 102] {
+            live_book
+                .add_order(OrderType::Standard {
+                    id: Id::new_uuid(),
+                    price: Price::new(price),
+                    quantity: Quantity::new(10),
+                    side: Side::Sell,
+                    time_in_force: TimeInForce::Gtc,
+                    user_id: Hash32::zero(),
+                    timestamp: TimestampMs::new(0),
+                    extra_fields: (),
+                })
+                .expect("seed ask");
+        }
+        // Note: live_book seeds with fresh UUIDs, so the per-level
+        // visible_quantity post-match is what `snapshots_match` compares.
+        // Use the same notional amount so the residual book state matches.
+        let _ = live_book.match_market_order_by_amount(taker_id, 1_500, Side::Buy);
+
+        // Replay journal into a fresh book.
+        let (replayed, last_seq) =
+            ReplayEngine::<()>::replay_from(&journal, 0, "TEST").expect("replay must succeed");
+        assert_eq!(last_seq, seq);
+
+        let live_snap = live_book.create_snapshot(usize::MAX);
+        let replayed_snap = replayed.create_snapshot(usize::MAX);
+        assert!(
+            snapshots_match(&live_snap, &replayed_snap),
+            "live and replayed snapshots must match after notional market order"
+        );
+    }
+
+    #[test]
+    fn test_market_order_by_amount_command_serde_json_roundtrip() {
+        let cmd: SequencerCommand<()> = SequencerCommand::MarketOrderByAmount {
+            id: Id::new_uuid(),
+            amount: 12_345_678,
+            side: Side::Buy,
+        };
+        let json = serde_json::to_vec(&cmd).expect("serialize");
+        let decoded: SequencerCommand<()> = serde_json::from_slice(&json).expect("deserialize");
+        match decoded {
+            SequencerCommand::MarketOrderByAmount { amount, side, .. } => {
+                assert_eq!(amount, 12_345_678);
+                assert_eq!(side, Side::Buy);
+            }
+            other => panic!("expected MarketOrderByAmount, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "bincode")]
+    #[test]
+    fn test_market_order_by_amount_command_bincode_roundtrip() {
+        use bincode::config::standard;
+        use bincode::serde::{decode_from_slice, encode_to_vec};
+        let cmd: SequencerCommand<()> = SequencerCommand::MarketOrderByAmount {
+            id: Id::new_uuid(),
+            amount: 999_999,
+            side: Side::Sell,
+        };
+        let bytes = encode_to_vec(&cmd, standard()).expect("encode");
+        let (decoded, n) =
+            decode_from_slice::<SequencerCommand<()>, _>(&bytes, standard()).expect("decode");
+        assert_eq!(n, bytes.len());
+        match decoded {
+            SequencerCommand::MarketOrderByAmount { amount, side, .. } => {
+                assert_eq!(amount, 999_999);
+                assert_eq!(side, Side::Sell);
+            }
+            other => panic!("expected MarketOrderByAmount, got {other:?}"),
         }
     }
 }

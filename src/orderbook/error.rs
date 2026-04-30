@@ -36,6 +36,22 @@ pub enum OrderBookError {
         available: u64,
     },
 
+    /// Insufficient liquidity for a quote-notional market order. Returned by
+    /// the `*_by_amount` paths when the book cannot fund a single whole lot
+    /// against the requested notional. Distinct from
+    /// [`OrderBookError::InsufficientLiquidity`] so callers can pattern-match
+    /// on quote-vs-base semantics.
+    InsufficientLiquidityNotional {
+        /// The side of the market order
+        side: Side,
+        /// Notional (quote-asset value) requested
+        requested: u128,
+        /// Notional actually consumed before the walk gave up. Always `0`
+        /// when this error is constructed (a non-zero `spent` returns
+        /// `Ok(MatchResult)` with the partial fill instead).
+        spent: u128,
+    },
+
     /// Operation not permitted for specified order type
     InvalidOperation {
         /// Description of the error
@@ -198,6 +214,16 @@ impl fmt::Display for OrderBookError {
                 write!(
                     f,
                     "Insufficient liquidity for {side} order: requested {requested}, available {available}"
+                )
+            }
+            OrderBookError::InsufficientLiquidityNotional {
+                side,
+                requested,
+                spent,
+            } => {
+                write!(
+                    f,
+                    "Insufficient liquidity by notional for {side} order: requested {requested}, spent {spent}"
                 )
             }
             OrderBookError::InvalidOperation { message } => {
@@ -371,6 +397,15 @@ impl Clone for OrderBookError {
                 requested: *requested,
                 available: *available,
             },
+            OrderBookError::InsufficientLiquidityNotional {
+                side,
+                requested,
+                spent,
+            } => OrderBookError::InsufficientLiquidityNotional {
+                side: *side,
+                requested: *requested,
+                spent: *spent,
+            },
             OrderBookError::InvalidOperation { message } => OrderBookError::InvalidOperation {
                 message: message.clone(),
             },
@@ -538,6 +573,36 @@ mod tests {
                 available: 500
             }
         ));
+    }
+
+    #[test]
+    fn test_clone_insufficient_liquidity_notional() {
+        let error = OrderBookError::InsufficientLiquidityNotional {
+            side: Side::Buy,
+            requested: 1_000_000,
+            spent: 0,
+        };
+        let cloned = error.clone();
+        assert!(matches!(
+            cloned,
+            OrderBookError::InsufficientLiquidityNotional {
+                side: Side::Buy,
+                requested: 1_000_000,
+                spent: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn test_display_insufficient_liquidity_notional() {
+        let error = OrderBookError::InsufficientLiquidityNotional {
+            side: Side::Sell,
+            requested: 42,
+            spent: 0,
+        };
+        let s = format!("{error}");
+        assert!(s.contains("Insufficient liquidity by notional"));
+        assert!(s.contains("42"));
     }
 
     #[test]

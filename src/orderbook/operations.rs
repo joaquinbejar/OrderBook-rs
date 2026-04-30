@@ -300,4 +300,63 @@ where
         );
         OrderBook::<T>::match_market_order_with_user(self, id, quantity, side, user_id)
     }
+
+    /// Submit a quote-notional market order.
+    ///
+    /// Convenience wrapper around
+    /// [`OrderBook::match_market_order_by_amount`] that runs the kill
+    /// switch and pre-trade risk gates before matching. Bypasses STP
+    /// (uses `Hash32::zero()`); use
+    /// [`Self::submit_market_order_by_amount_with_user`] when STP is
+    /// needed.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
+    /// is engaged. Propagates [`OrderBookError::InsufficientLiquidityNotional`]
+    /// from the matching engine when no liquidity is available.
+    pub fn submit_market_order_by_amount(
+        &self,
+        id: Id,
+        amount: u128,
+        side: Side,
+    ) -> Result<MatchResult, OrderBookError> {
+        self.check_kill_switch_or_reject(id)?;
+        // Pre-trade risk gate. Per design decision C, market orders
+        // currently bypass every check (no submitted price; no rest);
+        // the call exists to keep the gate ordering consistent across
+        // submit and add paths.
+        self.risk_state.check_market_admission(Hash32::zero())?;
+        trace!(
+            "Submitting notional market order {} amount={} {}",
+            id, amount, side
+        );
+        OrderBook::<T>::match_market_order_by_amount(self, id, amount, side)
+    }
+
+    /// Submit a quote-notional market order with Self-Trade Prevention.
+    ///
+    /// See [`Self::submit_market_order_by_amount`] for the amount / lot /
+    /// fee semantics.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::SelfTradePrevented`] when STP cancels
+    /// the taker before any fills occur. Returns
+    /// [`OrderBookError::KillSwitchActive`] when the kill switch is
+    /// engaged. Returns [`OrderBookError::InsufficientLiquidityNotional`]
+    /// when the book had zero matchable depth.
+    pub fn submit_market_order_by_amount_with_user(
+        &self,
+        id: Id,
+        amount: u128,
+        side: Side,
+        user_id: Hash32,
+    ) -> Result<MatchResult, OrderBookError> {
+        self.check_kill_switch_or_reject(id)?;
+        self.risk_state.check_market_admission(user_id)?;
+        trace!(
+            "Submitting notional market order {} amount={} {} (user: {})",
+            id, amount, side, user_id
+        );
+        OrderBook::<T>::match_market_order_by_amount_with_user(self, id, amount, side, user_id)
+    }
 }

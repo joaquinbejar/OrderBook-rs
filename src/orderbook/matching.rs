@@ -13,6 +13,136 @@ use either::Either;
 use pricelevel::{Hash32, Id, MatchResult, OrderUpdate, Side};
 use std::sync::atomic::Ordering;
 
+/// Selects how the matching loop measures its budget.
+///
+/// `BaseQty` is the legacy base-asset quantity path (existing market and
+/// limit orders). `QuoteAmount` is the quote-notional path used by
+/// `match_market_order_by_amount` (Binance `quoteOrderQty` semantics).
+/// Always `None` limit price for the notional path — quote-notional is
+/// market-only.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum MatchMode {
+    /// Base-quantity match. `limit_price = None` for market orders.
+    BaseQty {
+        /// Total base-asset quantity to match.
+        quantity: u64,
+        /// Optional price ceiling (Buy) / floor (Sell). `None` for
+        /// market orders.
+        limit_price: Option<u128>,
+    },
+    /// Quote-notional match (market-only).
+    QuoteAmount {
+        /// Total quote-asset value to consume from the book.
+        amount: u128,
+    },
+}
+
+impl MatchMode {
+    /// Returns the limit-price guard used inside the level walk. `None`
+    /// for any market path (base-qty market or quote-notional).
+    #[inline]
+    #[must_use]
+    fn limit_price(&self) -> Option<u128> {
+        match self {
+            Self::BaseQty { limit_price, .. } => *limit_price,
+            Self::QuoteAmount { .. } => None,
+        }
+    }
+
+    /// Returns the initial `MatchResult` quantity slot. For quote-notional
+    /// the actual base-qty filled is unknown upfront, so `u64::MAX` is
+    /// used as an upper bound (see `MatchResult::add_trade` invariants).
+    /// Consumers of the notional path should read trade totals via
+    /// `MatchResult::executed_quantity()` / `executed_value()` rather
+    /// than `remaining_quantity` for that mode.
+    #[inline]
+    #[must_use]
+    fn initial_match_quantity(&self) -> u64 {
+        match self {
+            Self::BaseQty { quantity, .. } => *quantity,
+            Self::QuoteAmount { .. } => u64::MAX,
+        }
+    }
+}
+
+/// Tracks the matching loop's remaining budget against either base
+/// quantity or quote notional. Designed to keep the base-qty hot path
+/// allocation- and branch-light: the `BaseQty` arm of every helper is
+/// a single arithmetic op the optimizer can fold.
+#[derive(Debug, Clone)]
+enum StopCondition {
+    /// Base-quantity remaining.
+    BaseQty {
+        /// Base-asset quantity left to fill.
+        remaining: u64,
+    },
+    /// Quote-notional remaining.
+    QuoteAmount {
+        /// Quote-asset value left to consume.
+        remaining: u128,
+    },
+}
+
+impl StopCondition {
+    /// Build a fresh stop condition from the matching mode.
+    #[inline]
+    fn from_mode(mode: &MatchMode) -> Self {
+        match mode {
+            MatchMode::BaseQty { quantity, .. } => Self::BaseQty {
+                remaining: *quantity,
+            },
+            MatchMode::QuoteAmount { amount } => Self::QuoteAmount { remaining: *amount },
+        }
+    }
+
+    /// Per-level base-qty cap respecting `lot_size`. A return of `0`
+    /// signals the caller to stop walking (dust below one full lot at
+    /// the current level price).
+    ///
+    /// `lot <= 1` ⇒ no rounding (single arithmetic path); preserves the
+    /// existing base-qty performance profile when lot enforcement is not
+    /// configured.
+    #[inline]
+    #[must_use]
+    fn level_qty_cap(&self, level_price: u128, lot: u64) -> u64 {
+        let raw = match self {
+            Self::BaseQty { remaining } => *remaining,
+            Self::QuoteAmount { remaining } => {
+                if level_price == 0 || *remaining < level_price {
+                    return 0;
+                }
+                (*remaining / level_price).min(u128::from(u64::MAX)) as u64
+            }
+        };
+        if lot <= 1 { raw } else { raw - (raw % lot) }
+    }
+
+    /// Decrement the remaining budget by what was actually executed at
+    /// the given price.
+    #[inline]
+    fn consume(&mut self, executed_qty: u64, level_price: u128) {
+        match self {
+            Self::BaseQty { remaining } => {
+                *remaining = remaining.saturating_sub(executed_qty);
+            }
+            Self::QuoteAmount { remaining } => {
+                let spent = level_price.saturating_mul(u128::from(executed_qty));
+                *remaining = remaining.saturating_sub(spent);
+            }
+        }
+    }
+
+    /// Returns `true` when no further fills are needed (budget exhausted).
+    #[inline]
+    #[must_use]
+    fn is_done(&self) -> bool {
+        match self {
+            Self::BaseQty { remaining } => *remaining == 0,
+            Self::QuoteAmount { remaining } => *remaining == 0,
+        }
+    }
+}
+
 impl<T> OrderBook<T>
 where
     T: Clone + Send + Sync + Default + 'static,
@@ -64,9 +194,73 @@ where
         limit_price: Option<u128>,
         taker_user_id: Hash32,
     ) -> Result<MatchResult, OrderBookError> {
+        self.match_order_inner(
+            order_id,
+            side,
+            MatchMode::BaseQty {
+                quantity,
+                limit_price,
+            },
+            taker_user_id,
+        )
+    }
+
+    /// Internal entry point for the quote-notional matching path.
+    ///
+    /// Public callers reach this through
+    /// [`OrderBook::match_market_order_by_amount_with_user`]; the function
+    /// here is the matching-loop seam that drives the unified inner loop
+    /// with `MatchMode::QuoteAmount`. Always market-only — there is no
+    /// `limit_price` analogue for notional orders.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::InsufficientLiquidityNotional`] when no
+    /// liquidity could be consumed (empty book or budget below one full
+    /// lot at every reachable level), or
+    /// [`OrderBookError::SelfTradePrevented`] when STP cancels the taker
+    /// before any fills occur.
+    pub(crate) fn match_order_by_amount_with_user(
+        &self,
+        order_id: Id,
+        side: Side,
+        amount: u128,
+        taker_user_id: Hash32,
+    ) -> Result<MatchResult, OrderBookError> {
+        self.match_order_inner(
+            order_id,
+            side,
+            MatchMode::QuoteAmount { amount },
+            taker_user_id,
+        )
+    }
+
+    /// Unified matching loop driven by [`MatchMode`] / [`StopCondition`].
+    ///
+    /// One inner implementation handles both base-quantity and
+    /// quote-notional walks. The `BaseQty` path is identical in shape to
+    /// the previous implementation: `level_qty_cap` is a no-op for
+    /// `lot <= 1` and a single `% lot` otherwise; `consume` is one
+    /// `saturating_sub` per level. The `QuoteAmount` path adds one
+    /// `u128` divide per level (to derive the per-level qty cap) and one
+    /// `u128` multiply per fill (to deduct from the remaining notional).
+    ///
+    /// `lot_size`, when configured, is enforced uniformly: per-level qty
+    /// is rounded **down** to a multiple of `lot`. This complements the
+    /// admission-time validation in `modifications.rs` and ensures
+    /// notional walks never emit `qty=0` trades when budget is below one
+    /// full lot.
+    fn match_order_inner(
+        &self,
+        order_id: Id,
+        side: Side,
+        mode: MatchMode,
+        taker_user_id: Hash32,
+    ) -> Result<MatchResult, OrderBookError> {
         self.cache.invalidate();
-        let mut match_result = MatchResult::new(order_id, quantity);
-        let mut remaining_quantity = quantity;
+        let mut match_result = MatchResult::new(order_id, mode.initial_match_quantity());
+        let mut stop = StopCondition::from_mode(&mode);
+        let limit_price = mode.limit_price();
+        let lot = self.lot_size.unwrap_or(1);
 
         // Determine if STP checks are needed for this match
         let stp_active = self.stp_mode.is_enabled() && taker_user_id != Hash32::zero();
@@ -79,18 +273,7 @@ where
 
         // Early exit if the opposite side is empty
         if match_side.is_empty() {
-            if limit_price.is_none() {
-                crate::orderbook::metrics::record_reject(
-                    crate::orderbook::reject_reason::RejectReason::InsufficientLiquidity,
-                );
-                return Err(OrderBookError::InsufficientLiquidity {
-                    side,
-                    requested: quantity,
-                    available: 0,
-                });
-            }
-            // remaining_quantity is managed by add_trade(); no manual update needed
-            return Ok(match_result);
+            return self.empty_book_result(side, &mode, match_result);
         }
 
         // Use static memory pool for better performance
@@ -119,13 +302,21 @@ where
         // Process each price level
         for entry in price_iter {
             let price = *entry.key();
-            // Check price limit constraint early
+            // Check price limit constraint early (only set for limit orders)
             if let Some(limit) = limit_price {
                 match side {
                     Side::Buy if price > limit => break,
                     Side::Sell if price < limit => break,
                     _ => {}
                 }
+            }
+
+            // Compute per-level base-qty cap respecting both the budget
+            // (base-qty or notional) and `lot_size`. A zero cap means
+            // dust-below-lot at the current price ⇒ stop walking.
+            let qty_cap = stop.level_qty_cap(price, lot);
+            if qty_cap == 0 {
+                break;
             }
 
             // Get price level value from the entry
@@ -146,29 +337,26 @@ where
                     STPAction::CancelTaker { safe_quantity } => {
                         // Match up to safe_quantity, then cancel the taker
                         if safe_quantity > 0 {
-                            let match_qty = remaining_quantity.min(safe_quantity);
-                            let saved_remaining = remaining_quantity;
-                            let price_level_match = price_level.match_order(
-                                match_qty,
-                                order_id,
-                                &self.transaction_id_generator,
-                            );
-                            // Compute actual executed from the sub-match
-                            let executed =
-                                match_qty.saturating_sub(price_level_match.remaining_quantity());
-                            self.process_level_match(
-                                &mut match_result,
-                                &price_level_match,
-                                &mut filled_orders,
-                                &mut remaining_quantity,
-                                price,
-                                price_level,
-                                side,
-                                &mut empty_price_levels,
-                            );
-                            // Correct remaining: process_level_match set it to
-                            // sub-match remaining, but we need overall remaining.
-                            remaining_quantity = saved_remaining.saturating_sub(executed);
+                            let match_qty = qty_cap.min(safe_quantity);
+                            if match_qty > 0 {
+                                let price_level_match = price_level.match_order(
+                                    match_qty,
+                                    order_id,
+                                    &self.transaction_id_generator,
+                                );
+                                let executed = match_qty
+                                    .saturating_sub(price_level_match.remaining_quantity());
+                                self.process_level_match(
+                                    &mut match_result,
+                                    &price_level_match,
+                                    &mut filled_orders,
+                                    price,
+                                    price_level,
+                                    side,
+                                    &mut empty_price_levels,
+                                );
+                                stop.consume(executed, price);
+                            }
                         }
                         stp_taker_cancelled = true;
                         break;
@@ -204,28 +392,26 @@ where
                     } => {
                         // Match up to safe_quantity, cancel the maker, then cancel taker
                         if safe_quantity > 0 {
-                            let match_qty = remaining_quantity.min(safe_quantity);
-                            let saved_remaining = remaining_quantity;
-                            let price_level_match = price_level.match_order(
-                                match_qty,
-                                order_id,
-                                &self.transaction_id_generator,
-                            );
-                            let executed =
-                                match_qty.saturating_sub(price_level_match.remaining_quantity());
-                            self.process_level_match(
-                                &mut match_result,
-                                &price_level_match,
-                                &mut filled_orders,
-                                &mut remaining_quantity,
-                                price,
-                                price_level,
-                                side,
-                                &mut empty_price_levels,
-                            );
-                            // Correct remaining: process_level_match set it to
-                            // sub-match remaining, but we need overall remaining.
-                            remaining_quantity = saved_remaining.saturating_sub(executed);
+                            let match_qty = qty_cap.min(safe_quantity);
+                            if match_qty > 0 {
+                                let price_level_match = price_level.match_order(
+                                    match_qty,
+                                    order_id,
+                                    &self.transaction_id_generator,
+                                );
+                                let executed = match_qty
+                                    .saturating_sub(price_level_match.remaining_quantity());
+                                self.process_level_match(
+                                    &mut match_result,
+                                    &price_level_match,
+                                    &mut filled_orders,
+                                    price,
+                                    price_level,
+                                    side,
+                                    &mut empty_price_levels,
+                                );
+                                stop.consume(executed, price);
+                            }
                         }
                         // Cancel the maker order — look up its user_id from the
                         // snapshot rather than assuming it equals taker_user_id.
@@ -249,25 +435,23 @@ where
             }
 
             // --- Normal matching (no STP conflict or after CancelMaker cleanup) ---
-            let price_level_match = price_level.match_order(
-                remaining_quantity,
-                order_id,
-                &self.transaction_id_generator,
-            );
+            let price_level_match =
+                price_level.match_order(qty_cap, order_id, &self.transaction_id_generator);
+            let executed = qty_cap.saturating_sub(price_level_match.remaining_quantity());
 
             self.process_level_match(
                 &mut match_result,
                 &price_level_match,
                 &mut filled_orders,
-                &mut remaining_quantity,
                 price,
                 price_level,
                 side,
                 &mut empty_price_levels,
             );
+            stop.consume(executed, price);
 
-            // Early exit if order is fully matched
-            if remaining_quantity == 0 {
+            // Early exit if budget is exhausted
+            if stop.is_done() {
                 break;
             }
         }
@@ -299,10 +483,12 @@ where
             pool.return_price_vec(empty_price_levels);
         });
 
+        let no_fills = match_result.trades().as_vec().is_empty();
+
         // If STP cancelled the taker and no fills occurred at all, return STP error.
-        // When partial fills happened (remaining < original quantity), return Ok
-        // with the partial result so the caller can see what was executed.
-        if stp_taker_cancelled && remaining_quantity == quantity {
+        // When partial fills happened, return Ok with the partial result so the
+        // caller can see what was executed.
+        if stp_taker_cancelled && no_fills {
             self.track_state(
                 order_id,
                 OrderStatus::Cancelled {
@@ -320,20 +506,85 @@ where
             });
         }
 
-        // Check for insufficient liquidity in market orders
-        if limit_price.is_none() && remaining_quantity == quantity {
-            crate::orderbook::metrics::record_reject(
-                crate::orderbook::reject_reason::RejectReason::InsufficientLiquidity,
-            );
-            return Err(OrderBookError::InsufficientLiquidity {
-                side,
-                requested: quantity,
-                available: 0,
-            });
+        // Check for insufficient liquidity on market paths.
+        if no_fills {
+            match mode {
+                MatchMode::BaseQty {
+                    quantity,
+                    limit_price: None,
+                } => {
+                    crate::orderbook::metrics::record_reject(
+                        crate::orderbook::reject_reason::RejectReason::InsufficientLiquidity,
+                    );
+                    return Err(OrderBookError::InsufficientLiquidity {
+                        side,
+                        requested: quantity,
+                        available: 0,
+                    });
+                }
+                MatchMode::QuoteAmount { amount } => {
+                    crate::orderbook::metrics::record_reject(
+                        crate::orderbook::reject_reason::RejectReason::InsufficientLiquidity,
+                    );
+                    return Err(OrderBookError::InsufficientLiquidityNotional {
+                        side,
+                        requested: amount,
+                        spent: 0,
+                    });
+                }
+                MatchMode::BaseQty {
+                    limit_price: Some(_),
+                    ..
+                } => {
+                    // Limit orders that fail to match return Ok with an
+                    // empty result — the unfilled portion becomes resting
+                    // depth in the caller-driven flow.
+                }
+            }
         }
 
-        // remaining_quantity is managed by add_trade(); no manual update needed
         Ok(match_result)
+    }
+
+    /// Build the empty-book result. Market paths return a typed error;
+    /// limit paths return `Ok` with a zero-trade `MatchResult` so the
+    /// caller can rest the order.
+    #[cold]
+    fn empty_book_result(
+        &self,
+        side: Side,
+        mode: &MatchMode,
+        match_result: MatchResult,
+    ) -> Result<MatchResult, OrderBookError> {
+        match mode {
+            MatchMode::BaseQty {
+                quantity,
+                limit_price: None,
+            } => {
+                crate::orderbook::metrics::record_reject(
+                    crate::orderbook::reject_reason::RejectReason::InsufficientLiquidity,
+                );
+                Err(OrderBookError::InsufficientLiquidity {
+                    side,
+                    requested: *quantity,
+                    available: 0,
+                })
+            }
+            MatchMode::QuoteAmount { amount } => {
+                crate::orderbook::metrics::record_reject(
+                    crate::orderbook::reject_reason::RejectReason::InsufficientLiquidity,
+                );
+                Err(OrderBookError::InsufficientLiquidityNotional {
+                    side,
+                    requested: *amount,
+                    spent: 0,
+                })
+            }
+            MatchMode::BaseQty {
+                limit_price: Some(_),
+                ..
+            } => Ok(match_result),
+        }
     }
 
     /// Processes match results from a single price level, updating the
@@ -354,7 +605,6 @@ where
         match_result: &mut MatchResult,
         price_level_match: &MatchResult,
         filled_orders: &mut Vec<Id>,
-        remaining_quantity: &mut u64,
         price: u128,
         price_level: &std::sync::Arc<pricelevel::PriceLevel>,
         side: Side,
@@ -396,9 +646,6 @@ where
             match_result.add_filled_order_id(filled_order_id);
             filled_orders.push(filled_order_id);
         }
-
-        // Update remaining quantity
-        *remaining_quantity = price_level_match.remaining_quantity();
 
         // Check if price level is empty and mark for removal
         if price_level.order_count() == 0 {
@@ -471,5 +718,117 @@ where
         }
 
         results
+    }
+}
+
+#[cfg(test)]
+mod stop_condition_tests {
+    use super::*;
+
+    #[test]
+    fn test_base_qty_cap_no_lot_returns_remaining() {
+        let stop = StopCondition::BaseQty { remaining: 1_000 };
+        assert_eq!(stop.level_qty_cap(100, 1), 1_000);
+    }
+
+    #[test]
+    fn test_base_qty_cap_rounds_down_to_lot() {
+        let stop = StopCondition::BaseQty { remaining: 1_005 };
+        // lot=100 ⇒ 1_005 - (1_005 % 100) = 1_005 - 5 = 1_000
+        assert_eq!(stop.level_qty_cap(50, 100), 1_000);
+    }
+
+    #[test]
+    fn test_base_qty_cap_zero_when_below_lot() {
+        let stop = StopCondition::BaseQty { remaining: 5 };
+        assert_eq!(stop.level_qty_cap(50, 100), 0);
+    }
+
+    #[test]
+    fn test_quote_amount_cap_basic() {
+        // 10_000 / 100 = 100 base
+        let stop = StopCondition::QuoteAmount { remaining: 10_000 };
+        assert_eq!(stop.level_qty_cap(100, 1), 100);
+    }
+
+    #[test]
+    fn test_quote_amount_cap_dust_below_one_unit() {
+        // remaining < level_price ⇒ 0
+        let stop = StopCondition::QuoteAmount { remaining: 50 };
+        assert_eq!(stop.level_qty_cap(100, 1), 0);
+    }
+
+    #[test]
+    fn test_quote_amount_cap_lot_rounds_down() {
+        // 1_400 / 100 = 14, lot=10 ⇒ 14 - (14 % 10) = 10
+        let stop = StopCondition::QuoteAmount { remaining: 1_400 };
+        assert_eq!(stop.level_qty_cap(100, 10), 10);
+    }
+
+    #[test]
+    fn test_quote_amount_cap_zero_when_below_one_full_lot() {
+        // 1_400 / 1_000 = 1, lot=10 ⇒ 1 - (1 % 10) = 0
+        let stop = StopCondition::QuoteAmount { remaining: 1_400 };
+        assert_eq!(stop.level_qty_cap(1_000, 10), 0);
+    }
+
+    #[test]
+    fn test_quote_amount_cap_zero_price_is_zero_cap() {
+        // Adversarial input: zero price should not divide-by-zero.
+        let stop = StopCondition::QuoteAmount { remaining: 1_000 };
+        assert_eq!(stop.level_qty_cap(0, 1), 0);
+    }
+
+    #[test]
+    fn test_quote_amount_cap_saturates_to_u64_max() {
+        // remaining = u128::MAX, level_price = 1 ⇒ derived qty would
+        // exceed u64::MAX; must saturate at u64::MAX.
+        let stop = StopCondition::QuoteAmount {
+            remaining: u128::MAX,
+        };
+        assert_eq!(stop.level_qty_cap(1, 1), u64::MAX);
+    }
+
+    #[test]
+    fn test_consume_base_qty_subtracts_executed() {
+        let mut stop = StopCondition::BaseQty { remaining: 100 };
+        stop.consume(30, 999);
+        assert!(matches!(stop, StopCondition::BaseQty { remaining: 70 }));
+    }
+
+    #[test]
+    fn test_consume_base_qty_saturates() {
+        let mut stop = StopCondition::BaseQty { remaining: 5 };
+        stop.consume(10, 999);
+        assert!(matches!(stop, StopCondition::BaseQty { remaining: 0 }));
+    }
+
+    #[test]
+    fn test_consume_quote_amount_deducts_price_times_qty() {
+        let mut stop = StopCondition::QuoteAmount { remaining: 10_000 };
+        stop.consume(30, 100); // spent = 100 * 30 = 3_000
+        assert!(matches!(
+            stop,
+            StopCondition::QuoteAmount { remaining: 7_000 }
+        ));
+    }
+
+    #[test]
+    fn test_consume_quote_amount_saturates() {
+        let mut stop = StopCondition::QuoteAmount { remaining: 100 };
+        stop.consume(10, 1_000); // spent = 10_000 > 100, saturates
+        assert!(matches!(stop, StopCondition::QuoteAmount { remaining: 0 }));
+    }
+
+    #[test]
+    fn test_is_done_base_qty() {
+        assert!(StopCondition::BaseQty { remaining: 0 }.is_done());
+        assert!(!StopCondition::BaseQty { remaining: 1 }.is_done());
+    }
+
+    #[test]
+    fn test_is_done_quote_amount() {
+        assert!(StopCondition::QuoteAmount { remaining: 0 }.is_done());
+        assert!(!StopCondition::QuoteAmount { remaining: 1 }.is_done());
     }
 }

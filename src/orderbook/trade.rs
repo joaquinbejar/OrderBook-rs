@@ -35,20 +35,34 @@ pub struct TradeResult {
     /// that pre-date `engine_seq` so existing consumers keep parsing.
     #[serde(default)]
     pub engine_seq: u64,
+    /// Total quote-asset notional consumed by this trade, computed as
+    /// `Σ price × quantity` across every transaction. Populated for both
+    /// base-quantity (`match_market_order`) and quote-notional
+    /// (`match_market_order_by_amount`) market-order paths so consumers
+    /// have the field uniformly available without recomputing per-trade.
+    ///
+    /// Defaults to `0` when deserializing payloads from format versions
+    /// that pre-date `quote_notional` so existing consumers keep parsing.
+    #[serde(default)]
+    pub quote_notional: u128,
 }
 
 impl TradeResult {
     /// Create a new `TradeResult` with zero fees
     ///
     /// Use this constructor when no `FeeSchedule` is configured.
-    /// Fees default to zero for backward compatibility.
+    /// Fees default to zero for backward compatibility. The
+    /// `quote_notional` field is populated from the supplied
+    /// `match_result` (sum of `price × quantity` across every trade).
     pub fn new(symbol: String, match_result: MatchResult) -> Self {
+        let quote_notional = compute_quote_notional(&match_result);
         Self {
             symbol,
             match_result,
             total_maker_fees: 0,
             total_taker_fees: 0,
             engine_seq: 0,
+            quote_notional,
         }
     }
 
@@ -89,12 +103,14 @@ impl TradeResult {
             _ => (0, 0),
         };
 
+        let quote_notional = compute_quote_notional(&match_result);
         Self {
             symbol,
             match_result,
             total_maker_fees,
             total_taker_fees,
             engine_seq: 0,
+            quote_notional,
         }
     }
 
@@ -109,6 +125,25 @@ impl TradeResult {
             .checked_add(self.total_taker_fees)
             .unwrap_or(i128::MAX)
     }
+}
+
+/// Sum of `price × quantity` across every trade in `match_result`.
+///
+/// Saturates on overflow rather than panicking — overflow on `u128` can
+/// only occur in adversarial fixtures with prices near `u128::MAX`, and
+/// the matching path already saturates equivalent multiplications.
+#[inline]
+#[must_use]
+fn compute_quote_notional(match_result: &MatchResult) -> u128 {
+    let mut total: u128 = 0;
+    for tx in match_result.trades().as_vec() {
+        let notional = tx
+            .price()
+            .as_u128()
+            .saturating_mul(u128::from(tx.quantity().as_u64()));
+        total = total.saturating_add(notional);
+    }
+    total
 }
 
 /// Trade listener specification using Arc for shared ownership
@@ -353,6 +388,80 @@ mod tests {
             decoded.engine_seq, 0,
             "missing engine_seq must default to 0 via #[serde(default)]"
         );
+    }
+
+    #[test]
+    fn test_trade_result_new_populates_quote_notional() {
+        // single trade: 1000 * 10 = 10_000
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
+        let tr = TradeResult::new("BTC/USD".to_string(), mr);
+        assert_eq!(tr.quote_notional, 10_000);
+    }
+
+    #[test]
+    fn test_trade_result_with_fees_populates_quote_notional_multi_trade() {
+        // 1000*10 + 2000*20 = 10_000 + 40_000 = 50_000
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10), make_trade(2000, 20)]);
+        let tr = TradeResult::with_fees("BTC/USD".to_string(), mr, None);
+        assert_eq!(tr.quote_notional, 50_000);
+    }
+
+    #[test]
+    fn test_trade_result_quote_notional_zero_when_no_trades() {
+        let mr = make_match_result_with_trades(vec![]);
+        let tr = TradeResult::new("BTC/USD".to_string(), mr);
+        assert_eq!(tr.quote_notional, 0);
+    }
+
+    #[test]
+    fn test_trade_result_json_missing_quote_notional_defaults_zero() {
+        // Pre-quote_notional payload: serialize, strip the field, decode.
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
+        let tr = TradeResult::new("BTC/USD".to_string(), mr);
+
+        let mut value: serde_json::Value =
+            serde_json::to_value(&tr).expect("serialize trade to value");
+        if let Some(map) = value.as_object_mut() {
+            map.remove("quote_notional");
+        }
+        let bytes = serde_json::to_vec(&value).expect("serialize stripped value");
+
+        let decoded: TradeResult =
+            serde_json::from_slice(&bytes).expect("deserialize stripped trade");
+        assert_eq!(
+            decoded.quote_notional, 0,
+            "missing quote_notional must default to 0 via #[serde(default)]"
+        );
+    }
+
+    #[test]
+    fn test_trade_result_json_roundtrip_preserves_quote_notional() {
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10), make_trade(2000, 5)]);
+        let tr = TradeResult::new("BTC/USD".to_string(), mr);
+        let original = tr.quote_notional;
+        assert_eq!(original, 20_000);
+
+        let json = serde_json::to_vec(&tr).expect("serialize trade");
+        let decoded: TradeResult = serde_json::from_slice(&json).expect("deserialize trade");
+        assert_eq!(decoded.quote_notional, original);
+    }
+
+    #[cfg(feature = "bincode")]
+    #[test]
+    fn test_trade_result_bincode_roundtrip_preserves_quote_notional() {
+        use bincode::config::standard;
+        use bincode::serde::{decode_from_slice, encode_to_vec};
+
+        let mr = make_match_result_with_trades(vec![make_trade(1234, 7)]);
+        let tr = TradeResult::new("BTC/USD".to_string(), mr);
+        let original = tr.quote_notional;
+        assert_eq!(original, 8_638);
+
+        let bytes = encode_to_vec(&tr, standard()).expect("bincode encode");
+        let (decoded, consumed): (TradeResult, usize) =
+            decode_from_slice(&bytes, standard()).expect("bincode decode");
+        assert_eq!(consumed, bytes.len());
+        assert_eq!(decoded.quote_notional, original);
     }
 
     #[cfg(feature = "bincode")]

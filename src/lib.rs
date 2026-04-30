@@ -34,6 +34,49 @@
 //!
 //! ## What's New in Version 0.7.0
 //!
+//! ### v0.7.0 — Quote-notional market orders (#85)
+//!
+//! - **New public API** on [`OrderBook<T>`]:
+//!   [`match_market_order_by_amount`](OrderBook::match_market_order_by_amount)
+//!   and the STP-aware
+//!   [`match_market_order_by_amount_with_user`](OrderBook::match_market_order_by_amount_with_user),
+//!   plus the convenience
+//!   [`submit_market_order_by_amount`](OrderBook::submit_market_order_by_amount)
+//!   and
+//!   [`submit_market_order_by_amount_with_user`](OrderBook::submit_market_order_by_amount_with_user)
+//!   wrappers that run the kill-switch and pre-trade risk gates.
+//! - **Binance `quoteOrderQty` semantics.** Callers say "buy ~$1,000 of BTC"
+//!   without converting to base quantity. The matching loop walks the
+//!   opposite side until the requested quote-notional `amount` is
+//!   consumed, the book is exhausted, or — when `lot_size` is configured
+//!   on the book — the residual notional cannot fund another whole lot.
+//!   Fees are **exclusive**: caller pays `amount + taker_fee`.
+//! - **Lot enforcement preserved.** Per-level base quantity is rounded
+//!   down to a multiple of `lot_size`, so notional walks never emit
+//!   `qty=0` trades when the budget falls below one full lot at the
+//!   current level price. `lot_size = None` is equivalent to `lot = 1`.
+//! - **New error variant
+//!   [`OrderBookError::InsufficientLiquidityNotional`]** — distinct from
+//!   `InsufficientLiquidity` so callers can pattern-match on
+//!   quote-vs-base semantics.
+//! - **`TradeResult.quote_notional: u128`** — populated for *both* the
+//!   base-quantity and quote-notional market-order paths so consumers
+//!   read `Σ price × quantity` directly without recomputing per-trade.
+//!   `#[serde(default)]` keeps existing JSON / Bincode payloads
+//!   parseable.
+//! - **Additive `SequencerCommand::MarketOrderByAmount { id, amount, side }`**
+//!   variant. Old journals replay byte-identical; new journals carrying
+//!   this variant fail on older binaries — consistent with the precedent
+//!   for prior `SequencerCommand` rollouts. No
+//!   `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump required.
+//! - **`StopCondition` refactor of the matching loop** — single inner
+//!   implementation drives both base-qty and notional walks. Base-qty
+//!   path stays allocation- and branch-light: the new helpers fold to
+//!   the same arithmetic the previous loop emitted when `lot <= 1`.
+//! - Runnable example: `cargo run -p examples --bin market_order_by_amount`.
+//! - HDR bench: `notional_walk_hdr` mirrors `aggressive_walk_hdr` with
+//!   the notional path so p50/p99/p99.9/p99.99 can be compared.
+//!
 //! ### v0.7.0 — Feature-gated allocation counter
 //!
 //! - **New feature `alloc-counters`** (default off). Exposes

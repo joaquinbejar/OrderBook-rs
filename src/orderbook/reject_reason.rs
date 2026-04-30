@@ -218,6 +218,7 @@ impl From<&OrderBookError> for RejectReason {
             OrderBookError::InvalidPriceLevel(_) => Self::InvalidPriceLevel,
             OrderBookError::PriceCrossing { .. } => Self::PostOnlyWouldCross,
             OrderBookError::InsufficientLiquidity { .. } => Self::InsufficientLiquidity,
+            OrderBookError::InsufficientLiquidityNotional { .. } => Self::InsufficientLiquidity,
             OrderBookError::InvalidTickSize { .. } => Self::InvalidPrice,
             OrderBookError::InvalidLotSize { .. } => Self::InvalidQuantity,
             OrderBookError::OrderSizeOutOfRange { .. } => Self::OrderSizeOutOfRange,
@@ -406,6 +407,19 @@ mod tests {
             side: Side::Buy,
             requested: 100,
             available: 50,
+        };
+        assert_eq!(
+            RejectReason::from(&err),
+            RejectReason::InsufficientLiquidity
+        );
+    }
+
+    #[test]
+    fn test_from_order_book_error_insufficient_liquidity_notional() {
+        let err = OrderBookError::InsufficientLiquidityNotional {
+            side: Side::Buy,
+            requested: 1_000_000,
+            spent: 0,
         };
         assert_eq!(
             RejectReason::from(&err),

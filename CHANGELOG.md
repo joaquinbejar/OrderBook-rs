@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — Quote-notional market orders (#85)
+
+- **New public API** on `OrderBook<T>`: `match_market_order_by_amount`
+  and `match_market_order_by_amount_with_user`, plus the convenience
+  wrappers `submit_market_order_by_amount` and
+  `submit_market_order_by_amount_with_user` (run kill-switch and
+  pre-trade risk gates before matching). Implements Binance
+  `quoteOrderQty` semantics — callers say "buy ~$1,000 of BTC" without
+  converting to base quantity. Fees are exclusive: caller pays
+  `amount + taker_fee`.
+- **Lot enforcement.** When `OrderBook::with_lot_size` is configured,
+  the per-level base quantity is rounded down to a multiple of
+  `lot_size`. Notional walks never emit `qty = 0` trades when the
+  remaining budget cannot fund one full lot at the current level.
+- **New error variant `OrderBookError::InsufficientLiquidityNotional
+  { side, requested, spent }`** distinguishes notional from base-qty
+  insufficiencies.
+- **`TradeResult.quote_notional: u128`** — populated for both
+  base-quantity and quote-notional market-order paths. Carries
+  `Σ price × quantity` so consumers do not recompute per-trade.
+  `#[serde(default)]` keeps pre-0.7.x-tail JSON / Bincode payloads
+  parseable.
+- **Additive `SequencerCommand::MarketOrderByAmount { id, amount, side }`**
+  variant. Old journals replay byte-identical; the new variant ferries
+  through `submit_market_order_by_amount` on replay. No
+  `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump required.
+- **`StopCondition` refactor of the matching loop** — single inner
+  implementation drives both base-qty and notional walks. The base-qty
+  path retains its previous arithmetic profile when `lot_size` is unset
+  (`lot <= 1` ⇒ no rounding work).
+- Runnable example: `cargo run -p examples --bin market_order_by_amount`.
+- HDR latency bench: `notional_walk_hdr` mirrors `aggressive_walk_hdr`
+  on the notional path.
+
 ## [0.7.0] — 2026-04-25
 
 > 0.7.0 ships issues #51..#60 and the centralised `engine_seq` minting
