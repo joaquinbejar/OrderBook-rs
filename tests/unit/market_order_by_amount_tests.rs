@@ -66,6 +66,12 @@ fn test_buy_single_level_exact_fit() {
     assert_eq!(trades[0].price().as_u128(), 100);
     assert_eq!(trades[0].quantity().as_u64(), 50);
     assert_eq!(result.executed_value().expect("executed value"), 5_000);
+    assert_eq!(
+        result.remaining_quantity(),
+        0,
+        "notional path must not leak the u64::MAX working sentinel"
+    );
+    assert!(result.is_complete());
 }
 
 #[test]

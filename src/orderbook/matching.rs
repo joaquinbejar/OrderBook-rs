@@ -51,10 +51,10 @@ impl MatchMode {
 
     /// Returns the initial `MatchResult` quantity slot. For quote-notional
     /// the actual base-qty filled is unknown upfront, so `u64::MAX` is
-    /// used as an upper bound (see `MatchResult::add_trade` invariants).
-    /// Consumers of the notional path should read trade totals via
-    /// `MatchResult::executed_quantity()` / `executed_value()` rather
-    /// than `remaining_quantity` for that mode.
+    /// used as a working upper bound during the loop (see
+    /// `MatchResult::add_trade` invariants). The notional path is
+    /// normalized at the end of `match_order_inner` so that the returned
+    /// `MatchResult.remaining_quantity()` is `0` rather than the sentinel.
     #[inline]
     #[must_use]
     fn initial_match_quantity(&self) -> u64 {
@@ -543,7 +543,45 @@ where
             }
         }
 
+        // Normalize the quote-notional path so the public `MatchResult`
+        // does not leak the `u64::MAX` working sentinel through
+        // `remaining_quantity()`. The notional path measures progress in
+        // quote currency, not base qty, so the natural meaning of
+        // "remaining base qty" is zero — the residual the caller cares
+        // about is `requested - executed_value`, available directly on
+        // `MatchResult`.
+        if matches!(mode, MatchMode::QuoteAmount { .. }) {
+            match_result = Self::normalize_notional_match_result(order_id, match_result);
+        }
+
         Ok(match_result)
+    }
+
+    /// Rebuild a `MatchResult` produced by the quote-notional path so its
+    /// internal `remaining_quantity` is `0` (rather than
+    /// `u64::MAX - executed_qty`). Trade list, filled-order ids, and
+    /// monotonic engine sequence stamping are preserved.
+    fn normalize_notional_match_result(order_id: Id, src: MatchResult) -> MatchResult {
+        let executed_qty: u64 = src
+            .trades()
+            .as_vec()
+            .iter()
+            .map(|t| t.quantity().as_u64())
+            .fold(0u64, u64::saturating_add);
+        let mut rebuilt = MatchResult::new(order_id, executed_qty);
+        for trade in src.trades().as_vec() {
+            // `add_trade` only fails on underflow; with `executed_qty`
+            // exactly equal to the sum of trade quantities this cannot
+            // underflow. Treat any error as a logic bug surfaced by
+            // returning the original (unnormalized) result.
+            if rebuilt.add_trade(*trade).is_err() {
+                return src;
+            }
+        }
+        for filled_id in src.filled_order_ids() {
+            rebuilt.add_filled_order_id(*filled_id);
+        }
+        rebuilt
     }
 
     /// Build the empty-book result. Market paths return a typed error;
