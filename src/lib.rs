@@ -32,9 +32,9 @@
 //! - **Research**: Platform for studying market microstructure and order flow
 //! - **Educational**: Reference implementation for understanding modern exchange architecture
 //!
-//! ## What's New in Version 0.7.0
+//! ## What's New in Version 0.8.0
 //!
-//! ### v0.7.0 — Quote-notional market orders (#85)
+//! ### v0.8.0 — Quote-notional market orders (#85)
 //!
 //! - **New public API** on [`OrderBook<T>`]:
 //!   [`match_market_order_by_amount`](OrderBook::match_market_order_by_amount)
@@ -76,6 +76,8 @@
 //! - Runnable example: `cargo run -p examples --bin market_order_by_amount`.
 //! - HDR bench: `notional_walk_hdr` mirrors `aggressive_walk_hdr` with
 //!   the notional path so p50/p99/p99.9/p99.99 can be compared.
+//!
+//! ## What's New in Version 0.7.0
 //!
 //! ### v0.7.0 — Feature-gated allocation counter
 //!

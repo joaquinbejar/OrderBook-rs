@@ -119,14 +119,15 @@ fn test_buy_with_lot_size_rounds_down() {
 }
 
 #[test]
-fn test_buy_lot_size_skips_levels_below_one_full_lot() {
+fn test_buy_lot_size_fills_best_level_when_budget_allows_full_lots() {
     let book: OrderBook<()> = OrderBook::with_lot_size("TEST", 10);
-    // Best ask 1000 (one lot = 10_000 quote); next 100 (one lot = 1_000).
+    // Asks sort ascending, so with [100, 1_000] the best ask is 100.
     seed_asks(&book, &[100, 1_000], 100);
 
     // budget = 5_000:
-    //   level 100: 5_000/100 = 50; lot=10 ⇒ 50 (full lots)
-    //   that's 50 units * 100 = 5_000 spent — exact fit.
+    //   best level 100: 5_000 / 100 = 50 units
+    //   lot = 10 ⇒ 50 is already a whole number of lots
+    //   so the order fills entirely at the best level.
     let result = book
         .match_market_order_by_amount(Id::new_uuid(), 5_000, Side::Buy)
         .expect("notional buy must succeed");

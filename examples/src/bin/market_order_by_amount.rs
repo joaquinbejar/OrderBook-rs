@@ -5,10 +5,7 @@
 //
 // Run with:
 //
-//     cargo run --example market_order_by_amount
-//
-// (See `examples/Cargo.toml` for the binary registration. Locally:
-// `cargo run -p examples --bin market_order_by_amount`.)
+//     cargo run -p examples --bin market_order_by_amount
 
 use orderbook_rs::OrderBook;
 use pricelevel::{Id, Side, TimeInForce, setup_logger};

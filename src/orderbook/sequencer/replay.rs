@@ -413,7 +413,10 @@ mod tests {
     use super::*;
     use crate::orderbook::clock::{MonotonicClock, StubClock};
     use crate::orderbook::sequencer::InMemoryJournal;
-    use pricelevel::{Hash32, Id, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs};
+    use crate::orderbook::trade::TradeResult;
+    use pricelevel::{
+        Hash32, Id, MatchResult, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs,
+    };
 
     fn make_add_event(seq: u64, id: Id, price: u128, qty: u64, side: Side) -> SequencerEvent<()> {
         let order = OrderType::Standard {
@@ -553,17 +556,13 @@ mod tests {
                 side: Side::Buy,
             },
             // Result is informational for replay — replay re-executes
-            // the command against a fresh book.
-            result: SequencerResult::Rejected {
-                reason: "ignored".to_string(),
+            // the command against a fresh book. Use TradeExecuted with an
+            // empty match-result so the journal entry stays semantically
+            // consistent with a market-by-amount taker (and is not skipped
+            // by the Rejected branch in `replay_from`).
+            result: SequencerResult::TradeExecuted {
+                trade_result: TradeResult::new("TEST".to_string(), MatchResult::new(taker_id, 0)),
             },
-        };
-        // Replace the Rejected placeholder with something replay won't
-        // skip. SequencerResult::Rejected entries are explicitly skipped
-        // by replay (see replay_from inner match).
-        let ev = SequencerEvent::<()> {
-            result: SequencerResult::OrderAdded { order_id: taker_id },
-            ..ev
         };
         assert!(journal.append(&ev).is_ok());
 
