@@ -12,8 +12,8 @@ mod tests_cross_book_cancel {
     #[test]
     fn std_cancel_all_across_books() {
         let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-        mgr.add_book("BTC/USD");
-        mgr.add_book("ETH/USD");
+        mgr.add_book("BTC/USD").expect("add book");
+        mgr.add_book("ETH/USD").expect("add book");
 
         if let Some(book) = mgr.get_book("BTC/USD") {
             book.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None)
@@ -40,8 +40,8 @@ mod tests_cross_book_cancel {
     #[test]
     fn std_cancel_all_across_empty_books() {
         let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-        mgr.add_book("BTC/USD");
-        mgr.add_book("ETH/USD");
+        mgr.add_book("BTC/USD").expect("add book");
+        mgr.add_book("ETH/USD").expect("add book");
 
         let results = mgr.cancel_all_across_books();
         assert_eq!(results.len(), 2);
@@ -60,8 +60,8 @@ mod tests_cross_book_cancel {
     #[test]
     fn std_cancel_by_user_across_books() {
         let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-        mgr.add_book("BTC/USD");
-        mgr.add_book("ETH/USD");
+        mgr.add_book("BTC/USD").expect("add book");
+        mgr.add_book("ETH/USD").expect("add book");
 
         let user_a = Hash32::from([1u8; 32]);
         let user_b = Hash32::from([2u8; 32]);
@@ -114,8 +114,8 @@ mod tests_cross_book_cancel {
     #[test]
     fn std_cancel_by_side_across_books() {
         let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-        mgr.add_book("BTC/USD");
-        mgr.add_book("ETH/USD");
+        mgr.add_book("BTC/USD").expect("add book");
+        mgr.add_book("ETH/USD").expect("add book");
 
         if let Some(book) = mgr.get_book("BTC/USD") {
             book.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None)
@@ -152,8 +152,8 @@ mod tests_cross_book_cancel {
     #[test]
     fn tokio_cancel_all_across_books() {
         let mut mgr: BookManagerTokio<()> = BookManagerTokio::new();
-        mgr.add_book("BTC/USD");
-        mgr.add_book("ETH/USD");
+        mgr.add_book("BTC/USD").expect("add book");
+        mgr.add_book("ETH/USD").expect("add book");
 
         if let Some(book) = mgr.get_book("BTC/USD") {
             book.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None)
@@ -174,7 +174,7 @@ mod tests_cross_book_cancel {
     #[test]
     fn tokio_cancel_by_user_across_books() {
         let mut mgr: BookManagerTokio<()> = BookManagerTokio::new();
-        mgr.add_book("BTC/USD");
+        mgr.add_book("BTC/USD").expect("add book");
 
         let user = Hash32::from([7u8; 32]);
 
@@ -198,7 +198,7 @@ mod tests_cross_book_cancel {
     #[test]
     fn tokio_cancel_by_side_across_books() {
         let mut mgr: BookManagerTokio<()> = BookManagerTokio::new();
-        mgr.add_book("BTC/USD");
+        mgr.add_book("BTC/USD").expect("add book");
 
         if let Some(book) = mgr.get_book("BTC/USD") {
             book.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None)

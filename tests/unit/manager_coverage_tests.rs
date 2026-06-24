@@ -19,7 +19,7 @@ fn std_default_creates_empty_manager() {
 #[test]
 fn std_add_and_get_book() {
     let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-    mgr.add_book("BTC/USD");
+    mgr.add_book("BTC/USD").expect("add book");
     assert!(mgr.has_book("BTC/USD"));
     assert!(!mgr.has_book("ETH/USD"));
     assert_eq!(mgr.book_count(), 1);
@@ -44,7 +44,7 @@ fn std_get_book_mut_returns_none_for_unknown() {
 #[test]
 fn std_get_book_returns_valid_ref() {
     let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-    mgr.add_book("ETH/USD");
+    mgr.add_book("ETH/USD").expect("add book");
     let book = mgr.get_book("ETH/USD");
     assert!(book.is_some());
 }
@@ -52,7 +52,7 @@ fn std_get_book_returns_valid_ref() {
 #[test]
 fn std_get_book_mut_allows_modification() {
     let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-    mgr.add_book("ETH/USD");
+    mgr.add_book("ETH/USD").expect("add book");
     let book = mgr.get_book_mut("ETH/USD").expect("book must exist");
     let _ = book.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
     let snap = book.create_snapshot(usize::MAX);
@@ -62,7 +62,7 @@ fn std_get_book_mut_allows_modification() {
 #[test]
 fn std_remove_book_returns_some_when_exists() {
     let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-    mgr.add_book("BTC/USD");
+    mgr.add_book("BTC/USD").expect("add book");
     let removed = mgr.remove_book("BTC/USD");
     assert!(removed.is_some());
     assert_eq!(mgr.book_count(), 0);
@@ -105,8 +105,8 @@ fn std_start_trade_processor_fails_second_time() {
 #[test]
 fn std_add_order_and_cancel_across_books() {
     let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-    mgr.add_book("BTC/USD");
-    mgr.add_book("ETH/USD");
+    mgr.add_book("BTC/USD").expect("add book");
+    mgr.add_book("ETH/USD").expect("add book");
 
     let btc = mgr.get_book("BTC/USD").expect("BTC book must exist");
     let _ = btc.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
@@ -133,7 +133,7 @@ fn std_add_order_and_cancel_across_books() {
 #[test]
 fn std_cancel_by_user_across_books() {
     let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-    mgr.add_book("BTC/USD");
+    mgr.add_book("BTC/USD").expect("add book");
 
     let book = mgr.get_book("BTC/USD").expect("book must exist");
     let _ = book.add_limit_order_with_user(
@@ -158,7 +158,7 @@ fn std_cancel_by_user_across_books() {
 #[test]
 fn std_cancel_by_side_across_books() {
     let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-    mgr.add_book("BTC/USD");
+    mgr.add_book("BTC/USD").expect("add book");
 
     let book = mgr.get_book("BTC/USD").expect("book must exist");
     let _ = book.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
@@ -186,7 +186,7 @@ fn tokio_default_creates_empty_manager() {
 #[test]
 fn tokio_add_and_get_book() {
     let mut mgr: BookManagerTokio<()> = BookManagerTokio::new();
-    mgr.add_book("BTC/USD");
+    mgr.add_book("BTC/USD").expect("add book");
     assert!(mgr.has_book("BTC/USD"));
     assert_eq!(mgr.book_count(), 1);
 }
@@ -206,7 +206,7 @@ fn tokio_get_book_mut_returns_none_for_unknown() {
 #[test]
 fn tokio_remove_book_returns_some_when_exists() {
     let mut mgr: BookManagerTokio<()> = BookManagerTokio::new();
-    mgr.add_book("BTC/USD");
+    mgr.add_book("BTC/USD").expect("add book");
     assert!(mgr.remove_book("BTC/USD").is_some());
     assert_eq!(mgr.book_count(), 0);
 }
@@ -220,8 +220,8 @@ fn tokio_remove_book_returns_none_when_missing() {
 #[test]
 fn tokio_symbols_returns_all_books() {
     let mut mgr: BookManagerTokio<()> = BookManagerTokio::new();
-    mgr.add_book("BTC/USD");
-    mgr.add_book("ETH/USD");
+    mgr.add_book("BTC/USD").expect("add book");
+    mgr.add_book("ETH/USD").expect("add book");
     let mut symbols = mgr.symbols();
     symbols.sort();
     assert_eq!(symbols, vec!["BTC/USD", "ETH/USD"]);
@@ -230,7 +230,7 @@ fn tokio_symbols_returns_all_books() {
 #[test]
 fn tokio_cancel_all_across_books() {
     let mut mgr: BookManagerTokio<()> = BookManagerTokio::new();
-    mgr.add_book("BTC/USD");
+    mgr.add_book("BTC/USD").expect("add book");
     let book = mgr.get_book("BTC/USD").expect("book must exist");
     let _ = book.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
 
@@ -246,7 +246,7 @@ fn tokio_cancel_all_across_books() {
 #[test]
 fn tokio_cancel_by_user_across_books() {
     let mut mgr: BookManagerTokio<()> = BookManagerTokio::new();
-    mgr.add_book("BTC/USD");
+    mgr.add_book("BTC/USD").expect("add book");
     let book = mgr.get_book("BTC/USD").expect("book must exist");
     let _ = book.add_limit_order_with_user(
         Id::new_uuid(),
@@ -270,7 +270,7 @@ fn tokio_cancel_by_user_across_books() {
 #[test]
 fn tokio_cancel_by_side_across_books() {
     let mut mgr: BookManagerTokio<()> = BookManagerTokio::new();
-    mgr.add_book("BTC/USD");
+    mgr.add_book("BTC/USD").expect("add book");
     let book = mgr.get_book("BTC/USD").expect("book must exist");
     let _ = book.add_limit_order(Id::new_uuid(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
 
@@ -281,4 +281,55 @@ fn tokio_cancel_by_side_across_books() {
         .expect("book")
         .create_snapshot(usize::MAX);
     assert!(snap.asks.is_empty());
+}
+
+// ─── add_book duplicate-symbol rejection (#105) ─────────────────────────────
+
+#[test]
+fn std_add_book_duplicate_symbol_is_rejected_and_preserves_existing_issue_105() {
+    use orderbook_rs::ManagerError;
+
+    let mut mgr: BookManagerStd<()> = BookManagerStd::new();
+    mgr.add_book("BTC/USD").expect("first add");
+    // Seed a resting order into the existing book.
+    if let Some(book) = mgr.get_book("BTC/USD") {
+        let _ = book.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+    }
+
+    // A second add_book for the same symbol must NOT overwrite the live book.
+    match mgr.add_book("BTC/USD") {
+        Err(ManagerError::BookAlreadyExists { symbol }) => assert_eq!(symbol, "BTC/USD"),
+        other => panic!("expected BookAlreadyExists, got {other:?}"),
+    }
+    // The original book (and its resting order) survives unchanged.
+    assert_eq!(mgr.book_count(), 1);
+    let book = mgr.get_book("BTC/USD").expect("book still present");
+    assert_eq!(
+        book.best_bid(),
+        Some(100),
+        "existing resting order preserved"
+    );
+}
+
+#[test]
+fn tokio_add_book_duplicate_symbol_is_rejected_and_preserves_existing_issue_105() {
+    use orderbook_rs::ManagerError;
+
+    let mut mgr: BookManagerTokio<()> = BookManagerTokio::new();
+    mgr.add_book("ETH/USD").expect("first add");
+    if let Some(book) = mgr.get_book("ETH/USD") {
+        let _ = book.add_limit_order(Id::new_uuid(), 200, 5, Side::Sell, TimeInForce::Gtc, None);
+    }
+
+    match mgr.add_book("ETH/USD") {
+        Err(ManagerError::BookAlreadyExists { symbol }) => assert_eq!(symbol, "ETH/USD"),
+        other => panic!("expected BookAlreadyExists, got {other:?}"),
+    }
+    assert_eq!(mgr.book_count(), 1);
+    let book = mgr.get_book("ETH/USD").expect("book still present");
+    assert_eq!(
+        book.best_ask(),
+        Some(200),
+        "existing resting order preserved"
+    );
 }

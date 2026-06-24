@@ -27,7 +27,13 @@ where
     T: Clone + Send + Sync + Default + 'static,
 {
     /// Add a new order book for a symbol with an automatically configured trade listener.
-    fn add_book(&mut self, symbol: &str);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManagerError::BookAlreadyExists`] if a book already exists for
+    /// `symbol` — `add_book` refuses to overwrite it, which would silently drop
+    /// the existing book's resting orders and order locations.
+    fn add_book(&mut self, symbol: &str) -> Result<(), ManagerError>;
 
     /// Get a reference to an order book by symbol.
     fn get_book(&self, symbol: &str) -> Option<&OrderBook<T>>;
@@ -159,9 +165,10 @@ where
     /// use orderbook_rs::orderbook::manager::{BookManager, BookManagerStd};
     /// use pricelevel::{Id, Side, TimeInForce};
     ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-    /// mgr.add_book("BTC/USD");
-    /// mgr.add_book("ETH/USD");
+    /// mgr.add_book("BTC/USD")?;
+    /// mgr.add_book("ETH/USD")?;
     ///
     /// if let Some(book) = mgr.get_book("BTC/USD") {
     ///     book.add_limit_order(Id::new_uuid(), 100, 10, Side::Buy, TimeInForce::Gtc, None).ok();
@@ -169,6 +176,8 @@ where
     ///
     /// let results = mgr.cancel_all_across_books();
     /// assert!(results.contains_key("BTC/USD"));
+    /// # Ok(())
+    /// # }
     /// ```
     #[must_use]
     pub fn cancel_all_across_books(&self) -> HashMap<String, MassCancelResult> {
@@ -216,7 +225,13 @@ impl<T> BookManager<T> for BookManagerStd<T>
 where
     T: Clone + Send + Sync + Default + 'static,
 {
-    fn add_book(&mut self, symbol: &str) {
+    fn add_book(&mut self, symbol: &str) -> Result<(), ManagerError> {
+        if self.books.contains_key(symbol) {
+            return Err(ManagerError::BookAlreadyExists {
+                symbol: symbol.to_string(),
+            });
+        }
+
         let sender = self.trade_sender.clone();
         let symbol_clone = symbol.to_string();
 
@@ -236,6 +251,7 @@ where
         let book = OrderBook::with_trade_listener(symbol, trade_listener);
         self.books.insert(symbol.to_string(), book);
         info!("Added order book for symbol: {}", symbol);
+        Ok(())
     }
 
     fn get_book(&self, symbol: &str) -> Option<&OrderBook<T>> {
@@ -426,7 +442,13 @@ impl<T> BookManager<T> for BookManagerTokio<T>
 where
     T: Clone + Send + Sync + Default + 'static,
 {
-    fn add_book(&mut self, symbol: &str) {
+    fn add_book(&mut self, symbol: &str) -> Result<(), ManagerError> {
+        if self.books.contains_key(symbol) {
+            return Err(ManagerError::BookAlreadyExists {
+                symbol: symbol.to_string(),
+            });
+        }
+
         let sender = self.trade_sender.clone();
         let symbol_clone = symbol.to_string();
 
@@ -446,6 +468,7 @@ where
         let book = OrderBook::with_trade_listener(symbol, trade_listener);
         self.books.insert(symbol.to_string(), book);
         info!("Added order book for symbol: {}", symbol);
+        Ok(())
     }
 
     fn get_book(&self, symbol: &str) -> Option<&OrderBook<T>> {

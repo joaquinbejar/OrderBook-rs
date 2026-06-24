@@ -282,7 +282,7 @@ fn bincode_serializer_trade_result_round_trip() {
 #[test]
 fn book_manager_multi_book_operations() {
     let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-    mgr.add_book("BTC/USD");
+    mgr.add_book("BTC/USD").expect("add book");
 
     // Place a sell order
     let book = mgr.get_book("BTC/USD").expect("BTC/USD book must exist");
@@ -304,8 +304,8 @@ fn book_manager_multi_book_operations() {
 #[test]
 fn book_manager_multi_book_independent_state() {
     let mut mgr: BookManagerStd<()> = BookManagerStd::new();
-    mgr.add_book("BTC/USD");
-    mgr.add_book("ETH/USD");
+    mgr.add_book("BTC/USD").expect("add book");
+    mgr.add_book("ETH/USD").expect("add book");
 
     let btc_book = mgr.get_book("BTC/USD").expect("BTC/USD must exist");
     let _ = btc_book.add_limit_order(Id::new_uuid(), 50000, 1, Side::Buy, TimeInForce::Gtc, None);

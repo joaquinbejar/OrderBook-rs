@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`add_book` refuses to overwrite an existing book (#105, breaking).** Both
+  `BookManagerStd` and `BookManagerTokio` did `self.books.insert(symbol, book)` and
+  ignored the returned `Option`, so a second `add_book` for the same symbol
+  silently replaced the first book — dropping all its resting orders and order
+  locations with no warning. `BookManager::add_book` now returns
+  `Result<(), ManagerError>` and returns the new `ManagerError::BookAlreadyExists { symbol }`
+  instead of overwriting; both managers stay in parity. Breaking: callers must
+  handle the `Result` (the trait method signature changed) — permitted under the
+  0.8 → 0.9 window.
 - **Wire `NewOrder` rejects `account_id == 0` (#103).** `TryFrom<&NewOrderWire>`
   encoded the numeric `account_id` into the low 8 bytes of a `Hash32` to build the
   `user_id`, with a comment claiming it avoided colliding with `Hash32::zero()`

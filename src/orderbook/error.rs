@@ -519,6 +519,14 @@ impl Clone for OrderBookError {
 pub enum ManagerError {
     /// Trade processor has already been started
     ProcessorAlreadyStarted,
+
+    /// An order book already exists for the symbol; `add_book` refuses to
+    /// overwrite it (which would silently drop the existing book's resting
+    /// orders).
+    BookAlreadyExists {
+        /// The symbol that already has a book.
+        symbol: String,
+    },
 }
 
 impl fmt::Display for ManagerError {
@@ -526,6 +534,9 @@ impl fmt::Display for ManagerError {
         match self {
             ManagerError::ProcessorAlreadyStarted => {
                 write!(f, "trade processor already started")
+            }
+            ManagerError::BookAlreadyExists { symbol } => {
+                write!(f, "order book already exists for symbol: {symbol}")
             }
         }
     }
