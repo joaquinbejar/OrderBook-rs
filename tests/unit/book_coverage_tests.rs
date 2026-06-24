@@ -70,6 +70,28 @@ mod tests {
     }
 
     #[test]
+    fn test_both_sides_cached_after_sequential_reads_issue_93() {
+        // Regression for #93: reading one side must not evict the other, and
+        // mid_price()/spread() (which read both sides in sequence on the same
+        // unmutated book) must return correct values on a populated two-sided
+        // book in a single call.
+        let book = OrderBook::<()>::new("TEST");
+        let _ = book.add_limit_order(Id::from_u64(1), 100, 10, Side::Buy, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::from_u64(2), 110, 5, Side::Sell, TimeInForce::Gtc, None);
+
+        // best_bid() primes the bid cache; best_ask() must still return Some and
+        // must not have caused best_bid() to come back empty.
+        assert_eq!(book.best_bid(), Some(100));
+        assert_eq!(book.best_ask(), Some(110));
+        assert_eq!(book.best_bid(), Some(100), "bid must survive the ask read");
+
+        // mid_price and spread read both sides; both must be correct without a
+        // mutation between them.
+        assert_eq!(book.mid_price(), Some(105.0));
+        assert_eq!(book.spread(), Some(10));
+    }
+
+    #[test]
     fn test_best_ask_with_cache_miss() {
         // Test best_ask when cache is empty (lines 301, 321)
         let book = OrderBook::<()>::new("TEST");

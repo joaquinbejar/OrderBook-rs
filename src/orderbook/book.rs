@@ -1062,7 +1062,8 @@ where
         // SkipMap maintains sorted order, best bid (highest price) is last
         let best_price = self.bids.iter().next_back().map(|entry| *entry.key());
 
-        self.cache.update_best_prices(best_price, None);
+        // Update only the bid slot — never evict the ask side.
+        self.cache.update_best_bid(best_price);
 
         best_price
     }
@@ -1079,7 +1080,8 @@ where
         // SkipMap maintains sorted order, best ask (lowest price) is first
         let best_price = self.asks.iter().next().map(|entry| *entry.key());
 
-        self.cache.update_best_prices(None, best_price);
+        // Update only the ask slot — never evict the bid side.
+        self.cache.update_best_ask(best_price);
 
         best_price
     }
