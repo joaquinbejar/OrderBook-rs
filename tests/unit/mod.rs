@@ -24,6 +24,8 @@ mod replay_config_tests;
 mod replay_coverage_tests;
 #[cfg(feature = "journal")]
 mod replay_determinism;
+#[cfg(feature = "special_orders")]
+mod repricing_determinism_tests;
 mod risk_layer_tests;
 mod sequencer_types_tests;
 mod snapshot_restore_tests;

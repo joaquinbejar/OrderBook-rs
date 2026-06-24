@@ -3432,6 +3432,7 @@ where
                         best_ask,
                         mid_price,
                         last_trade,
+                        self.tick_size,
                     )
                     && new_price != current_price.as_u128()
                 {

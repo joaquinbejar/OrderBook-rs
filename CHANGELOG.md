@@ -38,6 +38,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Deterministic, non-crossing pegged/trailing-stop repricing (#106).** Two
+  fixes in the `special_orders`-gated repricing path. (a) `pegged_order_ids()` and
+  `trailing_stop_ids()` collected from a `DashSet<Id>` in unspecified order, so the
+  re-pricing sequence — and the events / journal entries it produced — was
+  non-reproducible across runs, breaking replay determinism and price-time
+  tie-breaking on re-insert. `Id` does not implement `Ord`, so both methods now
+  sort by the deterministic `Display`/`to_string` key (`ids.sort_by_key(|id| id.to_string())`)
+  before returning; the `to_string` allocation is acceptable off the matching hot
+  path (operator-triggered maintenance). (b) `calculate_pegged_price` ignored the
+  order `side` and could return a `reference ± offset` price that crossed the
+  spread, so a pegged re-price would aggressively fill during a maintenance
+  operation. It now takes the book `tick_size` and clamps the computed price to
+  the passive side of the market — one tick inside the touch (`best_ask - tick`
+  for a Buy, `best_bid + tick` for a Sell) — then snaps the result onto the tick
+  grid in the passive direction (round down for a Buy, up for a Sell) so the
+  re-priced order is always tick-aligned and restable. This is required because
+  the re-price path swallows `add_order`'s tick-validation error: a `± 1`
+  (off-tick) clamp on a `tick_size > 1` book was silently rejected on re-insert,
+  leaving the peg stuck at its stale price. When no valid passive tick exists
+  (degenerate cases such as `best_ask == tick`), the re-price is skipped (returns
+  `None`) instead of crossing or resting off-book. The order now rests passively,
+  tick-aligned, just inside the spread instead of trading.
 - **`add_book` refuses to overwrite an existing book (#105, breaking).** Both
   `BookManagerStd` and `BookManagerTokio` did `self.books.insert(symbol, book)` and
   ignored the returned `Option`, so a second `add_book` for the same symbol

@@ -258,6 +258,7 @@ mod tests {
             Some(120), // best_ask
             Some(110), // mid_price
             None,
+            None, // tick_size
         );
         assert_eq!(pegged_price, Some(102));
 
@@ -337,6 +338,7 @@ mod tests {
             Some(120), // best_ask
             Some(110), // mid_price
             None,
+            None, // tick_size
         );
 
         // Calculated price is 105 (100 + 5)
