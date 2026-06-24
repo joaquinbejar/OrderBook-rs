@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `async-nats` 0.47 → 0.49, `dashmap` 6.1 → 6.2, `bitflags` 2.11 → 2.13,
   `either` 1.15 → 1.16, `crc32fast` 1 → 1.5, `proptest` 1.7 → 1.11.
 
+### Removed
+
+- Dropped the stale `ISSUE_IV.md` implied-volatility design draft from the repo
+  root (the implied-volatility solver now lives in `src/orderbook/implied_volatility/`).
+
 ## [0.8.0] — 2026-05-03
 
 ### Added — Quote-notional market orders (#85)
