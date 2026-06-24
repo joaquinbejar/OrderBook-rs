@@ -10,7 +10,7 @@ use crate::orderbook::pool::MatchingPool;
 use crate::orderbook::stp::{STPAction, check_stp_at_level};
 use crate::{OrderBook, OrderBookError};
 use either::Either;
-use pricelevel::{Hash32, Id, MatchResult, OrderUpdate, Quantity, Side, TakerKind, TimeInForce};
+use pricelevel::{Hash32, Id, MatchResult, Quantity, Side, TakerKind, TimeInForce};
 use std::sync::atomic::Ordering;
 
 /// Selects how the matching loop measures its budget.
@@ -383,19 +383,19 @@ where
 
                     STPAction::CancelMaker { maker_order_ids } => {
                         // Cancel same-user resting orders, then match normally.
-                        // Look up each maker's user_id from the snapshot rather
-                        // than assuming it equals taker_user_id.
+                        // Each cancel runs on the level we already hold — it emits the
+                        // level-change event, records OrderStatus::Cancelled
+                        // { SelfTradePrevention }, and releases the per-account risk slot
+                        // in lockstep, but does NOT remove the level from the map (no
+                        // order_locations re-resolution either), so level removal stays
+                        // with the post-walk empty_price_levels drain (#95).
                         for maker_id in &maker_order_ids {
-                            let maker_user_id = orders
-                                .iter()
-                                .find(|o| o.id() == *maker_id)
-                                .map(|o| o.user_id())
-                                .unwrap_or(taker_user_id);
-                            let _ = price_level.update_order(OrderUpdate::Cancel {
-                                order_id: *maker_id,
-                            });
-                            self.order_locations.remove(maker_id);
-                            self.untrack_user_order(maker_user_id, maker_id);
+                            self.cancel_resting_maker_on_level(
+                                price_level,
+                                side.opposite(),
+                                *maker_id,
+                                CancelReason::SelfTradePrevention,
+                            );
                         }
                         // If the level is now empty, mark for removal and continue
                         if price_level.order_count() == 0 {
@@ -436,18 +436,15 @@ where
                                 stop.consume(executed, price);
                             }
                         }
-                        // Cancel the maker order — look up its user_id from the
-                        // snapshot rather than assuming it equals taker_user_id.
-                        let maker_user_id = orders
-                            .iter()
-                            .find(|o| o.id() == maker_order_id)
-                            .map(|o| o.user_id())
-                            .unwrap_or(taker_user_id);
-                        let _ = price_level.update_order(OrderUpdate::Cancel {
-                            order_id: maker_order_id,
-                        });
-                        self.order_locations.remove(&maker_order_id);
-                        self.untrack_user_order(maker_user_id, &maker_order_id);
+                        // Cancel the maker on the held level for the same lockstep
+                        // event + state + risk effects as CancelMaker (#95); level
+                        // removal stays with the empty_price_levels drain below.
+                        self.cancel_resting_maker_on_level(
+                            price_level,
+                            side.opposite(),
+                            maker_order_id,
+                            CancelReason::SelfTradePrevention,
+                        );
                         if price_level.order_count() == 0 {
                             empty_price_levels.push(price);
                         }

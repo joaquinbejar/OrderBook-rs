@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CancelBoth `maker_order_id` follow price-time priority and are reproducible for a
   given book state. Non-determinism there previously broke replay (`snapshots_match`
   could diverge) for `CancelTaker` / `CancelBoth`.
+- **STP maker cancels now fire the full cancel side-effects (#95).** Under
+  `CancelMaker` / `CancelBoth`, each STP-cancelled resting maker is routed through
+  `cancel_order_with_reason`, so it emits a `PriceLevelChangedEvent`, transitions to
+  `OrderStatus::Cancelled { SelfTradePrevention }`, and releases its per-account risk
+  counter. Previously these three effects were skipped, desynchronizing book-change
+  consumers, leaving the maker in a non-terminal state, and leaking per-account
+  open-order / notional counters.
 
 ## [0.8.0] — 2026-05-03
 
