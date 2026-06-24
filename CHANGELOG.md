@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Best bid/ask cache serves both sides and represents price 0 (#93).**
+  `PriceLevelCache` stored both sides behind a single shared `cache_valid` flag
+  and overloaded price `0` as the absent sentinel, so `best_bid()` zeroed the ask
+  slot (and vice versa) — two consecutive top-of-book reads never benefited from
+  the cache, and a genuine best level at price `0` was permanently uncacheable.
+  The cache now carries an independent `AtomicBool` validity flag per side (with
+  `Acquire`/`Release` so a `valid` reader sees the stored price): `best_bid()`
+  updates only the bid slot and `best_ask()` only the ask slot, so both-sides
+  readers (`mid_price`, `spread`, `micro_price`, `resolve_reference_price(Mid)`)
+  hit the cache in a single call and price `0` is a valid cached value.
 - **Doc examples use `?` instead of `.unwrap()` (#92).** The remaining `///` doc
   examples that modelled `.unwrap()` on fallible order-book calls — all nine in
   `mass_cancel.rs` — now use `?` inside a hidden `Result`-returning harness,
