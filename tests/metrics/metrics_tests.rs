@@ -244,10 +244,37 @@ fn metrics_do_not_affect_order_semantics() {
     let snap_a = book_a.create_snapshot(10);
     let snap_b = book_b.create_snapshot(10);
 
-    let json_a = serde_json::to_string(&snap_a).expect("serialize snap_a");
-    let json_b = serde_json::to_string(&snap_b).expect("serialize snap_b");
+    // Compare the matched book *structure*, not the per-level `statistics`.
+    // Those statistics carry `pricelevel` wall-clock fields (first_arrival_time,
+    // last_execution_time, sum_waiting_time) that are captured from the real
+    // clock at order arrival/execution, independent of the injected StubClock.
+    // Two books built sequentially can therefore straddle a millisecond boundary
+    // and differ there (notably under slow coverage instrumentation), even
+    // though the determinism contract this test guards is that metric emission
+    // does not alter the resting order/price/quantity state. Strip the volatile
+    // statistics so the assertion is exact on book state and immune to timing.
+    let value_a = strip_level_statistics(serde_json::to_value(&snap_a).expect("serialize snap_a"));
+    let value_b = strip_level_statistics(serde_json::to_value(&snap_b).expect("serialize snap_b"));
     assert_eq!(
-        json_a, json_b,
-        "metrics emission must not affect book state — snapshots differ"
+        value_a, value_b,
+        "metrics emission must not affect book state — structural snapshots differ"
     );
+}
+
+/// Removes the per-level `statistics` object from each bid/ask level of a
+/// serialized order-book snapshot. Those statistics carry wall-clock timestamps
+/// not governed by the injected clock; stripping them makes a snapshot equality
+/// comparison depend only on the matched order/price/quantity state. See
+/// `metrics_do_not_affect_order_semantics` for why.
+fn strip_level_statistics(mut value: serde_json::Value) -> serde_json::Value {
+    for side in ["bids", "asks"] {
+        if let Some(levels) = value.get_mut(side).and_then(|s| s.as_array_mut()) {
+            for level in levels {
+                if let Some(obj) = level.as_object_mut() {
+                    obj.remove("statistics");
+                }
+            }
+        }
+    }
+    value
 }
