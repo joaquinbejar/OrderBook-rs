@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`with_channel_capacity` clamps instead of asserting on zero (#128).** The NATS
+  publisher builder used `assert!(channel_capacity > 0, …)` on a caller-supplied
+  argument, so a runtime-derived capacity of `0` aborted the whole process where
+  graceful handling is expected (the error rules reserve `assert!` for truly
+  unrecoverable invariant violations). A `0` capacity is now **clamped up to `1`**
+  with a `tracing::warn!` (the minimum a Tokio mpsc accepts), via a shared
+  `clamp_channel_capacity` helper, and the `# Panics` doc is replaced with the
+  clamp note. Applied to both `NatsTradePublisher` and `NatsBookChangePublisher`.
+  `nats`-gated.
 - **NATS trade publisher metric counters share one per-trade granularity (#127).**
   `publish_count` incremented once per trade (only when both subjects succeeded)
   while `error_count` incremented once per **failed subject** (and once per trade
