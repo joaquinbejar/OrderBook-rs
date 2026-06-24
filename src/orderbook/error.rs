@@ -109,6 +109,22 @@ pub enum OrderBookError {
         max: Option<u64>,
     },
 
+    /// Order rejected because its `order_id` duplicates an order that is
+    /// already resting on the book. Admitting it would overwrite the
+    /// existing order's location and orphan it (the prior order could no
+    /// longer be cancelled or modified by id), so the engine rejects the
+    /// duplicate instead of silently replacing the live order. Maps to the
+    /// stable wire code `RejectReason::DuplicateOrderId`.
+    ///
+    /// This guards against sequential reuse of a *live* order's id. It is
+    /// not atomic against two concurrent submissions of the same fresh id
+    /// on the lock-free admission path — serializing order ids is the
+    /// ingress / sequencing layer's responsibility.
+    DuplicateOrderId {
+        /// The duplicate order ID that was rejected
+        order_id: pricelevel::Id,
+    },
+
     /// Order rejected because `user_id` is `Hash32::zero()` while
     /// Self-Trade Prevention is enabled. All orders must carry a non-zero
     /// `user_id` when STP mode is active.
@@ -263,6 +279,12 @@ impl fmt::Display for OrderBookError {
                 write!(
                     f,
                     "order size out of range: quantity {quantity}, min {min:?}, max {max:?}"
+                )
+            }
+            OrderBookError::DuplicateOrderId { order_id } => {
+                write!(
+                    f,
+                    "duplicate order id: order {order_id} is already resting on the book"
                 )
             }
             OrderBookError::MissingUserId { order_id } => {
@@ -456,6 +478,9 @@ impl Clone for OrderBookError {
                     max: *max,
                 }
             }
+            OrderBookError::DuplicateOrderId { order_id } => OrderBookError::DuplicateOrderId {
+                order_id: *order_id,
+            },
             OrderBookError::MissingUserId { order_id } => OrderBookError::MissingUserId {
                 order_id: *order_id,
             },

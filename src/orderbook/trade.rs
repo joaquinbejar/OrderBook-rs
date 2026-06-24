@@ -205,6 +205,75 @@ pub struct TransactionInfo {
     pub taker_fee: i128,
 }
 
+impl TradeInfo {
+    /// Build a display-oriented [`TradeInfo`] from a [`TradeResult`],
+    /// populating each [`TransactionInfo`]'s per-transaction maker/taker
+    /// fees from `fee_schedule`.
+    ///
+    /// For every transaction the fee is what the configured [`FeeSchedule`]
+    /// charges on that transaction's notional (`price × quantity`):
+    /// `maker_fee = calculate_fee(notional, true)` (negative for a rebate)
+    /// and `taker_fee = calculate_fee(notional, false)`. When `fee_schedule`
+    /// is `None` (or a zero-fee schedule) every per-transaction fee is `0`.
+    ///
+    /// The per-transaction fees sum to the aggregate
+    /// [`TradeResult::total_maker_fees`] / [`TradeResult::total_taker_fees`]
+    /// produced by [`TradeResult::with_fees`] for the same schedule, so the
+    /// detailed and aggregate views are consistent. This is the
+    /// authoritative engine-side population path for the `TransactionInfo`
+    /// fee fields; consumers should prefer it to constructing
+    /// `TransactionInfo` by hand (which historically left the fees at `0`).
+    #[must_use]
+    pub fn from_trade_result(
+        trade_result: &TradeResult,
+        fee_schedule: Option<&FeeSchedule>,
+    ) -> Self {
+        let match_result = &trade_result.match_result;
+        let schedule = fee_schedule.filter(|s| !s.is_zero_fee());
+
+        let transactions: Vec<TransactionInfo> = match_result
+            .trades()
+            .as_vec()
+            .iter()
+            .map(|tx| {
+                let notional = tx
+                    .price()
+                    .as_u128()
+                    .saturating_mul(u128::from(tx.quantity().as_u64()));
+                let (maker_fee, taker_fee) = match schedule {
+                    Some(s) => (
+                        s.calculate_fee(notional, true),
+                        s.calculate_fee(notional, false),
+                    ),
+                    None => (0, 0),
+                };
+                TransactionInfo {
+                    price: tx.price().as_u128(),
+                    quantity: tx.quantity().as_u64(),
+                    transaction_id: tx.trade_id().to_string(),
+                    maker_order_id: tx.maker_order_id().to_string(),
+                    taker_order_id: tx.taker_order_id().to_string(),
+                    maker_fee,
+                    taker_fee,
+                }
+            })
+            .collect();
+
+        Self {
+            symbol: trade_result.symbol.clone(),
+            order_id: match_result.order_id().to_string(),
+            executed_quantity: match_result
+                .executed_quantity()
+                .map(|q| q.as_u64())
+                .unwrap_or(0),
+            remaining_quantity: match_result.remaining_quantity().as_u64(),
+            is_complete: match_result.is_complete(),
+            transaction_count: match_result.trades().len(),
+            transactions,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +388,55 @@ mod tests {
         assert_eq!(tr.total_taker_fees, 5_000);
         assert_eq!(tr.total_fees(), 2_500);
         assert!(tr.total_maker_fees < 0); // rebate
+    }
+
+    #[test]
+    fn test_trade_info_from_result_populates_per_transaction_fees_issue_119() {
+        let schedule = FeeSchedule::new(-2, 5); // -2 bps maker rebate, 5 bps taker
+        let mr = make_match_result_with_trades(vec![
+            make_trade(1000, 10), // notional 10_000 → maker -2, taker 5
+            make_trade(2000, 20), // notional 40_000 → maker -8, taker 20
+        ]);
+        let tr = TradeResult::with_fees("BTC/USD".to_string(), mr, Some(schedule));
+
+        let info = TradeInfo::from_trade_result(&tr, Some(&schedule));
+
+        assert_eq!(info.symbol, "BTC/USD");
+        assert_eq!(info.transaction_count, 2);
+        assert_eq!(info.transactions.len(), 2);
+
+        // Per-transaction fees are populated (no longer hard-zero).
+        assert_eq!(info.transactions[0].maker_fee, -2);
+        assert_eq!(info.transactions[0].taker_fee, 5);
+        assert_eq!(info.transactions[1].maker_fee, -8);
+        assert_eq!(info.transactions[1].taker_fee, 20);
+
+        // The detailed view sums to the aggregate TradeResult fees.
+        let maker_sum: i128 = info.transactions.iter().map(|t| t.maker_fee).sum();
+        let taker_sum: i128 = info.transactions.iter().map(|t| t.taker_fee).sum();
+        assert_eq!(maker_sum, tr.total_maker_fees);
+        assert_eq!(taker_sum, tr.total_taker_fees);
+    }
+
+    #[test]
+    fn test_trade_info_from_result_none_schedule_zero_fees_issue_119() {
+        let mr = make_match_result_with_trades(vec![make_trade(1000, 10)]);
+        let tr = TradeResult::new("ETH/USD".to_string(), mr);
+
+        // No schedule → per-transaction fees are zero, metadata still populated.
+        let info = TradeInfo::from_trade_result(&tr, None);
+        assert_eq!(info.transaction_count, 1);
+        assert_eq!(info.transactions.len(), 1);
+        assert_eq!(info.transactions[0].maker_fee, 0);
+        assert_eq!(info.transactions[0].taker_fee, 0);
+        assert_eq!(info.transactions[0].price, 1000);
+        assert_eq!(info.transactions[0].quantity, 10);
+
+        // A zero-fee schedule is treated the same as no schedule.
+        let zero = FeeSchedule::zero_fee();
+        let info_zero = TradeInfo::from_trade_result(&tr, Some(&zero));
+        assert_eq!(info_zero.transactions[0].maker_fee, 0);
+        assert_eq!(info_zero.transactions[0].taker_fee, 0);
     }
 
     #[test]

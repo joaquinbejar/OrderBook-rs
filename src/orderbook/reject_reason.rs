@@ -222,6 +222,7 @@ impl From<&OrderBookError> for RejectReason {
             OrderBookError::InvalidTickSize { .. } => Self::InvalidPrice,
             OrderBookError::InvalidLotSize { .. } => Self::InvalidQuantity,
             OrderBookError::OrderSizeOutOfRange { .. } => Self::OrderSizeOutOfRange,
+            OrderBookError::DuplicateOrderId { .. } => Self::DuplicateOrderId,
             OrderBookError::MissingUserId { .. } => Self::MissingUserId,
             OrderBookError::PriceLevelError(_) => Self::Other(0),
             OrderBookError::OrderNotFound(_) => Self::Other(0),
@@ -361,6 +362,14 @@ mod tests {
             order_id: Id::new_uuid(),
         };
         assert_eq!(RejectReason::from(&err), RejectReason::MissingUserId);
+    }
+
+    #[test]
+    fn test_from_order_book_error_duplicate_order_id() {
+        let err = OrderBookError::DuplicateOrderId {
+            order_id: Id::new_uuid(),
+        };
+        assert_eq!(RejectReason::from(&err), RejectReason::DuplicateOrderId);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! 4. Use TradeListener to capture trades in real-time
 
 use orderbook_rs::prelude::{
-    Id, OrderBook, Side, TimeInForce, TradeInfo, TradeListener, TradeResult, TransactionInfo,
+    Id, OrderBook, Side, TimeInForce, TradeInfo, TradeListener, TradeResult,
 };
 use pricelevel::{Quantity, setup_logger};
 use std::sync::{Arc, Mutex};
@@ -178,37 +178,14 @@ fn execute_market_orders(book: &OrderBook) {
     }
 }
 
-/// Helper function to create TradeInfo from TradeResult
+/// Helper function to create TradeInfo from TradeResult.
+///
+/// Delegates to the engine-provided `TradeInfo::from_trade_result`, which
+/// populates the per-transaction maker/taker fees from the supplied fee
+/// schedule. This demo runs without a fee schedule, so it passes `None`
+/// (per-transaction fees are `0`); pass `Some(&schedule)` to populate them.
 fn create_trade_info_from_result(trade_result: &TradeResult) -> TradeInfo {
-    let match_result = &trade_result.match_result;
-
-    let transactions: Vec<TransactionInfo> = match_result
-        .trades()
-        .as_vec()
-        .iter()
-        .map(|tx| TransactionInfo {
-            price: tx.price().as_u128(),
-            quantity: tx.quantity().as_u64(),
-            transaction_id: tx.trade_id().to_string(),
-            maker_order_id: tx.maker_order_id().to_string(),
-            taker_order_id: tx.taker_order_id().to_string(),
-            maker_fee: 0,
-            taker_fee: 0,
-        })
-        .collect();
-
-    TradeInfo {
-        symbol: trade_result.symbol.clone(),
-        order_id: match_result.order_id().to_string(),
-        executed_quantity: match_result
-            .executed_quantity()
-            .unwrap_or(Quantity::new(0))
-            .as_u64(),
-        remaining_quantity: match_result.remaining_quantity().as_u64(),
-        is_complete: match_result.is_complete(),
-        transaction_count: match_result.trades().len(),
-        transactions,
-    }
+    TradeInfo::from_trade_result(trade_result, None)
 }
 
 /// Display the current state of the order book

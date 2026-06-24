@@ -38,6 +38,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Resolve declared-but-unemitted wire/event surfaces (#119).** Three public
+  surfaces claimed behavior the engine never implemented; all three are now backed
+  by real engine paths. (a) `RejectReason::DuplicateOrderId` (stable wire code 12)
+  was never emitted and `add_order` performed no duplicate-id check — it silently
+  overwrote the resting order's location, orphaning it. `add_order` now rejects an
+  incoming order whose id already rests on the book with the new
+  `OrderBookError::DuplicateOrderId { order_id }` (mapped to wire code 12); the
+  check lives in `add_order` (not the shared `validate_order_shape`) so the
+  validate-first atomic modify is unaffected, and it does not clobber the live
+  order's tracked state. (b) `TransactionInfo::maker_fee` / `taker_fee` were
+  documented as per-transaction fees but no engine path populated them. The new
+  `TradeInfo::from_trade_result(&TradeResult, Option<&FeeSchedule>)` computes each
+  transaction's maker/taker fee from the schedule; the per-transaction fees sum to
+  the aggregate `TradeResult::total_maker_fees` / `total_taker_fees`, so the
+  detailed and aggregate views agree. (c) `MarketImpact::total_quantity_available`
+  was documented as total available depth but was set to the requested-capped fill
+  quantity, making `can_fill` trivially true and `fill_ratio` capped at `1.0`. It
+  now accumulates the true resting depth across the whole side being hit (the
+  impact metrics still describe only the consumed portion), so `fill_ratio` can
+  exceed `1.0` when the book holds more depth than requested.
 - **Evict zeroed per-account risk counters; self-balancing fill accounting (#115).**
   Two hardening fixes in the opt-in pre-trade risk layer (`risk.rs`). (a) `RiskState`
   kept a per-account `RiskCounters` entry forever — `on_fill`/`on_cancel` decremented

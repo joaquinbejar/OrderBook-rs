@@ -1657,11 +1657,23 @@ where
     /// - `worst_price`: Furthest price from the best price
     /// - `slippage`: Absolute difference from best price
     /// - `slippage_bps`: Slippage in basis points
-    /// - `levels_consumed`: Number of price levels used
-    /// - `total_quantity_available`: Total liquidity available
+    /// - `levels_consumed`: Number of price levels the order would consume
+    /// - `total_quantity_available`: Total resting depth on the hit side
+    ///   (summed across every level, not capped at `quantity`)
+    ///
+    /// Note the two reference frames in the returned struct: `avg_price`,
+    /// `worst_price`, `slippage`, `slippage_bps`, and `levels_consumed`
+    /// describe only the portion this `quantity` would consume, while
+    /// `total_quantity_available` reports the whole side's resting depth.
+    /// A `quantity == 0` query is a degenerate no-op and returns an
+    /// all-zero [`MarketImpact`] (including `total_quantity_available == 0`),
+    /// so read depth with a positive `quantity`.
     ///
     /// # Performance
-    /// O(M log N) where M is the number of levels needed.
+    /// O(N) over the resting price levels on the side being hit: the impact
+    /// metrics only need the consumed prefix, but `total_quantity_available`
+    /// reports true depth, so the whole side is scanned. This is an
+    /// analytics query, not on the matching hot path.
     ///
     /// # Examples
     /// ```
@@ -1707,20 +1719,23 @@ where
         let mut remaining = quantity;
         let mut total_cost = 0u128;
         let mut total_filled = 0u64;
+        let mut total_available = 0u64;
         let mut worst_price = best_price;
         let mut levels_consumed = 0;
 
-        // Iterate in price-priority order
+        // Iterate in price-priority order. The loop scans the whole side
+        // (not just the levels this order would consume) so
+        // `total_quantity_available` reflects the *true* resting depth — the
+        // `can_fill` / `fill_ratio` helpers are meaningless when it is capped
+        // at the requested quantity. The impact metrics (`avg_price`,
+        // `worst_price`, `slippage`, `levels_consumed`) still describe only
+        // the consumed portion, gated on `remaining > 0`.
         let iter = match side {
             Side::Buy => Either::Left(price_levels.iter()), // Lowest to highest (asks)
             Side::Sell => Either::Right(price_levels.iter().rev()), // Highest to lowest (bids)
         };
 
         for entry in iter {
-            if remaining == 0 {
-                break;
-            }
-
             let price = *entry.key();
             let price_level = entry.value();
             let available = price_level.total_quantity().unwrap_or(0);
@@ -1729,12 +1744,18 @@ where
                 continue;
             }
 
-            levels_consumed += 1;
-            let fill_qty = remaining.min(available);
-            total_cost = total_cost.saturating_add(price * (fill_qty as u128));
-            total_filled = total_filled.saturating_add(fill_qty);
-            worst_price = price;
-            remaining = remaining.saturating_sub(fill_qty);
+            // Accumulate full available depth across every non-empty level.
+            total_available = total_available.saturating_add(available);
+
+            // Cost / slippage only reflect the portion this order consumes.
+            if remaining > 0 {
+                levels_consumed += 1;
+                let fill_qty = remaining.min(available);
+                total_cost = total_cost.saturating_add(price * (fill_qty as u128));
+                total_filled = total_filled.saturating_add(fill_qty);
+                worst_price = price;
+                remaining = remaining.saturating_sub(fill_qty);
+            }
         }
 
         let avg_price = if total_filled > 0 {
@@ -1760,7 +1781,7 @@ where
             slippage,
             slippage_bps,
             levels_consumed,
-            total_quantity_available: total_filled,
+            total_quantity_available: total_available,
         }
     }
 

@@ -1,4 +1,4 @@
-use orderbook_rs::OrderBook;
+use orderbook_rs::{OrderBook, OrderBookError};
 use pricelevel::{Hash32, Id, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs};
 
 #[cfg(test)]
@@ -783,5 +783,42 @@ mod tests {
         assert!(result.is_err());
         let msg = format!("{}", result.unwrap_err());
         assert!(msg.contains("lot size"), "Should fail on lot: {msg}");
+    }
+
+    #[test]
+    fn test_add_order_rejects_duplicate_order_id_issue_119() {
+        let book: OrderBook<()> = OrderBook::new("TEST");
+        let id = Id::new_uuid();
+
+        // First order rests on the book.
+        let first = book.add_limit_order(id, 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        assert!(first.is_ok());
+
+        // A second order reusing the same id is rejected with the typed error,
+        // not silently overwritten (which would orphan the resting order).
+        let dup = book.add_limit_order(id, 105, 5, Side::Sell, TimeInForce::Gtc, None);
+        assert!(
+            matches!(&dup, Err(OrderBookError::DuplicateOrderId { order_id }) if *order_id == id),
+            "duplicate id must be rejected: {dup:?}"
+        );
+
+        // The original order is untouched: still resting at its original price,
+        // and cancellable by its id.
+        let cancelled = book
+            .cancel_order(id)
+            .expect("cancel succeeds")
+            .expect("original order still resting");
+        assert_eq!(
+            cancelled.price().as_u128(),
+            100,
+            "the rejected duplicate must not have relocated the original order"
+        );
+
+        // After the original is gone the id is free to reuse.
+        let reused = book.add_limit_order(id, 110, 7, Side::Sell, TimeInForce::Gtc, None);
+        assert!(
+            reused.is_ok(),
+            "id is reusable once the original is removed"
+        );
     }
 }

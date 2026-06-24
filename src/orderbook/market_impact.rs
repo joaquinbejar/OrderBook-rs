@@ -13,6 +13,13 @@ use serde::{Deserialize, Serialize};
 ///
 /// Provides detailed metrics about how an order would affect the market,
 /// including price impact, slippage, and liquidity consumption.
+///
+/// The fields use two reference frames: `avg_price`, `worst_price`,
+/// `slippage`, `slippage_bps`, and `levels_consumed` describe only the
+/// portion the analyzed order would **consume**, whereas
+/// [`total_quantity_available`](Self::total_quantity_available) reports the
+/// **whole side's** resting depth (so [`fill_ratio`](Self::fill_ratio) can
+/// exceed `1.0`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarketImpact {
     /// Average execution price across all fills (in price units)
@@ -30,7 +37,11 @@ pub struct MarketImpact {
     /// Number of price levels that would be consumed
     pub levels_consumed: usize,
 
-    /// Total quantity available to fill the order (in units)
+    /// Total resting depth available on the side being hit (in units),
+    /// summed across **every** non-empty level — not capped at the
+    /// requested quantity. This is what makes [`Self::can_fill`] and
+    /// [`Self::fill_ratio`] meaningful: a value greater than the requested
+    /// quantity means the order would fully fill with depth to spare.
     pub total_quantity_available: u64,
 }
 
@@ -82,13 +93,19 @@ impl MarketImpact {
         self.total_quantity_available >= requested_quantity
     }
 
-    /// Returns the fill ratio (0.0 to 1.0)
+    /// Returns the fill ratio of available depth to requested quantity.
+    ///
+    /// Because [`Self::total_quantity_available`] now reflects the true
+    /// resting depth (not the capped fill quantity), this ratio **can
+    /// exceed 1.0** when the book holds more depth than requested — a value
+    /// of `2.0` means twice the requested quantity is resting. Returns
+    /// `0.0` for a zero `requested_quantity`.
     ///
     /// # Arguments
     /// - `requested_quantity`: The quantity originally requested (in units)
     ///
     /// # Returns
-    /// The ratio of available quantity to requested quantity
+    /// `total_quantity_available / requested_quantity`
     #[must_use]
     pub fn fill_ratio(&self, requested_quantity: u64) -> f64 {
         if requested_quantity == 0 {

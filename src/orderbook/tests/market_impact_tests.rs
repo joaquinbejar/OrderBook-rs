@@ -17,7 +17,8 @@ mod tests {
         // Buy 20 units (will consume 2 levels)
         let impact = book.market_impact(20, Side::Buy);
 
-        assert_eq!(impact.total_quantity_available, 20);
+        // Full ask-side depth (10 + 15 + 20), not capped at the requested 20.
+        assert_eq!(impact.total_quantity_available, 45);
         assert_eq!(impact.levels_consumed, 2);
         assert_eq!(impact.worst_price, 105);
         assert_eq!(impact.slippage, 5);
@@ -39,6 +40,31 @@ mod tests {
         assert_eq!(impact.levels_consumed, 1);
         assert!(!impact.can_fill(50));
         assert_eq!(impact.fill_ratio(50), 0.2);
+    }
+
+    #[test]
+    fn test_market_impact_reports_true_depth_beyond_request_issue_119() {
+        let book: OrderBook<()> = OrderBook::new("TEST");
+        // 45 units resting on the ask side across 3 levels.
+        let _ = book.add_limit_order(Id::new(), 100, 10, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 105, 15, Side::Sell, TimeInForce::Gtc, None);
+        let _ = book.add_limit_order(Id::new(), 110, 20, Side::Sell, TimeInForce::Gtc, None);
+
+        // Request only 12, which the first two levels cover.
+        let impact = book.market_impact(12, Side::Buy);
+
+        // total_quantity_available reports the *true* resting depth (45), not
+        // the capped fill quantity (12), so can_fill / fill_ratio are
+        // meaningful: there is depth to spare and the ratio exceeds 1.0.
+        assert_eq!(impact.total_quantity_available, 45);
+        assert!(impact.can_fill(12));
+        assert!(impact.can_fill(45));
+        assert!(!impact.can_fill(46));
+        assert_eq!(impact.fill_ratio(12), 45.0 / 12.0);
+        assert!(impact.fill_ratio(12) > 1.0);
+        // Impact metrics still describe only the consumed portion.
+        assert_eq!(impact.levels_consumed, 2);
+        assert_eq!(impact.worst_price, 105);
     }
 
     #[test]
@@ -77,7 +103,8 @@ mod tests {
         // Sell 20 units (will consume 2 levels)
         let impact = book.market_impact(20, Side::Sell);
 
-        assert_eq!(impact.total_quantity_available, 20);
+        // Full bid-side depth (10 + 15 + 20), not capped at the requested 20.
+        assert_eq!(impact.total_quantity_available, 45);
         assert_eq!(impact.levels_consumed, 2);
         assert_eq!(impact.worst_price, 95);
         assert_eq!(impact.slippage, 5); // 100 - 95
@@ -253,7 +280,8 @@ mod tests {
 
         // Test market impact
         let impact = book.market_impact(50, Side::Buy);
-        assert_eq!(impact.total_quantity_available, 50);
+        // Full ask-side depth (25 + 35), not capped at the requested 50.
+        assert_eq!(impact.total_quantity_available, 60);
         assert!(impact.can_fill(50));
 
         // Test simulation

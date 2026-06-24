@@ -936,6 +936,32 @@ where
             return Err(err);
         }
 
+        // Reject a duplicate order id: an order with this id is already
+        // resting on the book. Admitting it would overwrite the existing
+        // order's entry in `order_locations` and orphan the live order (it
+        // could no longer be cancelled or modified by id). This is an
+        // `add_order`-specific structural check and deliberately does NOT
+        // live in `validate_order_shape`: the validate-first atomic modify
+        // (#98) runs that shared validator while the original, same-id
+        // order is still resting, so a check there would false-reject every
+        // modify. We also do NOT record an `OrderStatus::Rejected`
+        // transition — the id belongs to a different, still-live order
+        // whose tracked state must not be clobbered. The metric plus the
+        // typed error (which the wire layer maps to
+        // `RejectReason::DuplicateOrderId`) are sufficient.
+        //
+        // This is a sequential guard, not a concurrency guard: the check
+        // and the eventual `order_locations.insert` straddle the match
+        // walk, so two concurrent `add_order` calls with the same *fresh*
+        // id can both pass here and both rest (last-writer-wins on insert).
+        // Serializing order ids is the ingress / sequencing layer's job.
+        if self.order_locations.contains_key(&order.id()) {
+            crate::orderbook::metrics::record_reject(RejectReason::DuplicateOrderId);
+            return Err(OrderBookError::DuplicateOrderId {
+                order_id: order.id(),
+            });
+        }
+
         trace!(
             "Order book {}: Adding order {} at price {}",
             self.symbol,
