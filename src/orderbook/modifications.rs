@@ -168,7 +168,7 @@ where
                     // Get the original order without holding locks
                     let original_order = if let Some(order) = self.get_order(order_id) {
                         // Create a copy of the order
-                        Arc::try_unwrap(order.clone()).unwrap_or_else(|arc| (*arc).clone())
+                        (*order).clone()
                     } else {
                         return Ok(None); // Order not found
                     };
@@ -274,7 +274,7 @@ where
                     // Get the original order without holding locks
                     let original_order = if let Some(order) = self.get_order(order_id) {
                         // Create a copy of the order
-                        Arc::try_unwrap(order.clone()).unwrap_or_else(|arc| (*arc).clone())
+                        (*order).clone()
                     } else {
                         return Ok(None); // Order not found
                     };

@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`modify` uses a direct deep clone instead of a no-op `Arc::try_unwrap` (#124).**
+  The `UpdatePrice` / `UpdatePriceAndQuantity` paths used
+  `Arc::try_unwrap(order.clone()).unwrap_or_else(|arc| (*arc).clone())`, which
+  cloned the `Arc` (strong count ≥ 2) and so the `try_unwrap` always failed and
+  fell through to the deep clone — the cheap branch was dead and the intermediate
+  `Arc` clone was pure overhead. Both now use `(*order).clone()`. Behavior
+  unchanged.
 - **Outbound event types surfaced at the crate root; `current_time_millis` gains a
   determinism caveat (#123).** `TradeEvent`, `TradeInfo`, `TransactionInfo`,
   `PriceLevelChangedEvent`, and `PriceLevelChangedListener` were re-exported only
