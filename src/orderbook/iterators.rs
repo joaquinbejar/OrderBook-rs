@@ -151,6 +151,7 @@ impl<'a> Iterator for LevelsUntilDepth<'a> {
 /// Useful for analyzing liquidity in specific price bands.
 pub struct LevelsInRange<'a> {
     iter: PriceLevelIter<'a>,
+    side: Side,
     min_price: u128,
     max_price: u128,
     finished: bool,
@@ -177,6 +178,7 @@ impl<'a> LevelsInRange<'a> {
 
         Self {
             iter,
+            side,
             min_price,
             max_price,
             finished: false,
@@ -195,7 +197,21 @@ impl<'a> Iterator for LevelsInRange<'a> {
         for entry in self.iter.by_ref() {
             let price = *entry.key();
 
-            // Check if price is within range
+            // Ordered early exit: the underlying SkipMap iteration is sorted, so
+            // once a price passes the FAR edge of the band no later entry can be
+            // in range. Buy iterates descending (high→low): a price below the
+            // band ends it. Sell iterates ascending (low→high): a price above the
+            // band ends it.
+            let past_far_edge = match self.side {
+                Side::Buy => price < self.min_price,
+                Side::Sell => price > self.max_price,
+            };
+            if past_far_edge {
+                self.finished = true;
+                return None;
+            }
+
+            // Check if price is within range.
             if price >= self.min_price && price <= self.max_price {
                 let quantity = entry.value().total_quantity().unwrap_or(0);
 
@@ -205,12 +221,67 @@ impl<'a> Iterator for LevelsInRange<'a> {
                     cumulative_depth: 0, // Not tracked in range iterator
                 });
             }
-
-            // For efficiency, we can stop early if we've passed the range
-            // This works because skipmap iteration is ordered
+            // Otherwise we are still on the NEAR side of the band (Buy: above
+            // max; Sell: below min) — keep scanning toward it.
         }
 
         self.finished = true;
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_map(prices: impl IntoIterator<Item = u128>) -> SkipMap<u128, Arc<PriceLevel>> {
+        let map = SkipMap::new();
+        for p in prices {
+            map.insert(p, Arc::new(PriceLevel::new(p)));
+        }
+        map
+    }
+
+    #[test]
+    fn test_levels_in_range_terminates_at_far_edge_sell() {
+        // Wide ascending book 1..=1000, narrow band [10, 12] near the low end.
+        let map = make_map(1..=1000u128);
+        let mut it = LevelsInRange::new(&map, Side::Sell, 10, 12);
+        let prices: Vec<u128> = (&mut it).map(|l| l.price).collect();
+        assert_eq!(prices, vec![10, 11, 12], "only in-band levels are yielded");
+        assert!(
+            it.finished,
+            "iterator marks itself finished at the far edge"
+        );
+        // Early-exit proof: the underlying iterator was NOT drained to the end —
+        // entries past the far edge (13..=1000) remain. A non-short-circuiting
+        // scan would have consumed all of them.
+        assert!(
+            it.iter.next().is_some(),
+            "iteration must stop at the far edge, leaving later entries unconsumed"
+        );
+    }
+
+    #[test]
+    fn test_levels_in_range_terminates_at_far_edge_buy() {
+        // Buy iterates descending; narrow band [988, 990] near the high end.
+        let map = make_map(1..=1000u128);
+        let mut it = LevelsInRange::new(&map, Side::Buy, 988, 990);
+        let prices: Vec<u128> = (&mut it).map(|l| l.price).collect();
+        assert_eq!(prices, vec![990, 989, 988], "descending in-band yield");
+        assert!(it.finished);
+        assert!(
+            it.iter.next().is_some(),
+            "iteration must stop below the band, leaving lower entries unconsumed"
+        );
+    }
+
+    #[test]
+    fn test_levels_in_range_empty_when_band_outside_book() {
+        let map = make_map(1..=10u128);
+        let got: Vec<u128> = LevelsInRange::new(&map, Side::Sell, 100, 200)
+            .map(|l| l.price)
+            .collect();
+        assert!(got.is_empty());
     }
 }

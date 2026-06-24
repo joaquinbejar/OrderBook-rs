@@ -38,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Analytics paths use ordered skiplist iteration with early exit (#120).**
+  `enriched_snapshot_with_metrics` collected every bid/ask key into `Vec`s, sorted
+  them, truncated to depth, then did a redundant second skiplist lookup per kept
+  level — despite the `SkipMap` already being price-ordered; it now iterates
+  `bids.iter().rev().take(depth)` / `asks.iter().take(depth)` and snapshots the
+  entry directly (O(N log N)+2N-lookups → O(depth)). `LevelsInRange` scanned every
+  remaining entry and never short-circuited at the band edge (its comment falsely
+  claimed it did); it now threads the side and terminates as soon as iteration
+  passes the far edge (Sell/ascending price > max; Buy/descending price < min),
+  turning a narrow-band query on a wide book from O(N) into O(band). Answers are
+  unchanged. `create_snapshot` has the same collect/sort idiom but is left
+  untouched here — it is on the replay-critical path and out of this issue's scope.
 - **`SerializationError` is a typed `thiserror` enum that bridges into `OrderBookError` (#118).**
   The `EventSerializer` error was a hand-rolled `struct { message: String }` with
   manual `Display`/`Error` impls and no `#[from]` bridge, flattening the structured

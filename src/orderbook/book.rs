@@ -2904,32 +2904,24 @@ where
         depth: usize,
         flags: MetricFlags,
     ) -> EnrichedSnapshot {
-        // Get all bid prices and sort them in descending order
-        let mut bid_prices: Vec<u128> = self.bids.iter().map(|item| *item.key()).collect();
-        bid_prices.sort_by(|a, b| b.cmp(a)); // Descending order
-        bid_prices.truncate(depth);
+        // The SkipMap is already price-ordered, so iterate it directly and take
+        // only the requested depth — no collect/sort/truncate of all keys and no
+        // redundant second lookup per kept level. Bids are highest-first (reverse
+        // iteration); asks are lowest-first.
+        let bid_levels: Vec<_> = self
+            .bids
+            .iter()
+            .rev()
+            .take(depth)
+            .map(|entry| entry.value().snapshot())
+            .collect();
 
-        // Get all ask prices and sort them in ascending order
-        let mut ask_prices: Vec<u128> = self.asks.iter().map(|item| *item.key()).collect();
-        ask_prices.sort(); // Ascending order
-        ask_prices.truncate(depth);
-
-        let mut bid_levels = Vec::with_capacity(bid_prices.len());
-        let mut ask_levels = Vec::with_capacity(ask_prices.len());
-
-        // Create snapshots for each bid level
-        for price in bid_prices {
-            if let Some(entry) = self.bids.get(&price) {
-                bid_levels.push(entry.value().snapshot());
-            }
-        }
-
-        // Create snapshots for each ask level
-        for price in ask_prices {
-            if let Some(entry) = self.asks.get(&price) {
-                ask_levels.push(entry.value().snapshot());
-            }
-        }
+        let ask_levels: Vec<_> = self
+            .asks
+            .iter()
+            .take(depth)
+            .map(|entry| entry.value().snapshot())
+            .collect();
 
         // Create enriched snapshot with pre-calculated metrics
         EnrichedSnapshot::with_metrics(
