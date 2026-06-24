@@ -38,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **NATS trade publisher metric counters share one per-trade granularity (#127).**
+  `publish_count` incremented once per trade (only when both subjects succeeded)
+  while `error_count` incremented once per **failed subject** (and once per trade
+  on a serialize failure), so the two counters lived on different scales:
+  `error_count` could exceed the number of trades, and a partial failure (one
+  subject ok, the other exhausted) was invisible to both — making NATS health
+  monitoring unreliable. Counting is now uniformly **per trade**: a trade
+  increments `publish_count` on a clean success or `error_count` otherwise (a
+  shared `account_publish_outcome` helper), so `publish_count + error_count`
+  equals the number of trades processed and a partial failure is attributable to
+  exactly one trade. The field docs are corrected to match. `nats`-gated;
+  observability only, no functional effect.
 - **`modify` uses a direct deep clone instead of a no-op `Arc::try_unwrap` (#124).**
   The `UpdatePrice` / `UpdatePriceAndQuantity` paths used
   `Arc::try_unwrap(order.clone()).unwrap_or_else(|arc| (*arc).clone())`, which
