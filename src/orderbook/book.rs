@@ -673,6 +673,38 @@ where
             .check_limit_admission(account, price, quantity, reference)
     }
 
+    /// Apply the pre-trade risk gates to an in-place **modify** of a
+    /// resting order (`UpdatePrice` / `UpdatePriceAndQuantity` /
+    /// `Replace`).
+    ///
+    /// Returns `Ok(())` immediately when no risk config is installed.
+    /// Otherwise resolves the reference price (the same way as
+    /// [`Self::check_risk_limit_admission`]) and delegates to
+    /// [`RiskState::check_modify_admission`], which checks the price band
+    /// on `new_price` and the notional *projected* by swapping the
+    /// original order's `old_price * old_qty` contribution for
+    /// `new_price * new_qty` — but does not re-check the open-order count,
+    /// because a modify keeps it unchanged. Allocation-free on the happy
+    /// path; cold rejection allocates one error variant.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn check_risk_modify_admission(
+        &self,
+        order_id: pricelevel::Id,
+        account: pricelevel::Hash32,
+        new_price: u128,
+        new_qty: u64,
+    ) -> Result<(), OrderBookError> {
+        let Some(cfg) = self.risk_state.config() else {
+            return Ok(());
+        };
+        let reference = cfg
+            .reference_price
+            .and_then(|src| self.resolve_reference_price(src));
+        self.risk_state
+            .check_modify_admission(order_id, account, new_price, new_qty, reference)
+    }
+
     /// Create a new order book for the given symbol with tick size validation.
     ///
     /// Orders added to this book must have prices that are exact multiples

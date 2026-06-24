@@ -38,6 +38,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Atomic modify: a rejected modify no longer destroys the original order (#98).**
+  `UpdatePrice` / `UpdatePriceAndQuantity` / `Replace` previously cancelled the
+  resting order *before* re-adding it, so a **pre-match admission rejection** in
+  `add_order` (risk admission, missing `user_id` under STP, tick / lot size,
+  min/max order size, expiry, post-only-would-cross, or FOK insufficient
+  liquidity) destroyed the live order and returned only an error. These paths are
+  now **validate-first**: a new pure, side-effect-free `validate_order_shape` runs
+  every non-risk admission check (the same checks, in the same order, returning
+  the same typed errors, but without mutating the book, recording state, emitting
+  metrics, or invalidating the cache), and a new modify-aware risk check runs
+  *before* the cancel. The original order is only cancelled once both pass; on
+  any of these pre-match rejections it survives unchanged — no book mutation, no
+  events, no trades. `add_order` now calls the same validator as its single
+  source of truth, preserving its existing reject side-effects on the direct
+  submit path. (Scope: the enumerated pre-match admission rejects. A re-price that
+  would self-cross the same user's resting liquidity under `CancelTaker` /
+  `CancelBoth` STP is a *post-match* cancellation not covered here — tracked as a
+  follow-up; and a concurrent kill-switch flip between the guard and the cancel is
+  a pre-existing, inherent two-step race.)
+- **Modify-aware risk admission (#98).** Added `RiskState::check_modify_admission`
+  for in-place modifies. A modify keeps the account's `open_count` unchanged
+  (one order out, one in) and the original order is still counted in the
+  account's counters at validation time, so the normal limit-admission check
+  would double-count the original and falsely reject. The modify-aware check
+  therefore (a) skips the open-order-count limit entirely, (b) runs the price
+  band on the new price, and (c) checks notional against the *projected* resting
+  notional `current − old_price·old_qty + new_price·new_qty` (saturating `u128`;
+  the old order's contribution is already inside `current`), so a valid modify
+  by an account sitting exactly at `max_open_orders_per_account` now succeeds.
 - **Barrier-synchronized risk concurrency tests (#116).** The risk module's core
   safety claim — bounded over-admission and no wrap-to-MAX lockout under fill /
   cancel races — was uncovered by any concurrency test (all existing risk tests

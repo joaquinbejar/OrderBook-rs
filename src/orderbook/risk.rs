@@ -289,15 +289,34 @@ impl RiskState {
         }
 
         // 3. Price band against a reference price.
+        self.check_price_band(cfg, price, reference_price)?;
+
+        Ok(())
+    }
+
+    /// Price-band check shared by [`Self::check_limit_admission`] and
+    /// [`Self::check_modify_admission`].
+    ///
+    /// Rejects when the deviation of `price` from the resolved
+    /// `reference_price` *strictly* exceeds `cfg.price_band_bps`. The
+    /// comparison cross-multiplies (`diff * 10_000` vs.
+    /// `bps_limit * reference`) instead of dividing so the band never
+    /// under-enforces: truncating integer division would floor the bps,
+    /// letting an order whose true deviation is fractionally above the
+    /// band round down to the limit and slip through (#113). An order
+    /// exactly at the limit is admitted, preserving the original
+    /// strict-`>` boundary semantics. `u128` throughout with saturation.
+    ///
+    /// Skips silently (warning once per book) when the band is configured
+    /// but no reference price is currently available.
+    #[inline]
+    fn check_price_band(
+        &self,
+        cfg: &RiskConfig,
+        price: u128,
+        reference_price: Option<u128>,
+    ) -> Result<(), OrderBookError> {
         if let (Some(bps_limit), Some(reference)) = (cfg.price_band_bps, reference_price) {
-            // Deviation in basis points is |submitted - reference| / reference * 10_000.
-            // Cross-multiply instead of dividing so the band never under-enforces:
-            // truncating integer division floors the bps, letting an order whose
-            // true deviation is fractionally above the band round down to the limit
-            // and slip through. Reject when diff*10_000 > bps_limit*reference, i.e.
-            // the true deviation *strictly* exceeds the band. An order exactly at the
-            // limit (diff*10_000 == bps_limit*reference) is admitted, preserving the
-            // original strict-`>` boundary semantics. u128 throughout with saturation.
             if reference > 0 {
                 let diff = price.abs_diff(reference);
                 let scaled_diff = diff.saturating_mul(10_000);
@@ -336,6 +355,94 @@ impl RiskState {
                 );
             }
         }
+
+        Ok(())
+    }
+
+    /// Pre-trade admission check for an in-place **modify** of a resting
+    /// order (`UpdatePrice` / `UpdatePriceAndQuantity` / `Replace`).
+    ///
+    /// A modify replaces one resting order with another: the account's
+    /// `open_count` is unchanged (one out, one in) and — critically — the
+    /// *original* order's contribution is still counted in the account's
+    /// counters at the moment this runs (the validate-first guard checks
+    /// admission *before* cancelling, #98). Reusing
+    /// [`Self::check_limit_admission`] here would therefore double-count
+    /// the original and falsely reject. This check instead:
+    ///
+    /// - runs the **price band** on `new_price` (same logic as the
+    ///   limit-admission band, via [`Self::check_price_band`]),
+    /// - runs the **notional** check against `max_notional_per_account`
+    ///   using the *projected* resting notional
+    ///   `current - old_price*old_qty + new_price*new_qty` (the old
+    ///   order's contribution is already inside `current`), with `u128`
+    ///   saturating arithmetic,
+    /// - does **not** check `max_open_orders_per_account` (a modify cannot
+    ///   change the resting order count).
+    ///
+    /// Returns `Ok(())` when no [`RiskConfig`] is installed.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::RiskMaxNotional`] or
+    /// [`OrderBookError::RiskPriceBand`] when the projected modify would
+    /// breach the corresponding limit.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn check_modify_admission(
+        &self,
+        order_id: Id,
+        account: Hash32,
+        new_price: u128,
+        new_qty: u64,
+        reference_price: Option<u128>,
+    ) -> Result<(), OrderBookError> {
+        let Some(cfg) = self.config.as_ref() else {
+            return Ok(());
+        };
+
+        // Look up the original order's tracked risk contribution. If it is NOT
+        // tracked — admitted while no `RiskConfig` was installed, then a config
+        // was installed before this modify — the modify is, from the risk
+        // layer's view, a genuinely new admission: `on_cancel` will be a no-op
+        // for the untracked original and `add_order` runs FULL admission
+        // post-cancel. Mirror that exactly (full `check_limit_admission`,
+        // including the open-order count) so the validate-first guard predicts
+        // the post-cancel verdict and never passes a modify that `add_order`
+        // would then reject — which would destroy the original.
+        let old_contribution = {
+            let Some(entry) = self.orders.get(&order_id) else {
+                return self.check_limit_admission(account, new_price, new_qty, reference_price);
+            };
+            u128::from(entry.remaining_qty).saturating_mul(entry.price)
+        };
+
+        // Tracked original: a modify is net one-out-one-in, so `open_count` is
+        // unchanged (skip that gate) and only the notional and price band can
+        // newly breach. Project the account's resting notional by swapping the
+        // original's contribution (already inside `current`) for the new one.
+        // Saturating throughout: a transient under-count floors at zero.
+        if let Some(limit) = cfg.max_notional_per_account {
+            let current = self
+                .counters
+                .get(&account)
+                .map(|c| c.resting_notional.load())
+                .unwrap_or(0);
+            let new_contribution = (new_qty as u128).saturating_mul(new_price);
+            let projected = current
+                .saturating_sub(old_contribution)
+                .saturating_add(new_contribution);
+            if projected > limit {
+                return Err(OrderBookError::RiskMaxNotional {
+                    account,
+                    current,
+                    attempted: new_contribution,
+                    limit,
+                });
+            }
+        }
+
+        // Price band against the reference price on the new limit price.
+        self.check_price_band(cfg, new_price, reference_price)?;
 
         Ok(())
     }
@@ -977,5 +1084,149 @@ mod tests {
         let counters = state.counters.get(&acct).expect("counters present");
         assert_eq!(counters.open_count.load(Ordering::Relaxed), 0);
         assert_eq!(counters.resting_notional.load(), 0);
+    }
+
+    // ───────────────────────────────────────────────────────────────
+    // Modify-aware admission (#98)
+    // ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_check_modify_admission_no_config_is_passthrough() {
+        let state = RiskState::new();
+        assert!(
+            state
+                .check_modify_admission(Id::new_uuid(), account(1), 999_999, 999, Some(100))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_check_modify_admission_ignores_open_order_count() {
+        // A modify of a TRACKED order must never reject on the open-order
+        // count: an account sitting exactly at the limit can still modify a
+        // resting order (count is net unchanged).
+        let mut state = RiskState::new();
+        state.set_config(RiskConfig::new().with_max_open_orders_per_account(1));
+        let acct = account(20);
+        let id = Id::new_uuid();
+        state.on_admission(id, acct, 100, 10); // account at the limit
+
+        assert!(
+            state
+                .check_modify_admission(id, acct, 110, 10, Some(105))
+                .is_ok(),
+            "modify of a tracked order must not be gated by max_open_orders_per_account"
+        );
+    }
+
+    #[test]
+    fn test_check_modify_admission_projects_notional_swapping_old_for_new() {
+        // Notional ceiling 1_000. Original order contributes 100*8 = 800.
+        let mut state = RiskState::new();
+        state.set_config(RiskConfig::new().with_max_notional_per_account(1_000));
+        let acct = account(21);
+        let id = Id::new_uuid();
+        state.on_admission(id, acct, 100, 8); // resting_notional = 800
+
+        // Modify to 100*9 = 900 projects to 800 - 800 + 900 = 900 ≤ 1_000.
+        assert!(
+            state
+                .check_modify_admission(id, acct, 100, 9, Some(100))
+                .is_ok(),
+            "projected notional 900 must be within the 1_000 ceiling"
+        );
+
+        // Modify to 100*11 = 1_100 projects to 800 - 800 + 1_100 = 1_100 > 1_000.
+        match state.check_modify_admission(id, acct, 100, 11, Some(100)) {
+            Err(OrderBookError::RiskMaxNotional {
+                account: a,
+                attempted,
+                limit,
+                ..
+            }) => {
+                assert_eq!(a, acct);
+                assert_eq!(attempted, 1_100);
+                assert_eq!(limit, 1_000);
+            }
+            other => panic!("expected RiskMaxNotional, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_check_modify_admission_projection_does_not_double_count_original() {
+        // Regression: the naive limit-admission check would add the new
+        // contribution on top of the (still-counted) original and falsely
+        // reject. The projection subtracts the original's tracked contribution.
+        let mut state = RiskState::new();
+        state.set_config(RiskConfig::new().with_max_notional_per_account(1_000));
+        let acct = account(22);
+        let id = Id::new_uuid();
+        state.on_admission(id, acct, 100, 10); // resting_notional = 1_000 (at ceiling)
+
+        // Re-price to the same notional: 1_000 - 1_000 + 1_000 = 1_000 ≤ 1_000.
+        assert!(
+            state
+                .check_modify_admission(id, acct, 200, 5, Some(150))
+                .is_ok(),
+            "an unchanged-notional modify must not double-count the original"
+        );
+    }
+
+    #[test]
+    fn test_check_modify_admission_price_band_on_new_price() {
+        let mut state = RiskState::new();
+        state.set_config(
+            RiskConfig::new().with_price_band_bps(100, ReferencePriceSource::LastTrade),
+        );
+        let acct = account(23);
+        let id = Id::new_uuid();
+        state.on_admission(id, acct, 1_000_000, 1);
+
+        // New price 1_100_000 vs reference 1_000_000 → +1_000 bps, far over band.
+        match state.check_modify_admission(id, acct, 1_100_000, 1, Some(1_000_000)) {
+            Err(OrderBookError::RiskPriceBand {
+                submitted,
+                reference,
+                limit_bps,
+                ..
+            }) => {
+                assert_eq!(submitted, 1_100_000);
+                assert_eq!(reference, 1_000_000);
+                assert_eq!(limit_bps, 100);
+            }
+            other => panic!("expected RiskPriceBand, got {other:?}"),
+        }
+
+        // A new price inside the band is admitted.
+        assert!(
+            state
+                .check_modify_admission(id, acct, 1_005_000, 1, Some(1_000_000))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_check_modify_admission_untracked_original_runs_full_admission() {
+        // If the original order has no RiskEntry (admitted while no RiskConfig
+        // was installed, then a config was installed before this modify), the
+        // modify is a genuinely new admission from the risk layer's view — full
+        // admission applies, INCLUDING the open-order count. This mirrors
+        // `add_order`'s post-cancel check so the validate-first guard predicts
+        // the post-cancel verdict and never destroys the original.
+        let mut state = RiskState::new();
+        state.set_config(RiskConfig::new().with_max_open_orders_per_account(1));
+        let acct = account(24);
+        // One OTHER tracked resting order already at the limit.
+        state.on_admission(Id::new_uuid(), acct, 100, 10);
+
+        // The order being modified is NOT tracked → full admission → rejected
+        // on the open-order count (would be a 2nd order for the account).
+        let untracked = Id::new_uuid();
+        match state.check_modify_admission(untracked, acct, 110, 5, Some(105)) {
+            Err(OrderBookError::RiskMaxOpenOrders { .. }) => {}
+            other => panic!(
+                "untracked modify must run full admission and reject on open count, got {other:?}"
+            ),
+        }
     }
 }

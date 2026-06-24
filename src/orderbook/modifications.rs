@@ -173,11 +173,8 @@ where
                         return Ok(None); // Order not found
                     };
 
-                    // Cancel the original order
-                    self.cancel_order(order_id)?;
-
                     // Create a new order with the updated price
-                    let mut new_order = original_order;
+                    let mut new_order = original_order.clone();
 
                     // Update the price based on order type
                     match &mut new_order {
@@ -190,7 +187,28 @@ where
                         OrderType::ReserveOrder { price, .. } => *price = new_price,
                     }
 
-                    // Add the updated order
+                    // Validate-first atomic modify (#98): validate the new
+                    // order's shape and run the modify-aware risk check
+                    // *before* removing the original. On any rejection we
+                    // return the typed error and the original order is
+                    // never cancelled — no book mutation, no events, no
+                    // trades. These checks are pure functions of the new
+                    // order + the opposite book side, so evaluating them
+                    // while the same-side original still rests yields the
+                    // same verdict as after cancel.
+                    self.validate_order_shape(&new_order)?;
+                    self.check_risk_modify_admission(
+                        order_id,
+                        new_order.user_id(),
+                        new_order.price().as_u128(),
+                        new_order.total_quantity(),
+                    )?;
+
+                    // Both checks passed: cancel the original and add the
+                    // updated order. `add_order` re-runs its own checks;
+                    // post-cancel the account count is restored so its risk
+                    // check passes — consistent with the pre-guard.
+                    self.cancel_order(order_id)?;
                     let result = self.add_order(new_order)?;
                     Ok(Some(result))
                 } else {
@@ -270,7 +288,7 @@ where
                 // Get order location without locking
                 let location = self.order_locations.get(&order_id).map(|val| *val);
 
-                if let Some((_, _)) = location {
+                if location.is_some() {
                     // Get the original order without holding locks
                     let original_order = if let Some(order) = self.get_order(order_id) {
                         // Create a copy of the order
@@ -279,11 +297,8 @@ where
                         return Ok(None); // Order not found
                     };
 
-                    // Cancel the original order
-                    self.cancel_order(order_id)?;
-
                     // Create a new order with the updated price and quantity
-                    let mut new_order = original_order;
+                    let mut new_order = original_order.clone();
 
                     // Update the price based on order type
                     match &mut new_order {
@@ -299,7 +314,21 @@ where
                     // Update the quantity using the trait method
                     new_order.set_quantity(new_quantity.as_u64());
 
-                    // Add the updated order
+                    // Validate-first atomic modify (#98): validate the new
+                    // order's shape and run the modify-aware risk check
+                    // *before* removing the original. On any rejection the
+                    // original order is never cancelled.
+                    self.validate_order_shape(&new_order)?;
+                    self.check_risk_modify_admission(
+                        order_id,
+                        new_order.user_id(),
+                        new_order.price().as_u128(),
+                        new_order.total_quantity(),
+                    )?;
+
+                    // Both checks passed: cancel the original and add the
+                    // updated order.
+                    self.cancel_order(order_id)?;
                     let result = self.add_order(new_order)?;
                     Ok(Some(result))
                 } else {
@@ -465,10 +494,22 @@ where
                         }
                     }
 
-                    // Cancel the original order
-                    self.cancel_order(order_id)?;
+                    // Validate-first atomic modify (#98): validate the new
+                    // order's shape and run the modify-aware risk check
+                    // *before* removing the original. On any rejection the
+                    // original order is never cancelled — no book mutation,
+                    // no events, no trades.
+                    self.validate_order_shape(&new_order)?;
+                    self.check_risk_modify_admission(
+                        order_id,
+                        new_order.user_id(),
+                        new_order.price().as_u128(),
+                        new_order.total_quantity(),
+                    )?;
 
-                    // Add the new order
+                    // Both checks passed: cancel the original and add the
+                    // new order.
+                    self.cancel_order(order_id)?;
                     let result = self.add_order(new_order)?;
                     Ok(Some(result))
                 } else {
@@ -660,48 +701,37 @@ where
         }
     }
 
-    /// Add a new order to the book, automatically matching it if it's aggressive.
+    /// Validate the *shape* of an order against this book's admission
+    /// rules **without** mutating any book state.
+    ///
+    /// This is the single source of truth for the non-risk admission
+    /// checks that [`Self::add_order`] performs, in the same order and
+    /// returning the same typed [`OrderBookError`] variants. Unlike
+    /// `add_order` it is pure: it never calls
+    /// [`track_state`](Self::track_state), [`reject_with_risk`](Self::reject_with_risk),
+    /// emits metrics, or invalidates the cache. Every check here is a
+    /// function of the new order plus the *opposite* book side, so it
+    /// yields the same verdict whether evaluated before or after the
+    /// original (same-side) order has been cancelled — which is what
+    /// makes the validate-first atomic modify (#98) safe.
+    ///
+    /// Checks, in order:
+    /// 1. STP `MissingUserId` (when STP is enabled and `user_id` is zero).
+    /// 2. Tick size (`InvalidTickSize`).
+    /// 3. Lot size (`InvalidLotSize`, iceberg visible/hidden split).
+    /// 4. Min/max order size (`OrderSizeOutOfRange`).
+    /// 5. Expiry (`InvalidOperation` — already expired).
+    /// 6. Post-only would cross (`PriceCrossing`).
+    /// 7. FOK feasibility (`InsufficientLiquidity`).
     ///
     /// # Errors
-    /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
-    /// is engaged. The check runs before any cache invalidation, STP
-    /// validation, tick/lot validation, or matching work.
-    pub fn add_order(&self, mut order: OrderType<T>) -> Result<Arc<OrderType<T>>, OrderBookError> {
-        self.check_kill_switch_or_reject(order.id())?;
-        // Pre-trade risk gate: per-account open-orders / notional /
-        // price band. No-op when no `RiskConfig` is installed.
-        // Documented order: kill_switch → risk → STP → fees → match.
-        // On the cold reject path, record an `OrderStatus::Rejected`
-        // transition with the closed `RejectReason` taxonomy before
-        // propagating the typed error.
-        if let Err(err) = self.check_risk_limit_admission(
-            order.user_id(),
-            order.price().as_u128(),
-            order.total_quantity(),
-        ) {
-            self.reject_with_risk(order.id(), &err);
-            return Err(err);
-        }
-        self.cache.invalidate();
-
-        trace!(
-            "Order book {}: Adding order {} at price {}",
-            self.symbol,
-            order.id(),
-            order.price()
-        );
-
+    /// Returns the first failing check's typed [`OrderBookError`].
+    pub(super) fn validate_order_shape(&self, order: &OrderType<T>) -> Result<(), OrderBookError> {
         // STP user_id enforcement: when STP is enabled, all orders must carry
         // a non-zero user_id so that self-trade checks can identify the owner.
         if self.stp_mode != crate::orderbook::stp::STPMode::None
             && order.user_id() == pricelevel::Hash32::zero()
         {
-            self.track_state(
-                order.id(),
-                OrderStatus::Rejected {
-                    reason: RejectReason::MissingUserId,
-                },
-            );
             return Err(OrderBookError::MissingUserId {
                 order_id: order.id(),
             });
@@ -712,12 +742,6 @@ where
             && tick > 0
             && !order.price().as_u128().is_multiple_of(tick)
         {
-            self.track_state(
-                order.id(),
-                OrderStatus::Rejected {
-                    reason: RejectReason::InvalidPrice,
-                },
-            );
             return Err(OrderBookError::InvalidTickSize {
                 price: order.price().as_u128(),
                 tick_size: tick,
@@ -729,31 +753,19 @@ where
         if let Some(lot) = self.lot_size
             && lot > 0
         {
-            match &order {
+            match order {
                 OrderType::IcebergOrder {
                     visible_quantity,
                     hidden_quantity,
                     ..
                 } => {
                     if visible_quantity.as_u64() % lot != 0 {
-                        self.track_state(
-                            order.id(),
-                            OrderStatus::Rejected {
-                                reason: RejectReason::InvalidQuantity,
-                            },
-                        );
                         return Err(OrderBookError::InvalidLotSize {
                             quantity: visible_quantity.as_u64(),
                             lot_size: lot,
                         });
                     }
                     if hidden_quantity.as_u64() % lot != 0 {
-                        self.track_state(
-                            order.id(),
-                            OrderStatus::Rejected {
-                                reason: RejectReason::InvalidQuantity,
-                            },
-                        );
                         return Err(OrderBookError::InvalidLotSize {
                             quantity: hidden_quantity.as_u64(),
                             lot_size: lot,
@@ -762,12 +774,6 @@ where
                 }
                 _ => {
                     if order.total_quantity() % lot != 0 {
-                        self.track_state(
-                            order.id(),
-                            OrderStatus::Rejected {
-                                reason: RejectReason::InvalidQuantity,
-                            },
-                        );
                         return Err(OrderBookError::InvalidLotSize {
                             quantity: order.total_quantity(),
                             lot_size: lot,
@@ -782,12 +788,6 @@ where
         if let Some(min) = self.min_order_size
             && qty < min
         {
-            self.track_state(
-                order.id(),
-                OrderStatus::Rejected {
-                    reason: RejectReason::OrderSizeOutOfRange,
-                },
-            );
             return Err(OrderBookError::OrderSizeOutOfRange {
                 quantity: qty,
                 min: Some(min),
@@ -797,12 +797,6 @@ where
         if let Some(max) = self.max_order_size
             && qty > max
         {
-            self.track_state(
-                order.id(),
-                OrderStatus::Rejected {
-                    reason: RejectReason::OrderSizeOutOfRange,
-                },
-            );
             return Err(OrderBookError::OrderSizeOutOfRange {
                 quantity: qty,
                 min: self.min_order_size,
@@ -810,19 +804,13 @@ where
             });
         }
 
-        if self.has_expired(&order) {
+        if self.has_expired(order) {
             return Err(OrderBookError::InvalidOperation {
                 message: "Order has already expired".to_string(),
             });
         }
 
         if order.is_post_only() && self.will_cross_market(order.price().as_u128(), order.side()) {
-            self.track_state(
-                order.id(),
-                OrderStatus::Rejected {
-                    reason: RejectReason::PostOnlyWouldCross,
-                },
-            );
             return Err(OrderBookError::PriceCrossing {
                 price: order.price().as_u128(),
                 side: order.side(),
@@ -846,6 +834,70 @@ where
                 order.user_id(),
             );
             if potential_match < order.total_quantity() {
+                return Err(OrderBookError::InsufficientLiquidity {
+                    side: order.side(),
+                    requested: order.total_quantity(),
+                    available: potential_match,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Record the terminal state transition (and metric) that the direct
+    /// [`Self::add_order`] path historically emitted for each shape
+    /// rejection returned by [`Self::validate_order_shape`].
+    ///
+    /// Keeping this mapping next to the validator preserves the exact
+    /// pre-#98 reject side-effects of `add_order` while letting the
+    /// validate-first modify path reuse the same pure validator without
+    /// recording any state. Errors that previously had no side-effect
+    /// (e.g. the already-expired `InvalidOperation`) are intentionally
+    /// no-ops here.
+    fn record_shape_rejection(&self, order: &OrderType<T>, err: &OrderBookError) {
+        match err {
+            OrderBookError::MissingUserId { .. } => {
+                self.track_state(
+                    order.id(),
+                    OrderStatus::Rejected {
+                        reason: RejectReason::MissingUserId,
+                    },
+                );
+            }
+            OrderBookError::InvalidTickSize { .. } => {
+                self.track_state(
+                    order.id(),
+                    OrderStatus::Rejected {
+                        reason: RejectReason::InvalidPrice,
+                    },
+                );
+            }
+            OrderBookError::InvalidLotSize { .. } => {
+                self.track_state(
+                    order.id(),
+                    OrderStatus::Rejected {
+                        reason: RejectReason::InvalidQuantity,
+                    },
+                );
+            }
+            OrderBookError::OrderSizeOutOfRange { .. } => {
+                self.track_state(
+                    order.id(),
+                    OrderStatus::Rejected {
+                        reason: RejectReason::OrderSizeOutOfRange,
+                    },
+                );
+            }
+            OrderBookError::PriceCrossing { .. } => {
+                self.track_state(
+                    order.id(),
+                    OrderStatus::Rejected {
+                        reason: RejectReason::PostOnlyWouldCross,
+                    },
+                );
+            }
+            OrderBookError::InsufficientLiquidity { .. } => {
                 self.track_state(
                     order.id(),
                     OrderStatus::Cancelled {
@@ -854,12 +906,52 @@ where
                     },
                 );
                 crate::orderbook::metrics::record_reject(RejectReason::InsufficientLiquidity);
-                return Err(OrderBookError::InsufficientLiquidity {
-                    side: order.side(),
-                    requested: order.total_quantity(),
-                    available: potential_match,
-                });
             }
+            // The already-expired `InvalidOperation` path historically
+            // recorded no terminal transition; preserve that.
+            _ => {}
+        }
+    }
+
+    /// Add a new order to the book, automatically matching it if it's aggressive.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
+    /// is engaged. The check runs before any cache invalidation, STP
+    /// validation, tick/lot validation, or matching work.
+    pub fn add_order(&self, mut order: OrderType<T>) -> Result<Arc<OrderType<T>>, OrderBookError> {
+        self.check_kill_switch_or_reject(order.id())?;
+        // Pre-trade risk gate: per-account open-orders / notional /
+        // price band. No-op when no `RiskConfig` is installed.
+        // Documented order: kill_switch → risk → STP → fees → match.
+        // On the cold reject path, record an `OrderStatus::Rejected`
+        // transition with the closed `RejectReason` taxonomy before
+        // propagating the typed error.
+        if let Err(err) = self.check_risk_limit_admission(
+            order.user_id(),
+            order.price().as_u128(),
+            order.total_quantity(),
+        ) {
+            self.reject_with_risk(order.id(), &err);
+            return Err(err);
+        }
+
+        trace!(
+            "Order book {}: Adding order {} at price {}",
+            self.symbol,
+            order.id(),
+            order.price()
+        );
+
+        // Non-risk admission checks are owned by `validate_order_shape`
+        // (the single source of truth shared with the validate-first
+        // atomic modify path, #98). On the cold reject path we still
+        // record the matching terminal state transition / metric here so
+        // the direct (non-modify) `add_order` behavior is preserved
+        // exactly.
+        if let Err(err) = self.validate_order_shape(&order) {
+            self.record_shape_rejection(&order, &err);
+            return Err(err);
         }
 
         self.cache.invalidate();
