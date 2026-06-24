@@ -40,6 +40,17 @@ pub enum ReplayError {
         found: u64,
     },
 
+    /// The protocol sequence counter overflowed `u64` while advancing.
+    ///
+    /// Unreachable at any realistic journal length, but advancing the counter
+    /// with a checked add (rather than a saturating one) keeps gap detection
+    /// correct at the boundary instead of silently stalling `expected_seq`.
+    #[error("replay sequence counter overflowed u64 at sequence {at}")]
+    SequenceOverflow {
+        /// The sequence number that could not be advanced past.
+        at: u64,
+    },
+
     /// An OrderBook operation failed during replay.
     #[error("order book error during replay at sequence {sequence_num}: {source}")]
     OrderBookError {
@@ -260,11 +271,19 @@ where
             // sequence" contract on the public entry points.
             let applied = !matches!(event.result, SequencerResult::Rejected { .. });
             Self::apply_event(book, event)?;
-            expected_seq = expected_seq.saturating_add(1);
+            // Protocol counter: a saturating add would silently stop advancing
+            // `expected_seq` at the u64 ceiling and mask a real gap, so use a
+            // checked add and surface a typed overflow error instead (per the
+            // no-saturating-on-protocol-counters rule).
+            expected_seq = expected_seq
+                .checked_add(1)
+                .ok_or(ReplayError::SequenceOverflow { at: expected_seq })?;
 
             if applied {
                 last_applied_seq = event.sequence_num;
-                count = count.saturating_add(1);
+                count = count
+                    .checked_add(1)
+                    .ok_or(ReplayError::SequenceOverflow { at: count })?;
                 progress(count, last_applied_seq);
             }
         }
@@ -505,6 +524,26 @@ mod tests {
             !snapshots_match(&base, &diff_count),
             "an order-count divergence must not be reported equal"
         );
+    }
+
+    /// #126: the protocol sequence counter advances with `checked_add`, so at
+    /// the `u64` boundary it surfaces a typed `SequenceOverflow` instead of
+    /// silently stalling `expected_seq` (which would mask a real gap).
+    #[test]
+    fn test_replay_sequence_counter_overflow_is_a_typed_error() {
+        let journal: InMemoryJournal<()> = InMemoryJournal::new();
+        // A single event at the very top of the sequence space.
+        let ev = make_add_event(u64::MAX, Id::new_uuid(), 100, 10, Side::Buy);
+        assert!(journal.append(&ev).is_ok());
+
+        // Replaying from u64::MAX applies the event, then advancing the
+        // expected-sequence counter past u64::MAX must overflow with a typed
+        // error rather than saturating.
+        match ReplayEngine::<()>::replay_from(&journal, u64::MAX, "TEST") {
+            Err(ReplayError::SequenceOverflow { at }) => assert_eq!(at, u64::MAX),
+            Err(other) => panic!("expected SequenceOverflow {{ at: u64::MAX }}, got {other:?}"),
+            Ok(_) => panic!("advancing past u64::MAX must error"),
+        }
     }
 
     #[test]

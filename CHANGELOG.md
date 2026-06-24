@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Replay protocol sequence counter uses `checked_add` (#126).** `replay_into`
+  advanced `expected_seq` (and the applied-event tally) with `saturating_add`,
+  which violates the no-saturating-on-protocol-counters rule and would silently
+  stop advancing at the `u64` ceiling — masking a real gap instead of surfacing
+  it. Both now use `checked_add` and return the new `ReplayError::SequenceOverflow`
+  on overflow. Unreachable at any realistic journal length; the value is rule
+  compliance and correct failure semantics at the boundary.
 - **`snapshots_match` compares full per-level structure (#102).** The replay
   equality oracle now compares each level's `hidden_quantity` and `order_count`
   in addition to `price` and `visible_quantity`. Previously two books that
