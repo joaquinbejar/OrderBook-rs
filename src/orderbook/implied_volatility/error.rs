@@ -16,6 +16,15 @@ pub enum IVError {
         threshold_bps: f64,
     },
 
+    /// The book is crossed (best ask below best bid) or locked (best ask equal
+    /// to best bid), so no meaningful mid price exists for IV calculation.
+    CrossedBook {
+        /// Best bid price (scaled to f64).
+        bid: f64,
+        /// Best ask price (scaled to f64).
+        ask: f64,
+    },
+
     /// Newton-Raphson solver did not converge within max iterations.
     ConvergenceFailure {
         /// Number of iterations attempted.
@@ -70,6 +79,12 @@ impl fmt::Display for IVError {
                 write!(
                     f,
                     "spread too wide: {spread_bps:.1} bps exceeds threshold of {threshold_bps:.1} bps"
+                )
+            }
+            IVError::CrossedBook { bid, ask } => {
+                write!(
+                    f,
+                    "book is crossed or locked: best bid {bid:.4} is not below best ask {ask:.4}"
                 )
             }
             IVError::ConvergenceFailure {
@@ -129,6 +144,12 @@ mod tests {
             threshold_bps: 500.0,
         };
         assert!(err.to_string().contains("600.0 bps"));
+
+        let err = IVError::CrossedBook {
+            bid: 10.5,
+            ask: 10.0,
+        };
+        assert!(err.to_string().contains("crossed or locked"));
 
         let err = IVError::ConvergenceFailure {
             iterations: 100,

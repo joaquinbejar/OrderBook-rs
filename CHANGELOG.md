@@ -38,6 +38,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **IV solver guards NaN/Inf inputs and crossed/locked books (#112).** The
+  Black-Scholes IV solver only checked sign/magnitude — all `false` for NaN — so
+  a NaN/Inf `spot`/`strike`/`time`/`rate`/`market_price` passed validation and
+  propagated NaN through the Newton/bisection loops to a meaningless
+  `ConvergenceFailure { last_iv: NaN }`. `validate_params` now rejects non-finite
+  `spot`/`strike`/`time_to_expiry`/`risk_free_rate`, both solver entry points
+  reject a non-finite `market_price`, and the Newton loop bails with a typed
+  error if a value goes non-finite mid-iteration. Separately, `extract_price_for_iv`
+  computed the spread without checking `bid <= ask`, so a crossed (negative) or
+  locked (zero) spread bypassed the max-spread gate and was classified
+  high-quality; it now rejects such a book with a new `IVError::CrossedBook` before
+  classification (observable via a transient torn read across the independent
+  `best_bid`/`best_ask` calls).
 - **`file_journal` no longer truncates a mapped segment or swallows poisoned
   mutexes (#111).** Two robustness defects in the journal subsystem the recovery
   path depends on. (1) `rotate_segment` called `set_len` to shrink a just-rotated

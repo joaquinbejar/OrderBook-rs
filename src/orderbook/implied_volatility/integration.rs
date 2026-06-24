@@ -177,6 +177,16 @@ where
             (Some(bid), Some(ask)) => {
                 let bid_f = bid as f64 / price_scale;
                 let ask_f = ask as f64 / price_scale;
+
+                // Reject a crossed (ask < bid) or locked (ask == bid) book
+                // before quality classification: such a book would otherwise
+                // yield a zero/negative spread that slips under the max-spread
+                // guard and is mislabelled high quality, feeding a bogus mid
+                // into the solver. `best_bid`/`best_ask` are two independent
+                // reads, so a transient torn read can surface this even though a
+                // stable book never crosses.
+                reject_crossed_or_locked(bid_f, ask_f)?;
+
                 let mid = (bid_f + ask_f) / 2.0;
 
                 // Calculate spread in basis points
@@ -331,6 +341,24 @@ fn spread_to_quality(spread_bps: f64) -> IVQuality {
     }
 }
 
+/// Rejects a crossed (`ask < bid`) or locked (`ask == bid`) book with
+/// [`IVError::CrossedBook`].
+///
+/// A stable [`OrderBook`] never crosses (the matching engine would have filled
+/// it), so this only fires on a transient torn read between the two independent
+/// `best_bid` / `best_ask` calls — but left unguarded, such a read produces a
+/// zero/negative spread that slips under the max-spread gate and is mislabelled
+/// high quality. Pulled out so the guard is unit-testable without a live race.
+fn reject_crossed_or_locked(bid_f: f64, ask_f: f64) -> Result<(), IVError> {
+    if ask_f <= bid_f {
+        return Err(IVError::CrossedBook {
+            bid: bid_f,
+            ask: ask_f,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,6 +492,22 @@ mod tests {
         let result = book.implied_volatility_with_config(&params, PriceSource::MidPrice, &config);
 
         assert!(matches!(result, Err(IVError::SpreadTooWide { .. })));
+    }
+
+    #[test]
+    fn test_reject_crossed_or_locked_book() {
+        // Crossed: ask below bid.
+        assert!(matches!(
+            reject_crossed_or_locked(10.0, 9.0),
+            Err(IVError::CrossedBook { .. })
+        ));
+        // Locked: ask equal to bid.
+        assert!(matches!(
+            reject_crossed_or_locked(10.0, 10.0),
+            Err(IVError::CrossedBook { .. })
+        ));
+        // Normal: ask strictly above bid.
+        assert!(reject_crossed_or_locked(10.0, 10.5).is_ok());
     }
 
     #[test]

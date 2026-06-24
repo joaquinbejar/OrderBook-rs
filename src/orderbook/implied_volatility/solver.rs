@@ -83,6 +83,23 @@ impl SolverConfig {
 /// - `Ok(())` if parameters are valid
 /// - `Err(IVError)` if any parameter is invalid
 fn validate_params(params: &IVParams) -> Result<(), IVError> {
+    // Reject non-finite inputs first: NaN/Inf pass every sign/magnitude check
+    // below (all comparisons against NaN are false) and would otherwise
+    // propagate NaN through the solver loops to a meaningless
+    // `ConvergenceFailure { last_iv: NaN }`.
+    for (name, value) in [
+        ("spot", params.spot),
+        ("strike", params.strike),
+        ("time_to_expiry", params.time_to_expiry),
+        ("risk_free_rate", params.risk_free_rate),
+    ] {
+        if !value.is_finite() {
+            return Err(IVError::InvalidParams {
+                message: format!("{name} must be finite, got {value}"),
+            });
+        }
+    }
+
     if params.spot <= 0.0 {
         return Err(IVError::InvalidParams {
             message: format!("spot price must be positive, got {}", params.spot),
@@ -172,9 +189,9 @@ pub fn solve_iv(
     // Validate inputs
     validate_params(params)?;
 
-    if market_price <= 0.0 {
+    if !market_price.is_finite() || market_price <= 0.0 {
         return Err(IVError::InvalidParams {
-            message: format!("market price must be positive, got {market_price}"),
+            message: format!("market price must be positive and finite, got {market_price}"),
         });
     }
 
@@ -200,6 +217,18 @@ pub fn solve_iv(
     // Newton-Raphson iteration
     for iteration in 0..config.max_iterations {
         let price = BlackScholes::price(params, iv);
+
+        // Inputs are validated finite, so a non-finite price/iv here means the
+        // iteration degenerated numerically. Bail with a typed error instead of
+        // letting NaN poison `iv` and surface as `ConvergenceFailure { last_iv: NaN }`.
+        if !price.is_finite() || !iv.is_finite() {
+            return Err(IVError::InvalidParams {
+                message: format!(
+                    "non-finite value during Newton iteration (iv={iv}, price={price})"
+                ),
+            });
+        }
+
         let diff = price - market_price;
 
         // Check convergence
@@ -269,9 +298,9 @@ pub fn solve_iv_bisection(
 ) -> Result<(f64, u32), IVError> {
     validate_params(params)?;
 
-    if market_price <= 0.0 {
+    if !market_price.is_finite() || market_price <= 0.0 {
         return Err(IVError::InvalidParams {
-            message: format!("market price must be positive, got {market_price}"),
+            message: format!("market price must be positive and finite, got {market_price}"),
         });
     }
 
@@ -419,6 +448,63 @@ mod tests {
 
         let result = solve_iv(&params, 5.0, &config);
         assert!(matches!(result, Err(IVError::InvalidParams { .. })));
+    }
+
+    #[test]
+    fn test_solve_iv_rejects_non_finite_params() {
+        let config = SolverConfig::default();
+        // Each non-finite field must produce an immediate InvalidParams, not a
+        // NaN propagated to ConvergenceFailure.
+        let cases = [
+            IVParams::call(f64::NAN, 100.0, 0.25, 0.05),
+            IVParams::call(f64::INFINITY, 100.0, 0.25, 0.05),
+            IVParams::call(100.0, f64::NAN, 0.25, 0.05),
+            IVParams::call(100.0, 100.0, f64::NAN, 0.05),
+            IVParams::call(100.0, 100.0, f64::INFINITY, 0.05),
+            IVParams::call(100.0, 100.0, 0.25, f64::NAN),
+            IVParams::call(100.0, 100.0, 0.25, f64::INFINITY),
+        ];
+        for params in cases {
+            let result = solve_iv(&params, 5.0, &config);
+            assert!(
+                matches!(result, Err(IVError::InvalidParams { .. })),
+                "non-finite param must yield InvalidParams, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_solve_iv_rejects_non_finite_market_price() {
+        let params = IVParams::call(100.0, 100.0, 0.25, 0.05);
+        let config = SolverConfig::default();
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let newton = solve_iv(&params, bad, &config);
+            let bisect = solve_iv_bisection(&params, bad, &config);
+            assert!(
+                matches!(newton, Err(IVError::InvalidParams { .. })),
+                "Newton must reject non-finite market price, got {newton:?}"
+            );
+            assert!(
+                matches!(bisect, Err(IVError::InvalidParams { .. })),
+                "bisection must reject non-finite market price, got {bisect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_solve_iv_never_returns_nan_convergence_failure() {
+        // Even though non-finite inputs are now rejected up front, assert the
+        // contract directly: no solver path returns ConvergenceFailure with a
+        // NaN last_iv for non-finite inputs.
+        let config = SolverConfig::default();
+        let params = IVParams::call(f64::NAN, 100.0, 0.25, 0.05);
+        match solve_iv(&params, f64::NAN, &config) {
+            Err(IVError::ConvergenceFailure { last_iv, .. }) => {
+                panic!("got ConvergenceFailure with last_iv={last_iv}");
+            }
+            Err(IVError::InvalidParams { .. }) => {}
+            other => panic!("expected InvalidParams, got {other:?}"),
+        }
     }
 
     #[test]
