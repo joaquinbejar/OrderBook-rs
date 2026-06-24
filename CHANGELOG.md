@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Manager trade-event channel semantics documented (#129).** `BookManagerStd`
+  (std `mpsc`) and `BookManagerTokio` (tokio `unbounded_channel`) push trade events
+  onto an **unbounded** channel by design — the matching path must never block to
+  deliver an audit event, so the producer applies no backpressure (a bounded
+  channel would force the synchronous matching path to block or drop events). This
+  was previously unstated; the type-level docs and both `start_trade_processor`
+  methods now document the unbounded design and the requirement to **start the
+  processor before submitting orders** (otherwise events buffer without bound).
+  Docs-only; no channel-type or hot-path change.
 - **`with_channel_capacity` clamps instead of asserting on zero (#128).** The NATS
   publisher builder used `assert!(channel_capacity > 0, …)` on a caller-supplied
   argument, so a runtime-derived capacity of `0` aborted the whole process where

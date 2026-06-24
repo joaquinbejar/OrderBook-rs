@@ -49,6 +49,21 @@ where
 }
 
 /// BookManager implementation using standard library mpsc channels.
+///
+/// # Trade-event channel is unbounded by design
+///
+/// Trade events are pushed onto a `std::sync::mpsc` channel, which is
+/// **unbounded**. This is deliberate: the matching path must never block to
+/// deliver an audit event, so the producer cannot apply backpressure (a bounded
+/// channel would force the synchronous matching path to block or to silently
+/// drop trade events — both unacceptable).
+///
+/// **Start the processor before submitting orders.** The receiver sits in an
+/// `Option` until [`start_trade_processor`](Self::start_trade_processor) is
+/// called. If the consumer is never started — or lags persistently — trade
+/// events buffer **without bound** and grow memory. Call `start_trade_processor`
+/// before routing order flow, and keep the consumer draining at least as fast as
+/// trades are produced.
 pub struct BookManagerStd<T>
 where
     T: Clone + Send + Sync + Default + 'static,
@@ -78,7 +93,16 @@ where
 
     /// Start the trade event processor in a separate thread.
     ///
-    /// Returns an error if the processor has already been started.
+    /// **Call this before submitting orders.** The trade-event channel is
+    /// unbounded (see the [type-level docs](BookManagerStd)); until the processor
+    /// is running, every trade event buffers in the channel without bound. Once
+    /// started, the spawned thread drains the receiver for the manager's
+    /// lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManagerError::ProcessorAlreadyStarted`] if the processor has
+    /// already been started (the receiver was already taken).
     pub fn start_trade_processor(&mut self) -> Result<std::thread::JoinHandle<()>, ManagerError> {
         let receiver = self
             .trade_receiver
@@ -253,6 +277,21 @@ where
 }
 
 /// BookManager implementation using Tokio mpsc channels.
+///
+/// # Trade-event channel is unbounded by design
+///
+/// Trade events are pushed onto a `tokio::sync::mpsc::unbounded_channel`. As with
+/// [`BookManagerStd`], this is deliberate: the matching path must never block to
+/// deliver an audit event, so the producer applies no backpressure (a bounded
+/// channel would force the synchronous matching path to block or to silently drop
+/// trade events).
+///
+/// **Start the processor before submitting orders.** The receiver sits in an
+/// `Option` until [`start_trade_processor`](Self::start_trade_processor) is
+/// called. If the consumer is never started — or lags persistently — trade
+/// events buffer **without bound** and grow memory. Start the processor before
+/// routing order flow and keep the consumer draining at least as fast as trades
+/// are produced.
 pub struct BookManagerTokio<T>
 where
     T: Clone + Send + Sync + Default + 'static,
@@ -282,8 +321,16 @@ where
 
     /// Start the trade event processor as an async task.
     ///
-    /// Returns a JoinHandle for the spawned task, or an error if the
-    /// processor has already been started.
+    /// **Call this before submitting orders.** The trade-event channel is
+    /// unbounded (see the [type-level docs](BookManagerTokio)); until the
+    /// processor is running, every trade event buffers in the channel without
+    /// bound. Once started, the spawned task drains the receiver for the
+    /// manager's lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManagerError::ProcessorAlreadyStarted`] if the processor has
+    /// already been started (the receiver was already taken).
     pub fn start_trade_processor(&mut self) -> Result<tokio::task::JoinHandle<()>, ManagerError> {
         let mut receiver = self
             .trade_receiver
