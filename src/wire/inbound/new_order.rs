@@ -101,6 +101,8 @@ impl TryFrom<&NewOrderWire> for OrderType<()> {
     /// Returns [`WireError::InvalidPayload`] when the wire message is malformed:
     /// - non-zero reserved padding (`_pad`),
     /// - a negative `price`,
+    /// - `account_id == 0` (reserved — it would collide with the
+    ///   `Hash32::zero()` "no STP" sentinel),
     /// - an unknown `side` byte (not `SIDE_BUY` / `SIDE_SELL`),
     /// - an unknown `time_in_force` byte (not GTC / IOC / FOK / DAY), or
     /// - an unsupported `order_type` (only `ORDER_TYPE_STANDARD` is accepted).
@@ -126,6 +128,14 @@ impl TryFrom<&NewOrderWire> for OrderType<()> {
         if price_raw < 0 {
             return Err(WireError::InvalidPayload("NewOrder: negative price"));
         }
+        // `account_id == 0` is reserved: it encodes to an all-zero `Hash32`,
+        // which equals `Hash32::zero()` — the "no STP" sentinel — so an order
+        // from numeric account 0 would silently lose self-trade protection
+        // (it could match its own resting orders and would never be grouped
+        // with other account-0 orders for STP). Reject it at the trust boundary.
+        if account_id == 0 {
+            return Err(WireError::InvalidPayload("NewOrder: account_id 0 reserved"));
+        }
 
         let side = match side_byte {
             SIDE_BUY => Side::Buy,
@@ -147,9 +157,10 @@ impl TryFrom<&NewOrderWire> for OrderType<()> {
             ));
         }
 
-        // Encode the numeric account_id into the low 8 bytes of a Hash32 so
-        // it is preserved across the wire/domain boundary without colliding
-        // with `Hash32::zero()` (which is the "no STP" sentinel).
+        // Encode the numeric account_id (guaranteed non-zero above) into the
+        // low 8 bytes of a Hash32. With `account_id != 0` the result is never
+        // all-zero, so it never collides with `Hash32::zero()` — the "no STP"
+        // sentinel — and STP applies correctly to wire-sourced orders.
         let mut user_bytes = [0u8; 32];
         if let Some(slot) = user_bytes.get_mut(0..8) {
             slot.copy_from_slice(&account_id.to_le_bytes());
@@ -270,6 +281,37 @@ mod tests {
         };
         let res: Result<OrderType<()>, _> = (&wire).try_into();
         assert!(matches!(res, Err(WireError::InvalidPayload(_))));
+    }
+
+    #[test]
+    fn try_from_rejects_account_id_zero_issue_103() {
+        // account_id 0 would encode to Hash32::zero() (the no-STP sentinel),
+        // silently disabling self-trade prevention. Reject it at the boundary.
+        let wire = NewOrderWire {
+            client_ts: 0,
+            order_id: 1,
+            account_id: 0,
+            price: 100,
+            qty: 5,
+            side: SIDE_BUY,
+            time_in_force: TIF_GTC,
+            order_type: ORDER_TYPE_STANDARD,
+            _pad: [0u8; 5],
+        };
+        let res: Result<OrderType<()>, _> = (&wire).try_into();
+        assert!(matches!(res, Err(WireError::InvalidPayload(_))));
+
+        // A non-zero account converts and yields a non-zero (non-sentinel) user_id.
+        let ok = NewOrderWire {
+            account_id: 1,
+            ..wire
+        };
+        let order: OrderType<()> = (&ok).try_into().expect("non-zero account converts");
+        assert_ne!(
+            order.user_id(),
+            pricelevel::Hash32::zero(),
+            "a valid account must never produce the no-STP sentinel"
+        );
     }
 
     #[test]

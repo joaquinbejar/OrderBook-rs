@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wire `NewOrder` rejects `account_id == 0` (#103).** `TryFrom<&NewOrderWire>`
+  encoded the numeric `account_id` into the low 8 bytes of a `Hash32` to build the
+  `user_id`, with a comment claiming it avoided colliding with `Hash32::zero()`
+  (the documented "no STP" sentinel) — but `account_id == 0` yields an all-zero
+  array, i.e. exactly `Hash32::zero()`, so an order from numeric account 0 silently
+  lost self-trade protection (it could match its own resting orders and was never
+  grouped with other account-0 orders for STP). The conversion now rejects
+  `account_id == 0` at the trust boundary with `WireError::InvalidPayload`, and the
+  inline comment is corrected. `wire`-gated.
 - **Replay now reconstructs non-default-config books deterministically (#101).**
   Every public `ReplayEngine` entry point built the target book with all
   configuration left at its defaults (`tick_size` / `lot_size` / `min_order_size`
