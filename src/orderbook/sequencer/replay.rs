@@ -364,8 +364,15 @@ where
 ///
 /// Two snapshots are considered equal when:
 /// - `symbol` is identical
-/// - The sorted bid price levels match (by price, then visible quantity)
-/// - The sorted ask price levels match (by price, then visible quantity)
+/// - The sorted bid price levels match (by price, **visible** quantity, **hidden**
+///   quantity, and **order count**)
+/// - The sorted ask price levels match (same four fields)
+///
+/// This is the equality oracle for replay correctness, so it compares the full
+/// per-level state — not just visible quantity. Comparing visible quantity alone
+/// would be a subset check that misses divergences in hidden iceberg / reserve
+/// liquidity or in how the same visible depth is split across orders at a price
+/// (#102).
 ///
 /// Timestamps are intentionally excluded from comparison because replayed
 /// books may be created at a different wall-clock time than the original.
@@ -385,7 +392,11 @@ pub fn snapshots_match(actual: &OrderBookSnapshot, expected: &OrderBookSnapshot)
         return false;
     }
     for (a, b) in actual_bids.iter().zip(expected_bids.iter()) {
-        if a.price() != b.price() || a.visible_quantity() != b.visible_quantity() {
+        if a.price() != b.price()
+            || a.visible_quantity() != b.visible_quantity()
+            || a.hidden_quantity() != b.hidden_quantity()
+            || a.order_count() != b.order_count()
+        {
             return false;
         }
     }
@@ -400,7 +411,11 @@ pub fn snapshots_match(actual: &OrderBookSnapshot, expected: &OrderBookSnapshot)
         return false;
     }
     for (a, b) in actual_asks.iter().zip(expected_asks.iter()) {
-        if a.price() != b.price() || a.visible_quantity() != b.visible_quantity() {
+        if a.price() != b.price()
+            || a.visible_quantity() != b.visible_quantity()
+            || a.hidden_quantity() != b.hidden_quantity()
+            || a.order_count() != b.order_count()
+        {
             return false;
         }
     }
@@ -435,6 +450,61 @@ mod tests {
             command: SequencerCommand::AddOrder(order),
             result: SequencerResult::OrderAdded { order_id: id },
         }
+    }
+
+    /// #102: `snapshots_match` is the replay equality oracle and must compare the
+    /// full per-level state — not just visible quantity. Two snapshots that differ
+    /// only in hidden quantity or order count must NOT be reported equal.
+    #[test]
+    fn test_snapshots_match_compares_hidden_quantity_and_order_count() {
+        fn lvl(
+            price: u128,
+            visible: u64,
+            hidden: u64,
+            count: usize,
+        ) -> pricelevel::PriceLevelSnapshot {
+            serde_json::from_value(serde_json::json!({
+                "price": price,
+                "visible_quantity": visible,
+                "hidden_quantity": hidden,
+                "order_count": count,
+                "orders": []
+            }))
+            .expect("valid snapshot JSON")
+        }
+
+        let base = OrderBookSnapshot {
+            symbol: "TEST".to_string(),
+            timestamp: 0,
+            bids: vec![lvl(100, 10, 5, 2)],
+            asks: Vec::new(),
+        };
+        assert!(
+            snapshots_match(&base, &base.clone()),
+            "identical snapshots must match"
+        );
+
+        let diff_hidden = OrderBookSnapshot {
+            symbol: "TEST".to_string(),
+            timestamp: 0,
+            bids: vec![lvl(100, 10, 7, 2)],
+            asks: Vec::new(),
+        };
+        assert!(
+            !snapshots_match(&base, &diff_hidden),
+            "a hidden-quantity divergence must not be reported equal"
+        );
+
+        let diff_count = OrderBookSnapshot {
+            symbol: "TEST".to_string(),
+            timestamp: 0,
+            bids: vec![lvl(100, 10, 5, 3)],
+            asks: Vec::new(),
+        };
+        assert!(
+            !snapshots_match(&base, &diff_count),
+            "an order-count divergence must not be reported equal"
+        );
     }
 
     #[test]
@@ -586,9 +656,10 @@ mod tests {
                 })
                 .expect("seed ask");
         }
-        // Note: live_book seeds with fresh UUIDs, so the per-level
-        // visible_quantity post-match is what `snapshots_match` compares.
-        // Use the same notional amount so the residual book state matches.
+        // Note: live_book seeds with fresh UUIDs, so `snapshots_match`
+        // compares the structural per-level fields (price, visible/hidden
+        // quantity, order count) rather than order ids. Use the same notional
+        // amount so the residual book state matches.
         let _ = live_book.match_market_order_by_amount(taker_id, 1_500, Side::Buy);
 
         // Replay journal into a fresh book.

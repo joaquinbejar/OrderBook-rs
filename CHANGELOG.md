@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`snapshots_match` compares full per-level structure (#102).** The replay
+  equality oracle now compares each level's `hidden_quantity` and `order_count`
+  in addition to `price` and `visible_quantity`. Previously two books that
+  agreed on visible quantity but differed in reserve/iceberg hidden depth or in
+  the number of resting orders at a level were reported as equal, so a replay
+  that reconstructed the wrong hidden depth or order count could pass
+  verification. The check is now a true structural equality, not a
+  visible-quantity subset.
 - **STP per-level scan is now deterministic (#94).** The self-trade-prevention
   pre-scan reads `PriceLevel::snapshot_orders()` (timestamp-ordered) instead of
   `iter_orders()` (DashMap, non-stable order), so `safe_quantity` and the
