@@ -182,6 +182,92 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // STP maker-cancel side effects (#95) — a CancelMaker / CancelBoth cancel
+    // must emit a level-change event, record OrderStatus::Cancelled
+    // { SelfTradePrevention }, and release the per-account risk slot, in
+    // lockstep with cancel_order_with_reason.
+    // -----------------------------------------------------------------------
+
+    /// CancelMaker: the cancelled maker reaches `Cancelled { SelfTradePrevention }`
+    /// and a `PriceLevelChangedEvent` is emitted for its level.
+    #[test]
+    fn test_stp_cancel_maker_emits_event_and_records_state() {
+        use crate::orderbook::book_change_event::PriceLevelChangedEvent;
+        use crate::orderbook::order_state::{CancelReason, OrderStateTracker, OrderStatus};
+        use std::sync::{Arc, Mutex};
+
+        let mut book: OrderBook<()> = OrderBook::new("TEST");
+        book.set_stp_mode(STPMode::CancelMaker);
+        book.set_order_state_tracker(OrderStateTracker::new());
+
+        let u = user(7);
+        let maker = add_sell_order_with_user(&book, 100, 10, u);
+
+        // Install the listener only after the maker rests, so the captured events
+        // come from the STP cancel path, not the admission.
+        let events: Arc<Mutex<Vec<PriceLevelChangedEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        book.set_price_level_listener(Arc::new(move |e: PriceLevelChangedEvent| {
+            sink.lock().expect("event sink").push(e);
+        }));
+
+        // Same user crosses -> CancelMaker cancels the resting maker.
+        let taker = Id::new();
+        let _ = book.match_market_order_with_user(taker, 10, Side::Buy, u);
+
+        match book.order_status(maker) {
+            Some(OrderStatus::Cancelled { reason, .. }) => {
+                assert_eq!(reason, CancelReason::SelfTradePrevention);
+            }
+            other => panic!("expected Cancelled {{ SelfTradePrevention }}, got {other:?}"),
+        }
+
+        let captured = events.lock().expect("event sink");
+        assert!(
+            captured
+                .iter()
+                .any(|e| e.price == 100 && e.side == Side::Sell),
+            "expected a Sell-side PriceLevelChangedEvent at price 100 for the cancelled maker's level"
+        );
+    }
+
+    /// CancelBoth: cancelling the maker releases its per-account risk slot (no
+    /// counter leak) and records `Cancelled { SelfTradePrevention }`.
+    #[test]
+    fn test_stp_cancel_both_frees_risk_slot_and_records_state() {
+        use crate::orderbook::order_state::{CancelReason, OrderStateTracker, OrderStatus};
+        use crate::orderbook::risk::RiskConfig;
+
+        let mut book: OrderBook<()> = OrderBook::new("TEST");
+        book.set_stp_mode(STPMode::CancelBoth);
+        book.set_risk_config(RiskConfig::new().with_max_open_orders_per_account(1));
+        book.set_order_state_tracker(OrderStateTracker::new());
+
+        let u = user(7);
+        // Consumes the single per-account open-order slot.
+        let maker = Id::new();
+        book.add_limit_order_with_user(maker, 100, 10, Side::Sell, TimeInForce::Gtc, u, None)
+            .expect("maker admitted (1/1)");
+
+        // Same user crosses -> CancelBoth cancels the maker (and the taker).
+        let taker = Id::new();
+        let _ = book.match_market_order_with_user(taker, 5, Side::Buy, u);
+
+        match book.order_status(maker) {
+            Some(OrderStatus::Cancelled { reason, .. }) => {
+                assert_eq!(reason, CancelReason::SelfTradePrevention);
+            }
+            other => panic!("expected Cancelled {{ SelfTradePrevention }}, got {other:?}"),
+        }
+
+        // The risk slot must have been released: a new order from the same account
+        // is admitted. If on_cancel were skipped, the counter would still read 1/1
+        // and this would fail with RiskMaxOpenOrders.
+        book.add_limit_order_with_user(Id::new(), 101, 1, Side::Sell, TimeInForce::Gtc, u, None)
+            .expect("STP cancel must free the per-account risk slot");
+    }
+
+    // -----------------------------------------------------------------------
     // STPMode::None — backward compatibility
     // -----------------------------------------------------------------------
 

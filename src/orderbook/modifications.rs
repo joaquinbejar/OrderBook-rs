@@ -593,6 +593,72 @@ where
         }
     }
 
+    /// Apply the side-effects of cancelling a single resting `order_id` that is
+    /// known to live on the already-held `price_level` (resting on `side`),
+    /// **without** removing the level from the bid/ask map.
+    ///
+    /// This mirrors the per-order effects of [`Self::cancel_order_with_reason`]
+    /// — level-change event, `Cancelled { reason }` state transition, per-account
+    /// risk release, `user_orders` / `order_locations` untrack, and special-order
+    /// deregistration — but it deliberately does **not** touch the bid/ask
+    /// `SkipMap`. The caller owns level removal (the matching loop drains
+    /// `empty_price_levels` after the walk), so this is safe to invoke mid-walk:
+    /// it never removes a level the iterator still references and never
+    /// re-resolves `order_locations`, so a sequence of cancels on the same held
+    /// level cannot skip a later order. Used by the STP `CancelMaker` /
+    /// `CancelBoth` arms (#95). No-op if `order_id` is not resting on the level.
+    pub(super) fn cancel_resting_maker_on_level(
+        &self,
+        price_level: &PriceLevel,
+        side: Side,
+        order_id: Id,
+        reason: CancelReason,
+    ) {
+        let Ok(Some(cancelled)) = price_level.update_order(OrderUpdate::Cancel { order_id }) else {
+            return;
+        };
+        self.cache.invalidate();
+
+        // 1. Notify the level change (same shape as cancel_order_with_reason).
+        if let Some(ref listener) = self.price_level_changed_listener {
+            let engine_seq = self.next_engine_seq();
+            listener(PriceLevelChangedEvent {
+                side,
+                price: price_level.price(),
+                quantity: price_level.visible_quantity(),
+                engine_seq,
+            });
+        }
+
+        // 2. Record the terminal cancellation, preserving any prior fill.
+        let prev_filled = self
+            .order_state_tracker
+            .as_ref()
+            .and_then(|t| t.get(order_id))
+            .map(|s| s.filled_quantity())
+            .unwrap_or(0);
+        self.track_state(
+            order_id,
+            OrderStatus::Cancelled {
+                filled_quantity: prev_filled,
+                reason,
+            },
+        );
+
+        // 3. Drop the per-account risk contribution, then untrack the order.
+        self.order_locations.remove(&order_id);
+        self.risk_state.on_cancel(order_id);
+        self.untrack_user_order(cancelled.user_id(), &order_id);
+
+        #[cfg(feature = "special_orders")]
+        {
+            self.special_order_tracker
+                .unregister_pegged_order(&order_id);
+            self.special_order_tracker
+                .unregister_trailing_stop(&order_id);
+        }
+    }
+
     /// Add a new order to the book, automatically matching it if it's aggressive.
     ///
     /// # Errors
