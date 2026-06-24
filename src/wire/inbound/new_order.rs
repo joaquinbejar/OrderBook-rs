@@ -91,9 +91,19 @@ pub fn decode_new_order(payload: &[u8]) -> Result<NewOrderWire, WireError> {
     Ok(*view)
 }
 
+/// Converts a decoded [`NewOrderWire`] into a domain [`OrderType<()>`],
+/// validating the reserved padding and the enumerated fields.
 impl TryFrom<&NewOrderWire> for OrderType<()> {
     type Error = WireError;
 
+    /// # Errors
+    ///
+    /// Returns [`WireError::InvalidPayload`] when the wire message is malformed:
+    /// - non-zero reserved padding (`_pad`),
+    /// - a negative `price`,
+    /// - an unknown `side` byte (not `SIDE_BUY` / `SIDE_SELL`),
+    /// - an unknown `time_in_force` byte (not GTC / IOC / FOK / DAY), or
+    /// - an unsupported `order_type` (only `ORDER_TYPE_STANDARD` is accepted).
     fn try_from(value: &NewOrderWire) -> Result<Self, Self::Error> {
         // Copy each packed field into a local first — taking a reference to a
         // packed field is undefined behavior. The `{ value.field }` syntax

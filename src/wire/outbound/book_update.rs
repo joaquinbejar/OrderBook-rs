@@ -14,7 +14,7 @@ pub const BOOK_UPDATE_SIZE: usize = 32;
 
 /// Outbound `BookUpdate` message body.
 ///
-/// Total payload size: **32 bytes** (26 bytes of fields + 6 bytes of trailing
+/// Total payload size: **32 bytes** (25 bytes of fields + 7 bytes of trailing
 /// pad to round to a 32-byte block — keeps the message a comfortable
 /// cache-line slice and leaves room for forward-compatible additions).
 ///
@@ -24,8 +24,7 @@ pub const BOOK_UPDATE_SIZE: usize = 32;
 /// |      8 |    1 | `side`       | u8   | `0` Buy, `1` Sell           |
 /// |      9 |    8 | `price`      | i64  | tick-scaled level price     |
 /// |     17 |    8 | `qty`        | u64  | new total quantity at level |
-/// |     25 |    1 | `_pad0`      | u8   | reserved                    |
-/// |     26 |    6 | `_pad`       | u8×6 | reserved, must be zero      |
+/// |     25 |    7 | `_pad`       | u8×7 | reserved, must be zero      |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BookUpdateWire {
     /// Global engine sequence (monotonic across outbound streams).

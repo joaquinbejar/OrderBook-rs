@@ -83,7 +83,16 @@ where
     ///
     /// # Returns
     /// - `Ok(IVResult)` with calculated IV and metadata
-    /// - `Err(IVError)` if calculation fails
+    ///
+    /// # Errors
+    ///
+    /// Returns the same [`IVError`] variants as
+    /// [`implied_volatility_with_config`](Self::implied_volatility_with_config),
+    /// to which this delegates with the default [`IVConfig`]:
+    /// [`IVError::NoPriceAvailable`], [`IVError::CrossedBook`],
+    /// [`IVError::SpreadTooWide`], [`IVError::PriceBelowIntrinsic`], and any
+    /// solver error ([`IVError::InvalidParams`], [`IVError::TimeToExpiryTooSmall`],
+    /// [`IVError::VolatilityOutOfBounds`], [`IVError::ConvergenceFailure`]).
     ///
     /// # Example
     /// ```ignore
@@ -124,7 +133,19 @@ where
     ///
     /// # Returns
     /// - `Ok(IVResult)` with calculated IV and metadata
-    /// - `Err(IVError)` if calculation fails
+    ///
+    /// # Errors
+    ///
+    /// - [`IVError::NoPriceAvailable`] if the book has neither a usable price nor
+    ///   a last trade to derive one from.
+    /// - [`IVError::CrossedBook`] if the book is crossed or locked (no meaningful mid).
+    /// - [`IVError::SpreadTooWide`] if the bid/ask spread exceeds
+    ///   `config.max_spread_bps`.
+    /// - [`IVError::PriceBelowIntrinsic`] if the extracted price is below the
+    ///   option's intrinsic value.
+    /// - Any solver error from [`solve_iv`](crate::orderbook::implied_volatility::solver::solve_iv):
+    ///   [`IVError::InvalidParams`], [`IVError::TimeToExpiryTooSmall`],
+    ///   [`IVError::VolatilityOutOfBounds`], or [`IVError::ConvergenceFailure`].
     #[must_use = "the implied-volatility result (or error) must be handled"]
     pub fn implied_volatility_with_config(
         &self,

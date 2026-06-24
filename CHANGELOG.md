@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Doc gaps closed on IV / fee / wire items (#122).** The `Result`-returning IV
+  functions (`solve_iv`, `solve_iv_bisection`, `implied_volatility`,
+  `implied_volatility_with_config`) and the `TryFrom<&NewOrderWire> for OrderType<()>`
+  conversion now carry `# Errors` sections enumerating their failure modes.
+  `FeeSchedule::calculate_fee` documents its rounding rule (integer division
+  truncates **toward zero**, symmetric in magnitude for a taker fee and a maker
+  rebate) with a fractional-bps doctest asserting both signs. The `BookUpdateWire`
+  layout rustdoc is corrected to match the code: **25 bytes of fields + a single
+  7-byte `_pad`** at offset 25 (it previously claimed 26 fields + 6 pad with
+  phantom `_pad0`/`_pad`). Docs-only, no functional change.
 - **`#[must_use]` on pure iterator constructors and fallible decoders/IV entry points (#121).**
   Several public functions lacked the project-mandated `#[must_use]`: the
   `OrderBook` iterator constructors (`levels_with_cumulative_depth`,

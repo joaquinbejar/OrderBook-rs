@@ -168,7 +168,20 @@ fn smart_initial_guess(params: &IVParams, market_price: f64) -> f64 {
 ///
 /// # Returns
 /// - `Ok((iv, iterations))`: Converged IV and number of iterations
-/// - `Err(IVError)`: If solver fails to converge or inputs are invalid
+///
+/// # Errors
+///
+/// - [`IVError::InvalidParams`] if `spot`, `strike`, `time_to_expiry`,
+///   `risk_free_rate`, or `market_price` is non-finite or non-positive, or if a
+///   value becomes non-finite mid-iteration.
+/// - [`IVError::TimeToExpiryTooSmall`] if `time_to_expiry` is below the
+///   numerical-stability minimum.
+/// - [`IVError::PriceBelowIntrinsic`] if `market_price` is below the option's
+///   intrinsic value (an arbitrage / bad-input signal).
+/// - [`IVError::VolatilityOutOfBounds`] if the converged IV falls outside
+///   `[config.min_iv, config.max_iv]`.
+/// - [`IVError::ConvergenceFailure`] if Newton-Raphson does not converge within
+///   `config.max_iterations`.
 ///
 /// # Example
 /// ```ignore
@@ -291,7 +304,18 @@ pub fn solve_iv(
 ///
 /// # Returns
 /// - `Ok((iv, iterations))`: Converged IV and iterations
-/// - `Err(IVError)`: If no solution exists in bounds
+///
+/// # Errors
+///
+/// - [`IVError::InvalidParams`] if `spot`, `strike`, `time_to_expiry`,
+///   `risk_free_rate`, or `market_price` is non-finite or non-positive.
+/// - [`IVError::TimeToExpiryTooSmall`] if `time_to_expiry` is below the
+///   numerical-stability minimum.
+/// - [`IVError::PriceBelowIntrinsic`] if `market_price` is below intrinsic value.
+/// - [`IVError::VolatilityOutOfBounds`] if no solution exists within
+///   `[config.min_iv, config.max_iv]`.
+/// - [`IVError::ConvergenceFailure`] if bisection does not converge within
+///   `config.max_iterations`.
 #[must_use = "the implied-volatility result (or error) must be handled"]
 pub fn solve_iv_bisection(
     params: &IVParams,

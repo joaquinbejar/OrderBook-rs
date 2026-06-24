@@ -75,6 +75,18 @@ impl FeeSchedule {
     ///
     /// The fee amount. Positive values represent charges, negative values represent rebates.
     ///
+    /// # Rounding
+    ///
+    /// The fee is `notional × bps / 10_000` computed with integer division, which
+    /// **truncates toward zero** — i.e. it rounds toward `0`, not toward `−∞`. The
+    /// magnitude is computed in the unsigned domain and the sign of `bps` is
+    /// applied afterward, so the rounding is symmetric in magnitude for a taker
+    /// fee (positive `bps`) and a maker rebate (negative `bps`): both drop the
+    /// fractional part rather than rounding it. For example a `notional` of
+    /// `15_003` yields `+7` at `+5` bps and `−3` at `−2` bps (each `floor` of the
+    /// magnitude `7.5015` / `3.0006`, then signed). External fee reconciliation
+    /// should therefore truncate-toward-zero, not round-half-up.
+    ///
     /// # Examples
     ///
     /// ```
@@ -89,6 +101,10 @@ impl FeeSchedule {
     /// // Maker rebate: -2 bps on $10,000 = -$2.00
     /// let maker_rebate = schedule.calculate_fee(10_000_000, true);
     /// assert_eq!(maker_rebate, -2_000);
+    ///
+    /// // Fractional bps × notional truncates toward zero in both directions.
+    /// assert_eq!(schedule.calculate_fee(15_003, false), 7); // floor(7.5015)
+    /// assert_eq!(schedule.calculate_fee(15_003, true), -3); // -floor(3.0006)
     /// ```
     #[must_use = "Fee calculation result must be used"]
     #[inline]
