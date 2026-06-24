@@ -78,6 +78,21 @@ fn account_publish_outcome(
     }
 }
 
+/// Clamps a caller-supplied bounded-channel capacity up to the minimum a Tokio
+/// mpsc channel accepts (`1`).
+///
+/// A capacity of `0` is recoverable bad input — a runtime-derived `0` should not
+/// abort the process via a builder `assert!`. It is clamped to `1` with a
+/// `tracing::warn!`.
+fn clamp_channel_capacity(requested: usize) -> usize {
+    if requested == 0 {
+        warn!("with_channel_capacity(0) is invalid; clamping to 1");
+        1
+    } else {
+        requested
+    }
+}
+
 /// Default batch window in milliseconds. Trades are drained from the channel
 /// for at most this duration before the accumulated batch is published.
 const DEFAULT_BATCH_WINDOW_MS: u64 = 1;
@@ -287,18 +302,14 @@ impl NatsTradePublisher {
     /// When the channel is full, new trades are dropped and `dropped_events`
     /// is incremented. Defaults to [`DEFAULT_CHANNEL_CAPACITY`] (10,000).
     ///
-    /// # Panics
-    ///
-    /// Panics if `channel_capacity` is zero (Tokio mpsc requires a positive
-    /// capacity).
+    /// A `channel_capacity` of `0` is invalid for a Tokio mpsc channel. Rather
+    /// than panic on caller-supplied (possibly runtime-derived) input, it is
+    /// **clamped up to `1`** with a `tracing::warn!` — the builder never aborts
+    /// the process.
     #[must_use = "builders do nothing unless consumed"]
     #[inline]
     pub fn with_channel_capacity(mut self, channel_capacity: usize) -> Self {
-        assert!(
-            channel_capacity > 0,
-            "channel_capacity must be greater than zero"
-        );
-        self.channel_capacity = channel_capacity;
+        self.channel_capacity = clamp_channel_capacity(channel_capacity);
         self
     }
 
@@ -870,6 +881,14 @@ mod tests {
             // All values saturate rather than panic
             assert!(delay >= BASE_RETRY_DELAY_MS);
         }
+    }
+
+    #[test]
+    fn test_clamp_channel_capacity_handles_zero_without_panicking() {
+        // #128: a 0 capacity must clamp up to 1 (no assert!/abort).
+        assert_eq!(clamp_channel_capacity(0), 1);
+        assert_eq!(clamp_channel_capacity(1), 1);
+        assert_eq!(clamp_channel_capacity(10_000), 10_000);
     }
 
     #[test]
