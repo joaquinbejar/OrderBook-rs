@@ -508,6 +508,127 @@ mod tests {
         Hash32::new([byte; 32])
     }
 
+    fn open_count_of(state: &RiskState, acct: Hash32) -> u64 {
+        state
+            .counters
+            .get(&acct)
+            .map(|c| c.open_count.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn test_concurrent_admission_over_admission_is_bounded_issue_116() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        const THREADS: usize = 16;
+        const LIMIT: u64 = 4;
+
+        let mut state = RiskState::new();
+        state.set_config(RiskConfig::new().with_max_open_orders_per_account(LIMIT));
+        let state = Arc::new(state);
+        let acct = account(7);
+        // Barrier releases all threads together to maximize the documented
+        // check-then-increment race window.
+        let barrier = Arc::new(Barrier::new(THREADS));
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|i| {
+                let state = Arc::clone(&state);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    if state.check_limit_admission(acct, 100, 1, Some(100)).is_ok() {
+                        state.on_admission(Id::from_u64(i as u64), acct, 100, 1);
+                        1u64
+                    } else {
+                        0
+                    }
+                })
+            })
+            .collect();
+
+        let admitted: u64 = handles
+            .into_iter()
+            .map(|h| h.join().expect("admission thread"))
+            .sum();
+
+        let open_count = open_count_of(&state, acct);
+
+        // The counter must equal the number of successful admissions.
+        assert_eq!(
+            open_count, admitted,
+            "open_count must match the admissions that incremented it"
+        );
+        // A reject can only happen once the count reaches the limit, so at least
+        // `LIMIT` admissions always occur.
+        assert!(open_count >= LIMIT, "at least the limit is admitted");
+        // Documented bound: over-admission never exceeds the limit by more than
+        // one in-flight admission per racing thread.
+        assert!(
+            open_count <= LIMIT + THREADS as u64,
+            "over-admission must stay bounded by limit + thread_count, got {open_count}"
+        );
+    }
+
+    #[test]
+    fn test_concurrent_fill_cancel_never_wraps_open_count_issue_116() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        const ORDERS: u64 = 32;
+
+        let mut state = RiskState::new();
+        state.set_config(RiskConfig::new().with_max_open_orders_per_account(10_000));
+        let acct = account(9);
+        // Pre-admit ORDERS resting orders (open_count == ORDERS).
+        for i in 0..ORDERS {
+            state.on_admission(Id::from_u64(i), acct, 100, 10);
+        }
+        assert_eq!(open_count_of(&state, acct), ORDERS);
+
+        let state = Arc::new(state);
+        // Race a full fill against a cancel for every order: the saturating
+        // decrement must never wrap `open_count` to a huge value (which would
+        // lock the account out by reading as "at limit" forever).
+        let barrier = Arc::new(Barrier::new((ORDERS * 2) as usize));
+        let mut handles = Vec::new();
+        for i in 0..ORDERS {
+            for which in 0..2u8 {
+                let state = Arc::clone(&state);
+                let barrier = Arc::clone(&barrier);
+                handles.push(thread::spawn(move || {
+                    barrier.wait();
+                    if which == 0 {
+                        state.on_fill(Id::from_u64(i), 10, 100); // full fill
+                    } else {
+                        state.on_cancel(Id::from_u64(i));
+                    }
+                }));
+            }
+        }
+        for h in handles {
+            h.join().expect("fill/cancel thread");
+        }
+
+        let open_count = open_count_of(&state, acct);
+        let resting_notional = state
+            .counters
+            .get(&acct)
+            .map(|c| c.resting_notional.load())
+            .unwrap_or(0);
+
+        // Each order is decremented exactly once (whichever of fill/cancel wins
+        // the DashMap entry removal; the other is a no-op), and a saturating
+        // decrement never wraps — so both counters land at 0, never at a huge
+        // wrapped value that would lock the account out.
+        assert_eq!(open_count, 0, "all orders removed exactly once; no wrap");
+        assert_eq!(
+            resting_notional, 0,
+            "resting_notional also reaches 0 without wrap"
+        );
+    }
+
     #[test]
     fn test_risk_config_builder() {
         let cfg = RiskConfig::new()

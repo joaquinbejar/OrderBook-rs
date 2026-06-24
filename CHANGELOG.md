@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Barrier-synchronized risk concurrency tests (#116).** The risk module's core
+  safety claim — bounded over-admission and no wrap-to-MAX lockout under fill /
+  cancel races — was uncovered by any concurrency test (all existing risk tests
+  were single-threaded). Added two `std::thread::Barrier`-synchronized,
+  sleep-free, deterministic tests: an N-thread admission race asserting
+  `open_count` equals the admissions that incremented it and stays within
+  `limit + thread_count` (bounded over-admission), and a full-fill-vs-cancel race
+  over many orders asserting the saturating decrements land both `open_count` and
+  `resting_notional` at `0` and never wrap to a large value. Test-only; no
+  behavior change.
 - **Manager trade-event channel semantics documented (#129).** `BookManagerStd`
   (std `mpsc`) and `BookManagerTokio` (tokio `unbounded_channel`) push trade events
   onto an **unbounded** channel by design — the matching path must never block to
