@@ -20,6 +20,7 @@ mod operations_coverage_tests_extended;
 mod order_state_tests;
 mod private_coverage_tests;
 mod reject_reason_tests;
+mod replay_config_tests;
 mod replay_coverage_tests;
 #[cfg(feature = "journal")]
 mod replay_determinism;

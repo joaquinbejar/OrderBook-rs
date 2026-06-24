@@ -601,8 +601,8 @@ pub use orderbook::order_state::{
 pub use orderbook::reject_reason::RejectReason;
 pub use orderbook::risk::{ReferencePriceSource, RiskConfig, RiskState};
 pub use orderbook::sequencer::{
-    InMemoryJournal, Journal, JournalEntry, JournalError, JournalReadIter, ReplayEngine,
-    ReplayError, SequencerCommand, SequencerEvent, SequencerResult, snapshots_match,
+    InMemoryJournal, Journal, JournalEntry, JournalError, JournalReadIter, ReplayBookConfig,
+    ReplayEngine, ReplayError, SequencerCommand, SequencerEvent, SequencerResult, snapshots_match,
 };
 pub use orderbook::serialization::{EventSerializer, JsonEventSerializer, SerializationError};
 pub use orderbook::snapshot::{EnrichedSnapshot, MetricFlags};

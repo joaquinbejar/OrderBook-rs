@@ -895,6 +895,25 @@ where
         self.tick_size = Some(tick_size);
     }
 
+    /// Set or clear the minimum price increment from an [`Option`].
+    ///
+    /// `Some(t)` enables tick validation at `t`; `None` disables it. This is
+    /// the setter the sequencer [`ReplayEngine`](crate::ReplayEngine) uses to
+    /// inject `tick_size` into a fresh book before replay so that a journal
+    /// produced by a tick-constrained book reconstructs to the same structure.
+    ///
+    /// Intended for replay / restore on a **fresh** book. Changing the tick
+    /// size on a book that already holds resting orders does not re-validate
+    /// or re-price existing levels — that is the caller's responsibility.
+    ///
+    /// # Arguments
+    /// - `tick_size`: `Some(increment)` to enable (increment must be > 0), or
+    ///   `None` to disable validation.
+    #[inline]
+    pub fn set_tick_size_opt(&mut self, tick_size: Option<u128>) {
+        self.tick_size = tick_size;
+    }
+
     /// Returns the configured tick size, if any.
     ///
     /// `None` means tick size validation is disabled (all prices accepted).
@@ -913,6 +932,26 @@ where
     /// - `lot_size`: Minimum quantity increment. Must be > 0
     pub fn set_lot_size(&mut self, lot_size: u64) {
         self.lot_size = Some(lot_size);
+    }
+
+    /// Set or clear the minimum quantity increment from an [`Option`].
+    ///
+    /// `Some(l)` enables lot validation / rounding at `l`; `None` disables it.
+    /// This is the setter the sequencer [`ReplayEngine`](crate::ReplayEngine)
+    /// uses to inject `lot_size` into a fresh book before replay so that a
+    /// journal produced by a lot-constrained book (e.g. `MarketOrderByAmount`
+    /// rounding per level) reconstructs to the same structure.
+    ///
+    /// Intended for replay / restore on a **fresh** book. Changing the lot
+    /// size on a book that already holds resting orders does not re-validate
+    /// existing levels — that is the caller's responsibility.
+    ///
+    /// # Arguments
+    /// - `lot_size`: `Some(increment)` to enable (increment must be > 0), or
+    ///   `None` to disable validation.
+    #[inline]
+    pub fn set_lot_size_opt(&mut self, lot_size: Option<u64>) {
+        self.lot_size = lot_size;
     }
 
     /// Returns the configured lot size, if any.

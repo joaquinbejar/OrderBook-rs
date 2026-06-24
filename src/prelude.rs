@@ -78,8 +78,8 @@ pub use crate::orderbook::nats_book_change::{
 #[cfg(feature = "journal")]
 pub use crate::orderbook::sequencer::FileJournal;
 pub use crate::orderbook::sequencer::{
-    InMemoryJournal, Journal, JournalEntry, JournalError, JournalReadIter, ReplayEngine,
-    ReplayError, SequencerCommand, SequencerEvent, SequencerResult, snapshots_match,
+    InMemoryJournal, Journal, JournalEntry, JournalError, JournalReadIter, ReplayBookConfig,
+    ReplayEngine, ReplayError, SequencerCommand, SequencerEvent, SequencerResult, snapshots_match,
 };
 
 // Utility functions

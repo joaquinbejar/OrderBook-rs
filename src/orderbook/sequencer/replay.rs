@@ -9,11 +9,127 @@ use super::error::JournalError;
 use super::journal::Journal;
 use super::types::{SequencerCommand, SequencerEvent, SequencerResult};
 use crate::orderbook::clock::Clock;
+use crate::orderbook::fees::FeeSchedule;
+use crate::orderbook::stp::STPMode;
 use crate::orderbook::{OrderBook, OrderBookError, OrderBookSnapshot};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thiserror::Error;
+
+/// Book configuration injected into a fresh [`OrderBook`] before replay so
+/// that a journal produced by a **non-default-config** book reconstructs to
+/// the same structure.
+///
+/// The plain [`ReplayEngine::replay_from`] / [`ReplayEngine::replay_from_with_clock`]
+/// entry points build the target book with all configuration left at its
+/// defaults (`tick_size` / `lot_size` / `min_order_size` / `max_order_size`
+/// = `None`, `stp_mode` = [`STPMode::None`], `fee_schedule` = `None`). A book
+/// that used any of these — for example a `MarketOrderByAmount` that rounds
+/// per level under a `lot_size`, a self-cross prevented live by STP, or fees —
+/// would replay into a **structurally different** book, so `snapshots_match`
+/// can fail at verify and the recovered state would be wrong.
+///
+/// To recover such a book deterministically, carry the original configuration
+/// alongside the journal (it is the same set of fields persisted in
+/// [`OrderBookSnapshotPackage`](crate::OrderBookSnapshot)'s package form) and
+/// replay through a `*_with_config` variant
+/// ([`ReplayEngine::replay_from_with_config`] /
+/// [`ReplayEngine::replay_from_with_clock_and_config`]).
+///
+/// The configuration is supplied by the **caller** — replay does not read it
+/// from the journal, so the on-disk journal format is unchanged and
+/// `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` is not bumped.
+///
+/// `Default` yields the all-defaults configuration, equivalent to the plain
+/// replay entry points.
+#[derive(Debug, Clone, Default)]
+pub struct ReplayBookConfig {
+    /// Fee schedule the source book used, or `None` for no fees. Applied via
+    /// [`OrderBook::set_fee_schedule`].
+    pub fee_schedule: Option<FeeSchedule>,
+
+    /// Self-trade prevention mode the source book used. [`STPMode::None`]
+    /// (the default) disables STP. Applied via [`OrderBook::set_stp_mode`].
+    pub stp_mode: STPMode,
+
+    /// Tick size (minimum price increment) the source book used, or `None`
+    /// for no tick validation. Applied via [`OrderBook::set_tick_size_opt`].
+    pub tick_size: Option<u128>,
+
+    /// Lot size (minimum quantity increment) the source book used, or `None`
+    /// for no lot validation / rounding. Applied via
+    /// [`OrderBook::set_lot_size_opt`].
+    pub lot_size: Option<u64>,
+
+    /// Minimum order size the source book used, or `None` for no minimum.
+    /// Applied via [`OrderBook::set_min_order_size`] only when `Some`.
+    pub min_order_size: Option<u64>,
+
+    /// Maximum order size the source book used, or `None` for no maximum.
+    /// Applied via [`OrderBook::set_max_order_size`] only when `Some`.
+    pub max_order_size: Option<u64>,
+}
+
+impl ReplayBookConfig {
+    /// Creates a [`ReplayBookConfig`] from its six fields.
+    ///
+    /// Equivalent to building the struct with public-field syntax; provided so
+    /// callers can construct the carrier without naming every field at the call
+    /// site. Use [`ReplayBookConfig::default`] for the all-defaults case.
+    ///
+    /// # Arguments
+    ///
+    /// * `fee_schedule` — fee schedule the source book used, or `None`
+    /// * `stp_mode` — self-trade prevention mode the source book used
+    /// * `tick_size` — tick size the source book used, or `None`
+    /// * `lot_size` — lot size the source book used, or `None`
+    /// * `min_order_size` — minimum order size the source book used, or `None`
+    /// * `max_order_size` — maximum order size the source book used, or `None`
+    #[must_use]
+    pub fn new(
+        fee_schedule: Option<FeeSchedule>,
+        stp_mode: STPMode,
+        tick_size: Option<u128>,
+        lot_size: Option<u64>,
+        min_order_size: Option<u64>,
+        max_order_size: Option<u64>,
+    ) -> Self {
+        Self {
+            fee_schedule,
+            stp_mode,
+            tick_size,
+            lot_size,
+            min_order_size,
+            max_order_size,
+        }
+    }
+
+    /// Applies this configuration to a freshly-constructed `book` in place,
+    /// before any journal events are replayed into it.
+    ///
+    /// `fee_schedule`, `stp_mode`, `tick_size`, and `lot_size` are applied
+    /// unconditionally (a `None` / [`STPMode::None`] value resets the field to
+    /// its default, which is a no-op on a fresh book). `min_order_size` and
+    /// `max_order_size` are applied only when `Some`, mirroring the existing
+    /// `set_min_order_size` / `set_max_order_size` setters which take a bare
+    /// value rather than an `Option`.
+    fn apply_to<T>(&self, book: &mut OrderBook<T>)
+    where
+        T: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + Default + 'static,
+    {
+        book.set_fee_schedule(self.fee_schedule);
+        book.set_stp_mode(self.stp_mode);
+        book.set_tick_size_opt(self.tick_size);
+        book.set_lot_size_opt(self.lot_size);
+        if let Some(min) = self.min_order_size {
+            book.set_min_order_size(min);
+        }
+        if let Some(max) = self.max_order_size {
+            book.set_max_order_size(max);
+        }
+    }
+}
 
 /// Errors that can occur during journal replay.
 #[derive(Debug, Error)]
@@ -91,6 +207,19 @@ where
     /// For deterministic replay with a custom clock, see
     /// [`Self::replay_from_with_clock`].
     ///
+    /// # Configuration
+    ///
+    /// This entry point builds the target book with **all configuration at its
+    /// defaults** (`tick_size` / `lot_size` / `min_order_size` /
+    /// `max_order_size` = `None`, `stp_mode` = [`STPMode::None`],
+    /// `fee_schedule` = `None`). It is therefore only valid for replaying a
+    /// journal that was produced by a **default-config** book. A book that used
+    /// tick / lot / STP / fees must be replayed through
+    /// [`Self::replay_from_with_config`] (or
+    /// [`Self::replay_from_with_clock_and_config`]) with the matching
+    /// [`ReplayBookConfig`], or the reconstructed state will diverge from the
+    /// original (and `snapshots_match` will report a mismatch).
+    ///
     /// # Arguments
     ///
     /// * `journal` — the event source
@@ -154,6 +283,57 @@ where
         Ok((book, last_applied_seq))
     }
 
+    /// Like [`Self::replay_from`] but injects a caller-supplied
+    /// [`ReplayBookConfig`] into the fresh book **before** any events are
+    /// replayed.
+    ///
+    /// This is the entry point for recovering a **non-default-config** book:
+    /// the configuration (fees, STP, tick / lot / min / max order size) is
+    /// applied to the target book so that a journal produced under that
+    /// configuration reconstructs to the same structure and passes
+    /// `snapshots_match` against the original. The configuration is supplied by
+    /// the caller — it is not read from the journal, so the journal format is
+    /// unchanged.
+    ///
+    /// For byte-identical timestamp reproduction (e.g. replay tests, or
+    /// disaster-recovery that must match engine-assigned timestamps), use
+    /// [`Self::replay_from_with_clock_and_config`].
+    ///
+    /// # Arguments
+    ///
+    /// * `journal` — the event source
+    /// * `from_sequence` — first sequence number to include (inclusive); pass `0` for full replay
+    /// * `symbol` — symbol used to create the fresh OrderBook
+    /// * `config` — configuration the source book used, applied before replay
+    ///
+    /// # Errors
+    ///
+    /// Same as [`replay_from`](Self::replay_from).
+    #[must_use = "replay result carries the reconstructed book and the last applied sequence"]
+    pub fn replay_from_with_config(
+        journal: &impl Journal<T>,
+        from_sequence: u64,
+        symbol: &str,
+        config: &ReplayBookConfig,
+    ) -> Result<(OrderBook<T>, u64), ReplayError> {
+        let last_seq = match journal.last_sequence() {
+            Some(seq) => seq,
+            None => return Err(ReplayError::EmptyJournal),
+        };
+
+        if from_sequence > last_seq {
+            return Err(ReplayError::InvalidSequence {
+                from_sequence,
+                last_sequence: last_seq,
+            });
+        }
+
+        let mut book = OrderBook::new(symbol);
+        config.apply_to(&mut book);
+        let last_applied_seq = Self::replay_into(&book, journal, from_sequence, |_, _| {})?;
+        Ok((book, last_applied_seq))
+    }
+
     /// Like [`Self::replay_from`] but injects a caller-supplied [`Clock`] into
     /// the reconstructed book.
     ///
@@ -164,6 +344,14 @@ where
     /// replay, or a [`crate::orderbook::clock::MonotonicClock`] for
     /// production disaster-recovery where wall-clock timestamps are
     /// acceptable.
+    ///
+    /// # Configuration
+    ///
+    /// Like [`Self::replay_from`], this builds the target book with **all
+    /// configuration at its defaults** and is only valid for a default-config
+    /// source book. To recover a book that used tick / lot / STP / fees
+    /// deterministically, use [`Self::replay_from_with_clock_and_config`] with
+    /// the matching [`ReplayBookConfig`].
     ///
     /// # Arguments
     ///
@@ -227,6 +415,55 @@ where
 
         let book = OrderBook::with_clock(symbol, clock);
         let last_applied_seq = Self::replay_into(&book, journal, from_sequence, progress)?;
+        Ok((book, last_applied_seq))
+    }
+
+    /// Like [`Self::replay_from_with_clock`] but also injects a caller-supplied
+    /// [`ReplayBookConfig`] into the fresh book **before** any events are
+    /// replayed.
+    ///
+    /// This is the canonical entry point for byte-identical, deterministic
+    /// recovery of a **non-default-config** book: the injected [`Clock`]
+    /// reproduces engine-assigned timestamps and the [`ReplayBookConfig`]
+    /// reproduces the structural configuration (fees, STP, tick / lot / min /
+    /// max order size), so the reconstructed book passes `snapshots_match`
+    /// against the original. The configuration is supplied by the caller — it
+    /// is not read from the journal, so the journal format is unchanged.
+    ///
+    /// # Arguments
+    ///
+    /// * `journal` — the event source
+    /// * `from_sequence` — first sequence number to include (inclusive); pass `0` for full replay
+    /// * `symbol` — symbol used to create the fresh OrderBook
+    /// * `clock` — pre-constructed clock shared across the reconstructed book
+    /// * `config` — configuration the source book used, applied before replay
+    ///
+    /// # Errors
+    ///
+    /// Same as [`replay_from`](Self::replay_from).
+    #[must_use = "replay result carries the reconstructed book and the last applied sequence"]
+    pub fn replay_from_with_clock_and_config(
+        journal: &impl Journal<T>,
+        from_sequence: u64,
+        symbol: &str,
+        clock: Arc<dyn Clock>,
+        config: &ReplayBookConfig,
+    ) -> Result<(OrderBook<T>, u64), ReplayError> {
+        let last_seq = match journal.last_sequence() {
+            Some(seq) => seq,
+            None => return Err(ReplayError::EmptyJournal),
+        };
+
+        if from_sequence > last_seq {
+            return Err(ReplayError::InvalidSequence {
+                from_sequence,
+                last_sequence: last_seq,
+            });
+        }
+
+        let mut book = OrderBook::with_clock(symbol, clock);
+        config.apply_to(&mut book);
+        let last_applied_seq = Self::replay_into(&book, journal, from_sequence, |_, _| {})?;
         Ok((book, last_applied_seq))
     }
 
@@ -712,6 +949,89 @@ mod tests {
             snapshots_match(&live_snap, &replayed_snap),
             "live and replayed snapshots must match after notional market order"
         );
+    }
+
+    /// #101: `replay_from_with_config` applies every config field to the fresh
+    /// book before replaying. A `Default` config leaves the book at defaults;
+    /// a populated config is reflected field-for-field.
+    #[test]
+    fn test_replay_from_with_config_applies_every_field() {
+        let journal: InMemoryJournal<()> = InMemoryJournal::new();
+        let ev = make_add_event(0, Id::new_uuid(), 100, 10, Side::Buy);
+        assert!(journal.append(&ev).is_ok());
+
+        // Default config => all-defaults book.
+        let (book, _) = ReplayEngine::<()>::replay_from_with_config(
+            &journal,
+            0,
+            "TEST",
+            &ReplayBookConfig::default(),
+        )
+        .expect("default config replay");
+        assert_eq!(book.fee_schedule(), None);
+        assert_eq!(book.stp_mode(), STPMode::None);
+        assert_eq!(book.tick_size(), None);
+        assert_eq!(book.lot_size(), None);
+        assert_eq!(book.min_order_size(), None);
+        assert_eq!(book.max_order_size(), None);
+
+        // Populated config => reflected on the reconstructed book. Price 100 is
+        // on the 10-tick grid and qty 10 is a 5-lot multiple within [1, 1000].
+        let fee = FeeSchedule::new(-2, 5);
+        let config = ReplayBookConfig::new(
+            Some(fee),
+            STPMode::None,
+            Some(10),
+            Some(5),
+            Some(1),
+            Some(1_000),
+        );
+        let (book, _) = ReplayEngine::<()>::replay_from_with_config(&journal, 0, "TEST", &config)
+            .expect("populated config replay");
+        assert_eq!(book.fee_schedule(), Some(fee));
+        assert_eq!(book.tick_size(), Some(10));
+        assert_eq!(book.lot_size(), Some(5));
+        assert_eq!(book.min_order_size(), Some(1));
+        assert_eq!(book.max_order_size(), Some(1_000));
+    }
+
+    /// #101: the `*_with_config` variants share the pre-checks of the plain
+    /// entry points — an empty journal is `EmptyJournal`, an out-of-range
+    /// `from_sequence` is `InvalidSequence`.
+    #[test]
+    fn test_replay_with_config_pre_checks_match_plain_variants() {
+        let empty: InMemoryJournal<()> = InMemoryJournal::new();
+        assert!(matches!(
+            ReplayEngine::<()>::replay_from_with_config(
+                &empty,
+                0,
+                "TEST",
+                &ReplayBookConfig::default()
+            ),
+            Err(ReplayError::EmptyJournal)
+        ));
+
+        let journal: InMemoryJournal<()> = InMemoryJournal::new();
+        let ev = make_add_event(0, Id::new_uuid(), 100, 10, Side::Buy);
+        assert!(journal.append(&ev).is_ok());
+        let clock: Arc<dyn Clock> = Arc::new(StubClock::new());
+        match ReplayEngine::<()>::replay_from_with_clock_and_config(
+            &journal,
+            5,
+            "TEST",
+            clock,
+            &ReplayBookConfig::default(),
+        ) {
+            Err(ReplayError::InvalidSequence {
+                from_sequence,
+                last_sequence,
+            }) => {
+                assert_eq!(from_sequence, 5);
+                assert_eq!(last_sequence, 0);
+            }
+            Err(other) => panic!("expected InvalidSequence, got {other:?}"),
+            Ok(_) => panic!("expected InvalidSequence, got Ok(_)"),
+        }
     }
 
     #[test]

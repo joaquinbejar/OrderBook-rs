@@ -38,6 +38,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Replay now reconstructs non-default-config books deterministically (#101).**
+  Every public `ReplayEngine` entry point built the target book with all
+  configuration left at its defaults (`tick_size` / `lot_size` / `min_order_size`
+  / `max_order_size` = `None`, `stp_mode` = `None`, `fee_schedule` = `None`), so
+  replaying a journal produced by a book that used those — for example a
+  `MarketOrderByAmount` rounding per level under a `lot_size` — rebuilt a
+  **structurally different** book and could fail `snapshots_match` at verify.
+  Two caller-supplied config variants now inject the original configuration into
+  the fresh book *before* replay: `ReplayEngine::replay_from_with_config` and
+  `ReplayEngine::replay_from_with_clock_and_config`, both taking a new
+  `ReplayBookConfig` carrier (the same six fields persisted in
+  `OrderBookSnapshotPackage`). Two `Option`-taking book setters back this up —
+  `OrderBook::set_tick_size_opt` and `OrderBook::set_lot_size_opt` — alongside
+  the existing `set_min_order_size` / `set_max_order_size` / `set_fee_schedule` /
+  `set_stp_mode`. The configuration is supplied by the **caller** and is not read
+  from the journal, so the on-disk format is unchanged and
+  `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` is **not** bumped. The plain `replay_from`
+  / `replay_from_with_clock` entry points are now documented as valid only for
+  default-config books. `ReplayBookConfig` is re-exported at the crate root and
+  in the prelude.
+
 - **Atomic modify: a rejected modify no longer destroys the original order (#98).**
   `UpdatePrice` / `UpdatePriceAndQuantity` / `Replace` previously cancelled the
   resting order *before* re-adding it, so a **pre-match admission rejection** in
