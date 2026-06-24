@@ -38,6 +38,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Evict zeroed per-account risk counters; self-balancing fill accounting (#115).**
+  Two hardening fixes in the opt-in pre-trade risk layer (`risk.rs`). (a) `RiskState`
+  kept a per-account `RiskCounters` entry forever — `on_fill`/`on_cancel` decremented
+  the atomics but never removed the entry once `open_count` and `resting_notional`
+  both reached zero, so the map grew monotonically with every distinct account ever
+  seen (a slow leak on a long-running, high-cardinality venue that gradually raised
+  `DashMap` cost on the risk path). A new `evict_if_zeroed` now drops the entry via
+  `DashMap::remove_if` once both counters are zero, called from the `on_fill` full-fill
+  branch and from `on_cancel`. `remove_if` re-checks the predicate under the shard
+  write lock, so it cannot race a concurrent `on_admission` (which holds the same lock
+  for its `entry().or_default()` increment): an admission in flight is observed as a
+  non-zero `open_count` and the entry is kept. (b) `on_fill` decremented
+  `resting_notional` using the passed `maker_price` (`trade.price()`); it now uses the
+  maker's **stored admission price** (`RiskEntry::price`), so admission/fill/cancel are
+  self-balancing by construction rather than relying on the cross-module
+  `maker.price == trade.price` guarantee. `maker_price` is retained only as a debug
+  assertion documenting that the two coincide today (a future price-improvement path
+  that breaks the equality must revisit the accounting).
 - **Deterministic, non-crossing pegged/trailing-stop repricing (#106).** Two
   fixes in the `special_orders`-gated repricing path. (a) `pegged_order_ids()` and
   `trailing_stop_ids()` collected from a `DashSet<Id>` in unspecified order, so the

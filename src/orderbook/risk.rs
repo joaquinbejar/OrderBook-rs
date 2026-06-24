@@ -494,10 +494,23 @@ impl RiskState {
     ///
     /// Decrements the maker's `remaining_qty` and the per-account
     /// `resting_notional`. If the maker is fully filled, decrements
-    /// `open_count` and removes the entry. No-op when the maker is
-    /// not tracked (e.g. risk was disabled when the maker was
-    /// admitted, or the entry was already evicted by a prior cancel
-    /// in the same submit call).
+    /// `open_count`, removes the per-order entry, and evicts the
+    /// per-account counters when the account drops to zero resting
+    /// orders and zero notional (see [`Self::evict_if_zeroed`]). No-op
+    /// when the maker is not tracked (e.g. risk was disabled when the
+    /// maker was admitted, or the entry was already evicted by a prior
+    /// cancel in the same submit call).
+    ///
+    /// `resting_notional` is reduced using the maker's **stored
+    /// admission price** (`RiskEntry::price`), not the passed
+    /// `maker_price`. The account's resting exposure was booked at the
+    /// admission price, so admission / fill / cancel stay self-balancing
+    /// regardless of the execution price. `maker_price` is kept only as
+    /// a debug tripwire: today the matcher always trades a maker at its
+    /// resting price (and a modify / repricing re-admits a fresh entry
+    /// at the new price), so the two coincide; a future
+    /// price-improvement path that breaks that equality must revisit
+    /// this accounting.
     ///
     /// Both decrements clamp at zero via saturating CAS — under a
     /// double-fill / fill-cancel race the worst case is a counter
@@ -510,17 +523,25 @@ impl RiskState {
         }
         // Read-modify-write the entry. Use `get_mut` for the partial
         // case and `remove` for the full case to keep the map small.
-        let (account, fully_filled) = {
+        let (account, entry_price, fully_filled) = {
             let Some(mut entry) = self.orders.get_mut(&maker_id) else {
                 return;
             };
             let new_remaining = entry.remaining_qty.saturating_sub(filled_qty);
             let account = entry.account;
+            let entry_price = entry.price;
             entry.remaining_qty = new_remaining;
-            (account, new_remaining == 0)
+            (account, entry_price, new_remaining == 0)
         };
 
-        let notional_delta = (filled_qty as u128).saturating_mul(maker_price);
+        // Self-balancing: release the filled portion at the admission
+        // price the notional was booked at. See the method docs for why
+        // `maker_price` is only an assertion.
+        debug_assert_eq!(
+            maker_price, entry_price,
+            "a maker fills at its resting price today; revisit resting_notional accounting before adding price improvement"
+        );
+        let notional_delta = (filled_qty as u128).saturating_mul(entry_price);
 
         if let Some(counters_ref) = self.counters.get(&account) {
             saturating_sub_u128(&counters_ref.resting_notional, notional_delta);
@@ -528,17 +549,50 @@ impl RiskState {
                 saturating_sub_u64(&counters_ref.open_count, 1);
             }
         }
-
+        // `counters_ref` (a read guard on the counters shard) is dropped at
+        // the closing brace above, BEFORE `evict_if_zeroed` takes the write
+        // guard on the same shard. DashMap shards are non-reentrant, so this
+        // ordering matters: do not widen the read-guard scope across the
+        // eviction call or it self-deadlocks.
         if fully_filled {
             self.orders.remove(&maker_id);
+            self.evict_if_zeroed(account);
         }
+    }
+
+    /// Atomically evict an account's [`RiskCounters`] once it has no
+    /// resting orders and zero resting notional, so the per-account map
+    /// tracks currently-active accounts instead of growing with every
+    /// distinct account ever seen.
+    ///
+    /// Race-safe against [`Self::on_admission`]. `remove_if` evaluates the
+    /// predicate while holding the counters shard's write lock, and
+    /// `on_admission` holds that *same* lock across its whole
+    /// `entry(account).or_default()` plus the `open_count` /
+    /// `resting_notional` increments — the `RefMut` is bound for the rest
+    /// of that call — so this never observes a half-incremented counter.
+    /// The two serialize: either the admission commits first and the
+    /// predicate reads a non-zero `open_count` and keeps the entry, or the
+    /// eviction commits first and the admission recreates the entry from
+    /// zero. Eviction therefore reliably reclaims any account that reaches
+    /// a genuine zero-resting state (the decrement that zeroes the account
+    /// is the same call that attempts the eviction) without ever evicting
+    /// an account that still has — or is concurrently regaining — a
+    /// resting order.
+    #[inline]
+    fn evict_if_zeroed(&self, account: Hash32) {
+        self.counters.remove_if(&account, |_, c| {
+            c.open_count.load(Ordering::Relaxed) == 0 && c.resting_notional.load() == 0
+        });
     }
 
     /// Hook on cancel of a resting order.
     ///
     /// Removes the entry and decrements both per-account counters
-    /// using the entry's stored `remaining_qty` and `price`. No-op
-    /// when the entry is not present.
+    /// using the entry's stored `remaining_qty` and `price`, then
+    /// evicts the per-account counters when the account drops to zero
+    /// resting orders and zero notional (see [`Self::evict_if_zeroed`]).
+    /// No-op when the entry is not present.
     ///
     /// Both decrements clamp at zero via saturating CAS — same
     /// rationale as \[`on_fill`\].
@@ -554,6 +608,9 @@ impl RiskState {
             saturating_sub_u64(&counters_ref.open_count, 1);
             saturating_sub_u128(&counters_ref.resting_notional, notional_delta);
         }
+        // `counters_ref` read guard dropped above before the write guard in
+        // `evict_if_zeroed` — same non-reentrant shard, must not overlap.
+        self.evict_if_zeroed(entry.account);
     }
 
     /// Drop all per-order risk entries and per-account counters in one shot.
@@ -794,13 +851,147 @@ mod tests {
         drop(counters);
 
         state.on_cancel(order_id);
+        // #115: the per-account counters entry is evicted once the account's
+        // last resting order is removed (open_count and resting_notional both 0),
+        // rather than lingering at zero and growing the map monotonically.
+        assert!(
+            state.counters.get(&acct).is_none(),
+            "counters entry evicted after the account's last order is cancelled"
+        );
+        assert!(state.counters.is_empty());
+        assert!(!state.orders.contains_key(&order_id));
+    }
+
+    #[test]
+    fn test_on_fill_full_evicts_counters_issue_115() {
+        let mut state = RiskState::new();
+        state.set_config(RiskConfig::new().with_max_notional_per_account(1_000_000));
+
+        let acct = account(4);
+        let order_id = Id::new_uuid();
+        state.on_admission(order_id, acct, 100, 10);
+
+        // Fully fill the account's only resting order: the per-order entry and
+        // the now-zeroed per-account counters are both removed.
+        state.on_fill(order_id, 10, 100);
+
+        assert!(
+            state.counters.get(&acct).is_none(),
+            "counters entry evicted after the account's last order is fully filled"
+        );
+        assert!(state.counters.is_empty());
+        assert!(!state.orders.contains_key(&order_id));
+    }
+
+    #[test]
+    fn test_admission_fill_cancel_notional_self_balances_issue_115() {
+        let mut state = RiskState::new();
+        state.set_config(RiskConfig::new().with_max_notional_per_account(1_000_000));
+
+        let acct = account(5);
+        let order_id = Id::new_uuid();
+        // Admit 10 @ 100 → resting_notional 1_000.
+        state.on_admission(order_id, acct, 100, 10);
+        assert_eq!(
+            state
+                .counters
+                .get(&acct)
+                .map(|c| c.resting_notional.load())
+                .unwrap_or(0),
+            1_000
+        );
+
+        // Partial fill 4 @ 100 releases 400 at the entry's stored admission
+        // price → resting_notional 600, open_count still 1 (entry retained).
+        state.on_fill(order_id, 4, 100);
         let counters = state
             .counters
             .get(&acct)
-            .expect("counters entry retained after cancel");
-        assert_eq!(counters.open_count.load(Ordering::Relaxed), 0);
-        assert_eq!(counters.resting_notional.load(), 0);
-        assert!(!state.orders.contains_key(&order_id));
+            .expect("entry retained on partial");
+        assert_eq!(counters.open_count.load(Ordering::Relaxed), 1);
+        assert_eq!(counters.resting_notional.load(), 600);
+        drop(counters);
+
+        // Cancel the remaining 6 @ 100 releases the last 600 → both counters
+        // reach 0 and the account entry is evicted. Admission/fill/cancel
+        // self-balance to exactly zero with no residual notional.
+        state.on_cancel(order_id);
+        assert!(
+            state.counters.get(&acct).is_none(),
+            "counters self-balance to zero and evict after the last release"
+        );
+        assert!(state.orders.is_empty());
+    }
+
+    #[test]
+    fn test_concurrent_admission_vs_eviction_is_consistent_issue_115() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        // Race a full-fill eviction of order A against a fresh admission of
+        // order B on the SAME account, repeatedly, to exercise the
+        // `evict_if_zeroed` / `on_admission` interleaving on the shared
+        // counters shard. The ground-truth invariant that must always hold:
+        // `open_count` equals the number of the account's orders still in the
+        // per-order map. The eviction must never strand the account by
+        // dropping B's increment (phantom under-count) nor wrap a counter.
+        const ROUNDS: usize = 500;
+        let acct = account(21);
+        let a = Id::from_u64(1);
+        let b = Id::from_u64(2);
+
+        for round in 0..ROUNDS {
+            let mut state = RiskState::new();
+            state.set_config(RiskConfig::new().with_max_open_orders_per_account(10_000));
+            // Pre-admit A so the account sits at open_count == 1.
+            state.on_admission(a, acct, 100, 1);
+            let state = Arc::new(state);
+            let barrier = Arc::new(Barrier::new(2));
+
+            let (s1, b1) = (Arc::clone(&state), Arc::clone(&barrier));
+            let t1 = thread::spawn(move || {
+                b1.wait();
+                s1.on_fill(a, 1, 100); // full fill of A → attempts eviction
+            });
+            let (s2, b2) = (Arc::clone(&state), Arc::clone(&barrier));
+            let t2 = thread::spawn(move || {
+                b2.wait();
+                s2.on_admission(b, acct, 100, 1); // concurrent admission of B
+            });
+            t1.join().expect("fill thread");
+            t2.join().expect("admission thread");
+
+            // A is gone, B rests — regardless of who won the race.
+            assert!(
+                !state.orders.contains_key(&a),
+                "round {round}: A fully filled"
+            );
+            assert!(
+                state.orders.contains_key(&b),
+                "round {round}: B's entry survives"
+            );
+
+            // open_count must equal the account's live resting-order count.
+            // B is the only resting order, so this is exactly 1; never 0 (a lost
+            // increment / phantom eviction) and never a wrapped value.
+            let resting = state.orders.iter().filter(|e| e.account == acct).count() as u64;
+            assert_eq!(
+                open_count_of(&state, acct),
+                resting,
+                "round {round}: open_count must track the live resting-order count, never under/overcount"
+            );
+
+            // Drain B: the account fully zeroes and the entry is evicted.
+            state.on_cancel(b);
+            assert!(
+                state.counters.get(&acct).is_none(),
+                "round {round}: account evicted once its last order is removed"
+            );
+            assert!(
+                state.orders.is_empty(),
+                "round {round}: no stranded entries"
+            );
+        }
     }
 
     #[test]
@@ -838,15 +1029,24 @@ mod tests {
         state.set_config(RiskConfig::new().with_max_open_orders_per_account(10));
 
         let acct = account(4);
-        let order_id = Id::new_uuid();
-        state.on_admission(order_id, acct, 100, 10);
+        let keep = Id::new_uuid();
+        let fill = Id::new_uuid();
+        // Two resting orders for the account. Fully filling one decrements
+        // open_count by exactly one; the entry is retained because the
+        // account still has a resting order (eviction needs both counters at 0).
+        state.on_admission(keep, acct, 100, 10);
+        state.on_admission(fill, acct, 100, 10);
 
-        state.on_fill(order_id, 10, 100);
+        state.on_fill(fill, 10, 100);
 
-        let counters = state.counters.get(&acct).expect("counters entry retained");
-        assert_eq!(counters.open_count.load(Ordering::Relaxed), 0);
-        assert_eq!(counters.resting_notional.load(), 0);
-        assert!(!state.orders.contains_key(&order_id));
+        let counters = state
+            .counters
+            .get(&acct)
+            .expect("entry retained while the account still has a resting order");
+        assert_eq!(counters.open_count.load(Ordering::Relaxed), 1);
+        assert_eq!(counters.resting_notional.load(), 1_000);
+        assert!(!state.orders.contains_key(&fill));
+        assert!(state.orders.contains_key(&keep));
     }
 
     #[test]
@@ -1062,9 +1262,14 @@ mod tests {
         // Decrement by far more than what was admitted.
         state.on_fill(order_id, 1_000_000, 100);
 
-        let counters = state.counters.get(&acct).expect("counters present");
-        assert_eq!(counters.open_count.load(Ordering::Relaxed), 0);
-        assert_eq!(counters.resting_notional.load(), 0);
+        // Both counters saturate to zero (never wrap) and the account entry is
+        // evicted. Eviction is itself the no-wrap proof: a wrapped counter would
+        // read as a huge non-zero value and the eviction predicate would retain it.
+        assert!(
+            state.counters.get(&acct).is_none(),
+            "overshoot fill saturates to zero and evicts; a wrap would leave a non-zero count and retain the entry"
+        );
+        assert!(state.orders.is_empty());
     }
 
     #[test]
@@ -1078,12 +1283,16 @@ mod tests {
         let acct = account(13);
         let order_id = Id::new_uuid();
         state.on_admission(order_id, acct, 100, 5);
-        state.on_fill(order_id, 5, 100); // entry removed, counters at 0
+        state.on_fill(order_id, 5, 100); // entry removed, counters evicted at 0
         state.on_cancel(order_id); // no-op (entry not present)
 
-        let counters = state.counters.get(&acct).expect("counters present");
-        assert_eq!(counters.open_count.load(Ordering::Relaxed), 0);
-        assert_eq!(counters.resting_notional.load(), 0);
+        // The full fill drove both counters to zero and evicted the entry; the
+        // trailing cancel finds no entry, so it cannot underflow the counters.
+        assert!(
+            state.counters.get(&acct).is_none(),
+            "fill evicted the zeroed entry; the later cancel is a no-op and cannot wrap"
+        );
+        assert!(state.orders.is_empty());
     }
 
     // ───────────────────────────────────────────────────────────────
