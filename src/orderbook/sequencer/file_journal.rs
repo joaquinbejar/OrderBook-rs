@@ -73,6 +73,7 @@ impl SegmentWriter {
 
         // SAFETY: The file is exclusively owned by this process and will not
         // be truncated or modified externally while the mmap is active.
+        #[allow(unsafe_code)]
         let mmap = unsafe {
             MmapMut::map_mut(&file).map_err(|e| JournalError::Io {
                 message: e.to_string(),
@@ -110,6 +111,7 @@ impl SegmentWriter {
 
         // SAFETY: The file is exclusively owned by this process and will not
         // be truncated or modified externally while the mmap is active.
+        #[allow(unsafe_code)]
         let mmap = unsafe {
             MmapMut::map_mut(&file).map_err(|e| JournalError::Io {
                 message: e.to_string(),
@@ -519,6 +521,7 @@ where
 
             // SAFETY: Read-only mapping of a file we just opened; file is not
             // modified concurrently (single-writer pattern).
+            #[allow(unsafe_code)]
             let mmap = unsafe {
                 memmap2::Mmap::map(&file).map_err(|e| JournalError::Io {
                     message: e.to_string(),
@@ -681,6 +684,7 @@ where
 
         // SAFETY: Read-only mapping; single-writer pattern ensures the
         // segment is not modified concurrently by another writer.
+        #[allow(unsafe_code)]
         let mmap = unsafe {
             memmap2::Mmap::map(&file).map_err(|e| JournalError::Io {
                 message: e.to_string(),

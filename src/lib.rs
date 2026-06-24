@@ -548,6 +548,13 @@
 //!
 //! This analysis confirms that the system design is highly scalable and appropriate for demanding financial applications requiring high-speed processing with data consistency.
 
+// Safety and documentation discipline (rules/global_rules.md, CLAUDE.md):
+// no `unsafe` may ship without an explicit, documented `#[allow(unsafe_code)]`
+// (the mmap blocks in `sequencer::file_journal` and the `CountingAllocator`
+// module), and every `pub` item must carry a doc comment.
+#![deny(unsafe_code)]
+#![warn(missing_docs)]
+
 pub mod orderbook;
 
 pub mod prelude;

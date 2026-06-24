@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Restored `#![deny(unsafe_code)]` and `#![warn(missing_docs)]` on `lib.rs` (#90).**
+  Both crate-level attributes — mandated by `rules/global_rules.md` and `CLAUDE.md` —
+  had drifted off `src/lib.rs`, silently allowing `unsafe` to creep in and `pub`
+  items to ship undocumented (the `counting_allocator` module even documented a
+  `deny` that no longer existed). The deny is restored; the only authorized `unsafe`
+  — the four `memmap2` mmap blocks in `sequencer::file_journal` and the
+  `CountingAllocator` `GlobalAlloc` impl — now carry an explicit
+  `#[allow(unsafe_code)]` alongside their existing `// SAFETY:` rationale. The
+  `missing_docs` warn surfaces zero warnings on `--all-features`.
 - **Protocol counters use `checked_*` instead of `saturating_*` (#91).** Per the
   no-saturating-on-protocol-counters rule, the remaining protocol-state counters
   no longer silently cap on overflow. `file_journal`'s `archive_segments_before`
