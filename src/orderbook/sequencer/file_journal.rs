@@ -308,7 +308,13 @@ where
                     message: e.to_string(),
                     path: Some(src),
                 })?;
-                archived = archived.saturating_add(1);
+                // checked_add (not saturating) so an overflow surfaces as a
+                // typed error rather than silently capping the tally.
+                archived = archived
+                    .checked_add(1)
+                    .ok_or(JournalError::CounterOverflow {
+                        counter: "archived segment count",
+                    })?;
             }
         }
 
@@ -658,7 +664,14 @@ where
 
         let start_seq = self.segments[self.segment_idx];
         let path = segment_path(&self.dir, start_seq);
-        self.segment_idx = self.segment_idx.saturating_add(1);
+        // checked_add (not saturating) so an overflow surfaces as a typed error
+        // rather than silently stalling the segment cursor.
+        self.segment_idx =
+            self.segment_idx
+                .checked_add(1)
+                .ok_or(JournalError::CounterOverflow {
+                    counter: "segment index",
+                })?;
         self.offset = 0;
 
         let file = File::open(&path).map_err(|e| JournalError::Io {

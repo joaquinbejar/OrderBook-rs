@@ -629,7 +629,12 @@ impl NatsTradePublisher {
         payload: bytes::Bytes,
         headers: async_nats::HeaderMap,
     ) -> bool {
-        let max_attempts = publisher.max_retries.saturating_add(1);
+        // Widen to u64 so the `+ 1` cannot overflow even when `max_retries`
+        // is `u32::MAX` — no saturating cap on this retry counter (per the
+        // no-saturating-on-protocol-counters rule). The delay-clamp
+        // `saturating_mul` below intentionally stays: it bounds the backoff
+        // duration, not a protocol counter.
+        let max_attempts = u64::from(publisher.max_retries) + 1;
 
         for attempt in 0..max_attempts {
             let publish_result = publisher
@@ -667,7 +672,8 @@ impl NatsTradePublisher {
             // Exponential backoff: 10ms, 20ms, 40ms, ... clamped to avoid
             // panic from over-shifting when max_retries is large.
             if attempt + 1 < max_attempts {
-                let shift = u32::min(attempt, 63);
+                // `attempt.min(63)` is ≤ 63, so the cast to u32 is lossless.
+                let shift = attempt.min(63) as u32;
                 let delay_ms =
                     BASE_RETRY_DELAY_MS.saturating_mul(1u64.checked_shl(shift).unwrap_or(u64::MAX));
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;

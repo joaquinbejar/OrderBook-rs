@@ -38,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Protocol counters use `checked_*` instead of `saturating_*` (#91).** Per the
+  no-saturating-on-protocol-counters rule, the remaining protocol-state counters
+  no longer silently cap on overflow. `file_journal`'s `archive_segments_before`
+  tally and the `SegmentIterator` segment index now use `checked_add` and surface
+  overflow as a new typed `JournalError::CounterOverflow`. The two NATS retry
+  bounds (`max_attempts = max_retries + 1`) are computed in `u64` so the `+ 1`
+  cannot overflow even at `max_retries == u32::MAX` — no saturating cap — while the
+  backoff-delay `saturating_mul` clamps stay (they bound a duration, not a
+  counter). The replay sequence counters (#126) and the dead `saturating_sub(0)`
+  in `encode_entry` (#110) were already converted earlier in this cycle. Unreachable
+  at any realistic journal size; the value is rule compliance and correct failure
+  semantics at the boundary.
 - **Boundary arithmetic in fee/analytics math is overflow-safe (#114).** Several
   monetary/price sites used unguarded casts or sums that wrap/panic on extreme
   inputs. `FeeSchedule::calculate_fee` cast `notional: u128` to `i128` with a bare

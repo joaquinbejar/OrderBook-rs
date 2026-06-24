@@ -73,6 +73,15 @@ pub enum JournalError {
         /// Description of the header problem.
         message: String,
     },
+
+    /// A protocol counter (archived-segment tally, segment index) overflowed
+    /// while advancing. Surfaced as a typed error rather than silently capping,
+    /// per the no-saturating-on-protocol-counters rule. Unreachable at any
+    /// realistic journal size.
+    CounterOverflow {
+        /// Name of the counter that overflowed.
+        counter: &'static str,
+    },
 }
 
 impl fmt::Display for JournalError {
@@ -130,6 +139,9 @@ impl fmt::Display for JournalError {
                     "invalid journal entry header at offset {offset}: {message}"
                 )
             }
+            JournalError::CounterOverflow { counter } => {
+                write!(f, "journal counter overflowed: {counter}")
+            }
         }
     }
 }
@@ -143,5 +155,20 @@ impl From<std::io::Error> for JournalError {
             message: err.to_string(),
             path: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_counter_overflow_display() {
+        let err = JournalError::CounterOverflow {
+            counter: "archived segment count",
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("counter overflowed"));
+        assert!(msg.contains("archived segment count"));
     }
 }
