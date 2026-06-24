@@ -182,7 +182,10 @@ mod tests {
         let trade_result = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
         assert_eq!(trade_result.symbol, "TEST/USD");
         assert_eq!(
-            trade_result.match_result.executed_quantity().unwrap_or(0),
+            trade_result
+                .match_result
+                .executed_quantity()
+                .map_or(0, |q| q.as_u64()),
             30
         );
     }
