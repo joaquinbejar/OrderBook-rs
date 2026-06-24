@@ -79,6 +79,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Cancelled { SelfTradePrevention }` with the true filled quantity and returns
   `SelfTradePrevented`) instead of resting it. The public `match_order` /
   `match_order_with_user` signatures are unchanged.
+- **STP scan follows insertion-sequence (sweep) order (#132).** Bumped `pricelevel`
+  0.8.0 → 0.8.1 for `PriceLevel::snapshot_by_insertion_seq()`. The STP pre-scan and
+  the FOK feasibility scan now read it instead of `snapshot_orders()`
+  (`(timestamp, sequence)`-ordered), so `safe_quantity` and the cancelled / selected
+  maker match what `match_order` actually consumes even under non-monotonic
+  timestamps — closing the consumption-fidelity gap that #94 left open (and which the
+  #94 determinism fix only addressed for monotonic timestamps).
 
 ## [0.8.0] — 2026-05-03
 

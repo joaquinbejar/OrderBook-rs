@@ -84,16 +84,19 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // STP determinism (#94) — the per-level scan must follow price-time
-    // priority (timestamp order), not the DashMap iteration order. With the
-    // pre-scan reading `snapshot_orders()` (timestamp-sorted) instead of
-    // `iter_orders()` (DashMap, non-stable), `safe_quantity` and the
-    // CancelBoth maker selection are reproducible for a given book state.
+    // STP determinism (#94) + consumption fidelity (#132) — the per-level scan
+    // must follow the sweep's consumption order (insertion sequence), not the
+    // DashMap iteration order. The pre-scan reads `snapshot_by_insertion_seq()`
+    // (pricelevel 0.8.1), so `safe_quantity` and the CancelBoth maker selection
+    // are deterministic AND match what `match_order` actually consumes — even
+    // under non-monotonic timestamps. (#94 first made it deterministic via the
+    // timestamp-sorted `snapshot_orders()`; #132 made it sweep-faithful.)
     // -----------------------------------------------------------------------
 
     /// CancelTaker accumulates `safe_quantity` over the orders that precede the
-    /// first same-user maker *in timestamp order*, so the taker fills exactly the
-    /// older non-self liquidity before the self-trade is prevented.
+    /// first same-user maker *in insertion (sweep) order* — here the orders are
+    /// added in timestamp order so the two coincide — so the taker fills exactly
+    /// the older non-self liquidity before the self-trade is prevented.
     #[test]
     fn test_cancel_taker_scan_follows_time_priority_at_one_level() {
         let mut book: OrderBook<()> = OrderBook::new("TEST");
@@ -140,8 +143,9 @@ mod tests {
         assert!(book.get_order(m2).is_none());
     }
 
-    /// CancelBoth cancels the *earliest* same-user maker by timestamp (not an
-    /// arbitrary one chosen by DashMap order) and fills the older non-self liquidity.
+    /// CancelBoth cancels the *earliest* same-user maker in insertion (sweep) order
+    /// — here equal to timestamp order — not an arbitrary one chosen by DashMap
+    /// order, and fills the older non-self liquidity.
     #[test]
     fn test_cancel_both_cancels_earliest_self_maker_by_time() {
         let mut book: OrderBook<()> = OrderBook::new("TEST");
@@ -178,6 +182,48 @@ mod tests {
         assert!(
             book.get_order(o1).is_none(),
             "older non-self order fully consumed"
+        );
+    }
+
+    /// #132: the STP scan follows the sweep's INSERTION-sequence consumption order
+    /// (via `snapshot_by_insertion_seq`, pricelevel 0.8.1), not timestamp order, so
+    /// it stays correct even when timestamps are non-monotonic with insertion
+    /// (client-supplied / modify-restamped). Here the same-user order is inserted
+    /// SECOND but carries an EARLIER timestamp; the sweep consumes the other-user
+    /// order first, so CancelTaker must fill it before the self-cross — which only
+    /// insertion-order scanning gets right (a timestamp scan would cancel with 0 fills).
+    #[test]
+    fn test_cancel_taker_scan_follows_insertion_not_timestamp_order() {
+        let mut book: OrderBook<()> = OrderBook::new("TEST");
+        book.set_stp_mode(STPMode::CancelTaker);
+
+        let taker_user = user(9);
+        let other = user(1);
+
+        // Same price 100. Insertion order (what the sweep consumes): other, then
+        // self — but timestamps are non-monotonic with insertion (self is older).
+        let m_other = add_sell_order_with_ts(&book, 100, 4, other, 30);
+        let m_self = add_sell_order_with_ts(&book, 100, 5, taker_user, 10);
+
+        let result = book.match_market_order_with_user(Id::new(), 20, Side::Buy, taker_user);
+
+        assert!(
+            result.is_ok(),
+            "expected a 4-unit partial fill, got {result:?}"
+        );
+        let mr = result.unwrap();
+        let trades = mr.trades().as_vec();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].maker_order_id(), m_other);
+        assert_eq!(trades[0].quantity(), Quantity::new(4));
+
+        assert!(
+            book.get_order(m_self).is_some(),
+            "self order survives CancelTaker"
+        );
+        assert!(
+            book.get_order(m_other).is_none(),
+            "other-user order is consumed first by insertion order"
         );
     }
 

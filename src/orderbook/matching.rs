@@ -395,17 +395,15 @@ where
             // When STP is active, check for self-trade conflicts before matching.
             // This is done per-price-level to handle partial fills correctly.
             if stp_active {
-                // `check_stp_at_level` needs the resting orders in the order the sweep
-                // will consume them. `iter_orders()` is DashMap-backed (non-stable) and
-                // makes `safe_quantity` / the CancelBoth `maker_order_id` non-deterministic,
-                // which breaks replay (#94) — so use the deterministic `snapshot_orders()`.
-                //
-                // PRECONDITION: `snapshot_orders()` is `(timestamp, sequence)`-ordered,
-                // whereas `match_order` consumes by pure insertion sequence; these coincide
-                // only when timestamps are monotonic with insertion (the normal case). Under
-                // non-monotonic timestamps the scan can diverge from the sweep — tracked in
-                // #132 (needs an insertion-sequence accessor upstream, PriceLevel#102).
-                let orders = price_level.snapshot_orders();
+                // `check_stp_at_level` must see the resting orders in the exact order
+                // the sweep consumes them — pure insertion sequence — so `safe_quantity`
+                // and the CancelBoth `maker_order_id` correspond to what `match_order`
+                // will actually fill/cancel. `snapshot_by_insertion_seq()` (pricelevel
+                // 0.8.1) gives that order; it is deterministic (fixing the #94 DashMap
+                // non-determinism) AND faithful to the sweep even under non-monotonic
+                // timestamps, unlike `snapshot_orders()` which is `(timestamp, seq)`-ordered
+                // (the residual gap closed by #132 / PriceLevel#102).
+                let orders = price_level.snapshot_by_insertion_seq();
                 let action = check_stp_at_level(&orders, taker_user_id, self.stp_mode);
 
                 match action {
@@ -924,7 +922,10 @@ where
             // hidden), not the level's raw total, so a non-auto-replenish reserve's
             // undrawable hidden tranche is not counted (#96).
             let (reachable, stop_after) = if stp_active {
-                let orders = price_level.snapshot_orders();
+                // Insertion-sequence order = the sweep's consumption order, so the
+                // feasibility STP decision matches the real match even under
+                // non-monotonic timestamps (#132).
+                let orders = price_level.snapshot_by_insertion_seq();
                 match check_stp_at_level(&orders, taker_user_id, self.stp_mode) {
                     STPAction::NoConflict => {
                         (orders.iter().map(|o| order_matchable_qty(o)).sum(), false)

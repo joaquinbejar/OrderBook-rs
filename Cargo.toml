@@ -141,7 +141,7 @@ members = [
 
 [workspace.dependencies]
 orderbook-rs = { path = "." }
-pricelevel = "0.8"
+pricelevel = "0.8.1"
 tracing = "0.1"
 uuid = { version = "1.23", features = ["v4", "v5", "serde"] }
 dashmap = "6.2"
