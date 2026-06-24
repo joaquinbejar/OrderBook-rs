@@ -2756,7 +2756,7 @@ where
         self.market_close_timestamp.store(0, Ordering::Relaxed);
 
         for level_snapshot in snapshot.bids {
-            let price = level_snapshot.price();
+            let price = level_snapshot.price().as_u128();
             let price_level = PriceLevel::from_snapshot(level_snapshot)
                 .map_err(OrderBookError::PriceLevelError)?;
             let arc_level = Arc::new(price_level);
@@ -2764,7 +2764,7 @@ where
         }
 
         for level_snapshot in snapshot.asks {
-            let price = level_snapshot.price();
+            let price = level_snapshot.price().as_u128();
             let price_level = PriceLevel::from_snapshot(level_snapshot)
                 .map_err(OrderBookError::PriceLevelError)?;
             let arc_level = Arc::new(price_level);

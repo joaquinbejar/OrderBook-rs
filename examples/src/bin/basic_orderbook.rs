@@ -1,7 +1,7 @@
 // examples/src/bin/basic_orderbook.rs
 
 use orderbook_rs::{OrderBook, current_time_millis};
-use pricelevel::{Id, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Quantity, Side, TimeInForce, setup_logger};
 use tracing::info;
 
 fn main() {
@@ -230,7 +230,7 @@ fn demo_market_orders(book: &crate::OrderBook) {
         Ok(match_result) => {
             info!(
                 "Market BUY result: executed={}, remaining={}, complete={}, transactions={}",
-                match_result.executed_quantity().unwrap_or(0),
+                match_result.executed_quantity().unwrap_or(Quantity::new(0)),
                 match_result.remaining_quantity(),
                 match_result.is_complete(),
                 match_result.trades().as_vec().len()
@@ -259,7 +259,7 @@ fn demo_market_orders(book: &crate::OrderBook) {
         Ok(match_result) => {
             info!(
                 "Market SELL result: executed={}, remaining={}, complete={}, transactions={}",
-                match_result.executed_quantity().unwrap_or(0),
+                match_result.executed_quantity().unwrap_or(Quantity::new(0)),
                 match_result.remaining_quantity(),
                 match_result.is_complete(),
                 match_result.trades().as_vec().len()
@@ -276,7 +276,7 @@ fn demo_market_orders(book: &crate::OrderBook) {
         Ok(match_result) => {
             info!(
                 "Large market BUY result: executed={}, remaining={}, complete={}",
-                match_result.executed_quantity().unwrap_or(0),
+                match_result.executed_quantity().unwrap_or(Quantity::new(0)),
                 match_result.remaining_quantity(),
                 match_result.is_complete()
             );

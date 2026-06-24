@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::OrderBookSnapshot;
+    use pricelevel::{Price, Quantity};
 
     // Helper function to create an empty snapshot for testing
     fn create_empty_snapshot() -> OrderBookSnapshot {
@@ -211,17 +212,17 @@ mod tests {
         // Check first bid properties
         assert_eq!(
             snapshot.bids[0].price(),
-            1000,
+            Price::new(1000),
             "First bid price should be 1000"
         );
         assert_eq!(
             snapshot.bids[0].visible_quantity(),
-            10,
+            Quantity::new(10),
             "First bid visible quantity should be 10"
         );
         assert_eq!(
             snapshot.bids[0].hidden_quantity(),
-            5,
+            Quantity::new(5),
             "First bid hidden quantity should be 5"
         );
         assert_eq!(
@@ -233,17 +234,17 @@ mod tests {
         // Check first ask properties
         assert_eq!(
             snapshot.asks[0].price(),
-            1010,
+            Price::new(1010),
             "First ask price should be 1010"
         );
         assert_eq!(
             snapshot.asks[0].visible_quantity(),
-            15,
+            Quantity::new(15),
             "First ask visible quantity should be 15"
         );
         assert_eq!(
             snapshot.asks[0].hidden_quantity(),
-            0,
+            Quantity::new(0),
             "First ask hidden quantity should be 0"
         );
         assert_eq!(
@@ -335,13 +336,14 @@ mod tests {
 #[cfg(test)]
 mod tests_bis {
     use crate::OrderBookSnapshot;
+    use pricelevel::{Price, Quantity};
 
     // Helper function to create an improved implementation of best_bid
     fn find_best_bid(snapshot: &OrderBookSnapshot) -> Option<(u128, u64)> {
         snapshot
             .bids
             .iter()
-            .map(|level| (level.price(), level.visible_quantity()))
+            .map(|level| (level.price().as_u128(), level.visible_quantity().as_u64()))
             .max_by_key(|&(price, _)| price)
     }
 
@@ -350,7 +352,7 @@ mod tests_bis {
         snapshot
             .asks
             .iter()
-            .map(|level| (level.price(), level.visible_quantity()))
+            .map(|level| (level.price().as_u128(), level.visible_quantity().as_u64()))
             .min_by_key(|&(price, _)| price)
     }
 
@@ -466,12 +468,12 @@ mod tests_bis {
         // Verify that sorting gives the correct best prices
         assert_eq!(
             best_bid,
-            Some((1000, 10)),
+            Some((Price::new(1000), Quantity::new(10))),
             "First bid after sorting should be highest price"
         );
         assert_eq!(
             best_ask,
-            Some((1010, 15)),
+            Some((Price::new(1010), Quantity::new(15))),
             "First ask after sorting should be lowest price"
         );
     }
@@ -485,7 +487,7 @@ mod tests_bis {
             snapshot
                 .bids
                 .iter()
-                .map(|level| (level.price(), level.visible_quantity()))
+                .map(|level| (level.price().as_u128(), level.visible_quantity().as_u64()))
                 .max_by_key(|&(price, _)| price)
         }
 
@@ -494,7 +496,7 @@ mod tests_bis {
             snapshot
                 .asks
                 .iter()
-                .map(|level| (level.price(), level.visible_quantity()))
+                .map(|level| (level.price().as_u128(), level.visible_quantity().as_u64()))
                 .min_by_key(|&(price, _)| price)
         }
 

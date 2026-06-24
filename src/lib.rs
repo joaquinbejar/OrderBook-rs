@@ -32,6 +32,31 @@
 //! - **Research**: Platform for studying market microstructure and order flow
 //! - **Educational**: Reference implementation for understanding modern exchange architecture
 //!
+//! ## What's New in Version 0.9.0
+//!
+//! ### v0.9.0 — Upgrade to `pricelevel` 0.8.0 (#130)
+//!
+//! - **Price-time priority preserved across partial fills.** Picks up the
+//!   upstream `pricelevel` fix (PriceLevel#39) where a partially-filled resting
+//!   maker keeps its place at the front of the level queue, resolving #88: a
+//!   partial fill no longer demotes the maker behind later same-price arrivals.
+//!   Locked in by `test_partial_fill_preserves_price_time_priority_issue_88`.
+//! - **Deterministic match timestamps.** `PriceLevel::match_order` no longer
+//!   reads the wall clock; the engine passes the book's [`Clock`](crate::Clock)
+//!   time as the taker timestamp, so trade timestamps follow the installed clock
+//!   and replay stays deterministic.
+//! - **Domain newtypes on the public surface (breaking).** Through the
+//!   `pricelevel` re-exports and `MatchResult` / `OrderType` accessors, several
+//!   values now carry `Quantity` / `Price` / `TimestampMs` instead of raw
+//!   `u64` / `u128` (e.g. `MatchResult::remaining_quantity()` now returns
+//!   `Quantity`). OrderBook-rs's own snapshot / statistics queries are unchanged
+//!   and still return raw integers; downstream code reading `pricelevel` types
+//!   through the re-exports may need `.as_u64()` / `.as_u128()`. Minor bump under
+//!   `0.x` semver.
+//! - **Dependency refresh:** `pricelevel` 0.7→0.8, `async-nats` 0.47→0.49,
+//!   `dashmap` 6.1→6.2, `bitflags` 2.11→2.13, `either` 1.15→1.16,
+//!   `crc32fast` 1→1.5, `proptest` 1.7→1.11.
+//!
 //! ## What's New in Version 0.8.0
 //!
 //! ### v0.8.0 — Quote-notional market orders (#85)

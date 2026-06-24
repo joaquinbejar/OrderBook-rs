@@ -1,5 +1,5 @@
 use orderbook_rs::OrderBook;
-use pricelevel::{Id, Side, TimeInForce, setup_logger};
+use pricelevel::{Id, Quantity, Side, TimeInForce, setup_logger};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -270,13 +270,13 @@ fn print_order_book_state(order_book: &OrderBook<OrderMetadata>) {
     let snapshot = order_book.create_snapshot(100); // Get a deep snapshot
 
     for level in &snapshot.bids {
-        total_bid_visible += level.visible_quantity();
-        total_bid_hidden += level.hidden_quantity();
+        total_bid_visible += level.visible_quantity().as_u64();
+        total_bid_hidden += level.hidden_quantity().as_u64();
     }
 
     for level in &snapshot.asks {
-        total_ask_visible += level.visible_quantity();
-        total_ask_hidden += level.hidden_quantity();
+        total_ask_visible += level.visible_quantity().as_u64();
+        total_ask_hidden += level.hidden_quantity().as_u64();
     }
 
     info!(
@@ -304,7 +304,7 @@ fn print_order_book_state(order_book: &OrderBook<OrderMetadata>) {
             "  [{}] Price: {}, Quantity: {} (Visible: {}, Hidden: {}), Orders: {}",
             i + 1,
             level.price(),
-            level.visible_quantity() + level.hidden_quantity(),
+            level.visible_quantity().as_u64() + level.hidden_quantity().as_u64(),
             level.visible_quantity(),
             level.hidden_quantity(),
             level.order_count()
@@ -317,7 +317,7 @@ fn print_order_book_state(order_book: &OrderBook<OrderMetadata>) {
             "  [{}] Price: {}, Quantity: {} (Visible: {}, Hidden: {}), Orders: {}",
             i + 1,
             level.price(),
-            level.visible_quantity() + level.hidden_quantity(),
+            level.visible_quantity().as_u64() + level.hidden_quantity().as_u64(),
             level.visible_quantity(),
             level.hidden_quantity(),
             level.order_count()
@@ -514,7 +514,7 @@ fn spawn_taker_thread(
 
             // Only count successful matches
             if let Ok(match_result) = result {
-                if match_result.executed_quantity().unwrap_or(0) > 0 {
+                if match_result.executed_quantity().unwrap_or(Quantity::new(0)) > Quantity::new(0) {
                     local_count += 1;
                 }
             }

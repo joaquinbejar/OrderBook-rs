@@ -102,7 +102,7 @@ impl<T> OrderQuantity<T> for OrderType<T> {
 
                 if visible_quantity.as_u64() == 0 && hidden_quantity.as_u64() > 0 {
                     let refresh = replenish_amount
-                        .map(|q| q.as_u64())
+                        .map(|q| q.get())
                         .unwrap_or(0)
                         .min(hidden_quantity.as_u64());
                     *visible_quantity = Quantity::new(refresh);
@@ -817,10 +817,10 @@ where
 
         // Track the incoming order's state based on matching result
         let original_qty = order.total_quantity();
-        let filled_qty = original_qty.saturating_sub(match_result.remaining_quantity());
+        let filled_qty = original_qty.saturating_sub(match_result.remaining_quantity().as_u64());
 
         // If the order was not fully filled, add the remainder to the book
-        if match_result.remaining_quantity() > 0 {
+        if match_result.remaining_quantity().as_u64() > 0 {
             if order.is_immediate() {
                 // IOC/FOK orders should not have a resting part.
                 // If FOK, it should have been fully filled or cancelled before this point.
@@ -838,14 +838,14 @@ where
                     requested: order.quantity(), // Now uses the trait method
                     available: order
                         .quantity()
-                        .saturating_sub(match_result.remaining_quantity()),
+                        .saturating_sub(match_result.remaining_quantity().as_u64()),
                 });
             }
 
             // Update the order with the remaining quantity
             // For iceberg orders, only update if there was actual matching (remaining < total)
-            if match_result.remaining_quantity() < order.total_quantity() {
-                order.set_quantity(match_result.remaining_quantity()); // Now uses the trait method
+            if match_result.remaining_quantity().as_u64() < order.total_quantity() {
+                order.set_quantity(match_result.remaining_quantity().as_u64()); // Now uses the trait method
             }
 
             let price = order.price().as_u128();
@@ -889,7 +889,7 @@ where
                 unit_order_arc.id(),
                 order.user_id(),
                 price,
-                match_result.remaining_quantity(),
+                match_result.remaining_quantity().as_u64(),
             );
 
             // Track the order in the user_orders index

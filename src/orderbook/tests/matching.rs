@@ -28,6 +28,54 @@ mod tests {
         order_id
     }
 
+    /// Regression test for #88 (fixed upstream in pricelevel#39 / 0.8.0): a
+    /// partially-filled resting maker MUST keep its place at the front of the
+    /// price-level queue. Before pricelevel 0.8 a partial fill demoted the
+    /// maker behind later same-price arrivals, so the next aggressor matched
+    /// the wrong `maker_order_id` — a price-time-priority violation.
+    #[test]
+    fn test_partial_fill_preserves_price_time_priority_issue_88() {
+        let book = setup_book();
+        // A arrives first, B second — identical price, so price-time priority
+        // means A (and its remainder) is consumed entirely before B.
+        let maker_a = add_limit_order(&book, Side::Sell, 100, 10);
+        let maker_b = add_limit_order(&book, Side::Sell, 100, 10);
+
+        // First aggressor partially fills A (A: 10 -> 6).
+        let r1 = book
+            .match_order(Id::new(), Side::Buy, 4, Some(100))
+            .unwrap();
+        let t1 = r1.trades().as_vec();
+        assert_eq!(t1.len(), 1);
+        assert_eq!(t1[0].maker_order_id(), maker_a);
+        assert_eq!(t1[0].quantity(), Quantity::new(4));
+
+        // Second, separate aggressor must continue consuming A's remainder,
+        // NOT jump to the later arrival B (this is the exact #88 failure).
+        let r2 = book
+            .match_order(Id::new(), Side::Buy, 4, Some(100))
+            .unwrap();
+        let t2 = r2.trades().as_vec();
+        assert_eq!(t2.len(), 1);
+        assert_eq!(
+            t2[0].maker_order_id(),
+            maker_a,
+            "partial fill must not demote the resting maker behind later arrivals"
+        );
+
+        // Third aggressor exhausts A's last 2 then spills into B: the trade
+        // order proves A is fully consumed before B is ever touched.
+        let r3 = book
+            .match_order(Id::new(), Side::Buy, 5, Some(100))
+            .unwrap();
+        let t3 = r3.trades().as_vec();
+        assert_eq!(t3.len(), 2);
+        assert_eq!(t3[0].maker_order_id(), maker_a);
+        assert_eq!(t3[0].quantity(), Quantity::new(2));
+        assert_eq!(t3[1].maker_order_id(), maker_b);
+        assert_eq!(t3[1].quantity(), Quantity::new(3));
+    }
+
     #[test]
     fn test_market_buy_full_match() {
         let book = setup_book();
@@ -38,7 +86,7 @@ mod tests {
             .match_order(taker_order_id, Side::Buy, 50, None)
             .unwrap();
 
-        assert_eq!(result.remaining_quantity(), 0);
+        assert_eq!(result.remaining_quantity(), Quantity::new(0));
         assert!(result.is_complete());
         assert_eq!(result.trades().as_vec().len(), 1);
         assert_eq!(book.asks.len(), 0); // The ask side should be empty now
@@ -56,7 +104,7 @@ mod tests {
             .match_order(taker_order_id, Side::Sell, 50, None)
             .unwrap();
 
-        assert_eq!(result.remaining_quantity(), 20);
+        assert_eq!(result.remaining_quantity(), Quantity::new(20));
         assert!(!result.is_complete());
         assert_eq!(result.trades().as_vec().len(), 1);
         assert_eq!(book.bids.len(), 0); // The bid side should be empty
@@ -73,7 +121,7 @@ mod tests {
             .match_order(taker_order_id, Side::Buy, 50, Some(105))
             .unwrap();
 
-        assert_eq!(result.remaining_quantity(), 0);
+        assert_eq!(result.remaining_quantity(), Quantity::new(0));
         assert!(result.is_complete());
         assert_eq!(book.asks.len(), 0);
     }
@@ -89,7 +137,7 @@ mod tests {
             .match_order(taker_order_id, Side::Sell, 50, Some(95))
             .unwrap();
 
-        assert_eq!(result.remaining_quantity(), 50);
+        assert_eq!(result.remaining_quantity(), Quantity::new(50));
         assert!(!result.is_complete());
         assert!(result.trades().as_vec().is_empty());
         assert_eq!(book.bids.len(), 1); // The bid side should be unchanged
@@ -120,7 +168,7 @@ mod tests {
             .match_order(taker_order_id, Side::Buy, 70, None)
             .unwrap();
 
-        assert_eq!(result.remaining_quantity(), 0);
+        assert_eq!(result.remaining_quantity(), Quantity::new(0));
         assert!(result.is_complete());
         assert_eq!(result.trades().as_vec().len(), 3);
         assert_eq!(book.asks.len(), 1); // One price level should remain

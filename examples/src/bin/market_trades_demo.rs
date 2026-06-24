@@ -9,7 +9,7 @@
 use orderbook_rs::prelude::{
     Id, OrderBook, Side, TimeInForce, TradeInfo, TradeListener, TradeResult, TransactionInfo,
 };
-use pricelevel::setup_logger;
+use pricelevel::{Quantity, setup_logger};
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
@@ -140,7 +140,7 @@ fn execute_market_orders(book: &OrderBook) {
         Ok(match_result) => {
             info!(
                 "  ✓ Market BUY executed: {} units filled, {} transactions",
-                match_result.executed_quantity().unwrap_or(0),
+                match_result.executed_quantity().unwrap_or(Quantity::new(0)),
                 match_result.trades().len()
             );
         }
@@ -155,7 +155,7 @@ fn execute_market_orders(book: &OrderBook) {
         Ok(match_result) => {
             info!(
                 "  ✓ Market SELL executed: {} units filled, {} transactions",
-                match_result.executed_quantity().unwrap_or(0),
+                match_result.executed_quantity().unwrap_or(Quantity::new(0)),
                 match_result.trades().len()
             );
         }
@@ -170,7 +170,7 @@ fn execute_market_orders(book: &OrderBook) {
         Ok(match_result) => {
             info!(
                 "  ✓ Market BUY executed: {} units filled, {} transactions",
-                match_result.executed_quantity().unwrap_or(0),
+                match_result.executed_quantity().unwrap_or(Quantity::new(0)),
                 match_result.trades().len()
             );
         }
@@ -200,8 +200,11 @@ fn create_trade_info_from_result(trade_result: &TradeResult) -> TradeInfo {
     TradeInfo {
         symbol: trade_result.symbol.clone(),
         order_id: match_result.order_id().to_string(),
-        executed_quantity: match_result.executed_quantity().unwrap_or(0),
-        remaining_quantity: match_result.remaining_quantity(),
+        executed_quantity: match_result
+            .executed_quantity()
+            .unwrap_or(Quantity::new(0))
+            .as_u64(),
+        remaining_quantity: match_result.remaining_quantity().as_u64(),
         is_complete: match_result.is_complete(),
         transaction_count: match_result.trades().len(),
         transactions,

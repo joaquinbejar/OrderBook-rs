@@ -44,7 +44,7 @@ impl OrderBookSnapshot {
         let bids = self
             .bids
             .iter()
-            .map(|level| (level.price(), level.visible_quantity()))
+            .map(|level| (level.price().as_u128(), level.visible_quantity().as_u64()))
             .max_by_key(|&(price, _)| price);
         trace!("best_bid: {:?}", bids);
         bids
@@ -55,7 +55,7 @@ impl OrderBookSnapshot {
         let ask = self
             .asks
             .iter()
-            .map(|level| (level.price(), level.visible_quantity()))
+            .map(|level| (level.price().as_u128(), level.visible_quantity().as_u64()))
             .min_by_key(|&(price, _)| price);
         trace!("best_ask: {:?}", ask);
         ask
@@ -90,7 +90,7 @@ impl OrderBookSnapshot {
         let volume = self
             .bids
             .iter()
-            .map(|level| level.total_quantity().unwrap_or(0))
+            .map(|level| level.total_quantity().map_or(0, |q| q.as_u64()))
             .sum();
         trace!("total_bid_volume: {:?}", volume);
         volume
@@ -101,7 +101,7 @@ impl OrderBookSnapshot {
         let volume = self
             .asks
             .iter()
-            .map(|level| level.total_quantity().unwrap_or(0))
+            .map(|level| level.total_quantity().map_or(0, |q| q.as_u64()))
             .sum();
         trace!("total_ask_volume: {:?}", volume);
         volume
@@ -109,30 +109,30 @@ impl OrderBookSnapshot {
 
     /// Calculate the total value on the bid side (price * quantity)
     pub fn total_bid_value(&self) -> u128 {
-        let value = self
-            .bids
-            .iter()
-            .map(|level| {
-                level
-                    .price()
-                    .saturating_mul(level.total_quantity().unwrap_or(0) as u128)
-            })
-            .sum();
+        let value =
+            self.bids
+                .iter()
+                .map(|level| {
+                    level.price().as_u128().saturating_mul(u128::from(
+                        level.total_quantity().map_or(0, |q| q.as_u64()),
+                    ))
+                })
+                .sum();
         trace!("total_bid_value: {:?}", value);
         value
     }
 
     /// Calculate the total value on the ask side (price * quantity)
     pub fn total_ask_value(&self) -> u128 {
-        let value = self
-            .asks
-            .iter()
-            .map(|level| {
-                level
-                    .price()
-                    .saturating_mul(level.total_quantity().unwrap_or(0) as u128)
-            })
-            .sum();
+        let value =
+            self.asks
+                .iter()
+                .map(|level| {
+                    level.price().as_u128().saturating_mul(u128::from(
+                        level.total_quantity().map_or(0, |q| q.as_u64()),
+                    ))
+                })
+                .sum();
         trace!("total_ask_value: {:?}", value);
         value
     }
@@ -530,15 +530,15 @@ impl EnrichedSnapshot {
     ) -> Option<f64> {
         let best_bid = bids.first().map(|l| l.price())?;
         let best_ask = asks.first().map(|l| l.price())?;
-        Some((best_bid as f64 + best_ask as f64) / 2.0)
+        Some((best_bid.to_f64_lossy() + best_ask.to_f64_lossy()) / 2.0)
     }
 
     fn calculate_spread_bps(
         bids: &[PriceLevelSnapshot],
         asks: &[PriceLevelSnapshot],
     ) -> Option<f64> {
-        let best_bid = bids.first().map(|l| l.price())? as f64;
-        let best_ask = asks.first().map(|l| l.price())? as f64;
+        let best_bid = bids.first().map(|l| l.price())?.to_f64_lossy();
+        let best_ask = asks.first().map(|l| l.price())?.to_f64_lossy();
         let mid_price = (best_bid + best_ask) / 2.0;
 
         if mid_price == 0.0 {
@@ -550,7 +550,10 @@ impl EnrichedSnapshot {
     }
 
     fn calculate_total_depth(levels: &[PriceLevelSnapshot]) -> u64 {
-        levels.iter().map(|l| l.total_quantity().unwrap_or(0)).sum()
+        levels
+            .iter()
+            .map(|l| l.total_quantity().map_or(0, |q| q.as_u64()))
+            .sum()
     }
 
     fn calculate_vwap(levels: &[PriceLevelSnapshot], max_levels: usize) -> Option<f64> {
@@ -560,10 +563,10 @@ impl EnrichedSnapshot {
         let mut total_quantity = 0u64;
 
         for level in levels_to_use {
-            let quantity = level.total_quantity().unwrap_or(0);
+            let quantity = level.total_quantity().map_or(0, |q| q.as_u64());
             if quantity > 0 {
-                total_value =
-                    total_value.saturating_add(level.price().saturating_mul(quantity as u128));
+                total_value = total_value
+                    .saturating_add(level.price().as_u128().saturating_mul(u128::from(quantity)));
                 total_quantity = total_quantity.saturating_add(quantity);
             }
         }
@@ -583,13 +586,13 @@ impl EnrichedSnapshot {
         let bid_volume: u64 = bids
             .iter()
             .take(max_levels)
-            .map(|l| l.total_quantity().unwrap_or(0))
+            .map(|l| l.total_quantity().map_or(0, |q| q.as_u64()))
             .sum();
 
         let ask_volume: u64 = asks
             .iter()
             .take(max_levels)
-            .map(|l| l.total_quantity().unwrap_or(0))
+            .map(|l| l.total_quantity().map_or(0, |q| q.as_u64()))
             .sum();
 
         let total = bid_volume + ask_volume;

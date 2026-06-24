@@ -40,7 +40,7 @@ mod tests {
             time_in_force: TimeInForce::Gtc,
             timestamp: TimestampMs::new(0),
             replenish_threshold: Quantity::new(10),
-            replenish_amount: Some(Quantity::new(20)),
+            replenish_amount: Some(std::num::NonZeroU64::new(20).expect("nonzero")),
             auto_replenish: true,
             extra_fields: TestExtraFields::default(),
         };
@@ -104,7 +104,7 @@ mod tests {
             visible_quantity: Quantity::new(30),
             hidden_quantity: Quantity::new(70),
             replenish_threshold: Quantity::new(10),
-            replenish_amount: Some(Quantity::new(20)),
+            replenish_amount: Some(std::num::NonZeroU64::new(20).expect("nonzero")),
             auto_replenish: true,
             side: Side::Buy,
             user_id: Hash32::zero(),
@@ -137,7 +137,7 @@ mod tests {
             visible_quantity: Quantity::new(30),
             hidden_quantity: Quantity::new(70),
             replenish_threshold: Quantity::new(10),
-            replenish_amount: Some(Quantity::new(20)),
+            replenish_amount: Some(std::num::NonZeroU64::new(20).expect("nonzero")),
             auto_replenish: true,
             side: Side::Buy,
             user_id: Hash32::zero(),
@@ -196,7 +196,7 @@ mod tests {
             visible_quantity: Quantity::new(30),
             hidden_quantity: Quantity::new(70),
             replenish_threshold: Quantity::new(10),
-            replenish_amount: Some(Quantity::new(20)),
+            replenish_amount: Some(std::num::NonZeroU64::new(20).expect("nonzero")),
             auto_replenish: true,
             side: Side::Buy,
             user_id: Hash32::zero(),
@@ -257,7 +257,7 @@ mod tests {
         // Verify the order was updated
         let order = updated_order.unwrap();
         assert_eq!(order.price().as_u128(), 1010);
-        assert_eq!(order.visible_quantity(), 100);
+        assert_eq!(order.visible_quantity(), Quantity::new(100));
     }
 
     #[test]
@@ -283,7 +283,7 @@ mod tests {
         // Verify the order was updated
         let order = updated_order.unwrap();
         assert_eq!(order.price().as_u128(), 1000);
-        assert_eq!(order.visible_quantity(), 80);
+        assert_eq!(order.visible_quantity(), Quantity::new(80));
     }
 
     #[test]
@@ -310,7 +310,7 @@ mod tests {
         // Verify the order was updated
         let order = updated_order.unwrap();
         assert_eq!(order.price().as_u128(), 1020);
-        assert_eq!(order.visible_quantity(), 75);
+        assert_eq!(order.visible_quantity(), Quantity::new(75));
     }
 
     #[test]

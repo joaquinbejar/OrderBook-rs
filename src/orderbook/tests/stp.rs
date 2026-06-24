@@ -77,7 +77,7 @@ mod tests {
         assert!(result.is_ok());
         let mr = result.unwrap();
         assert!(mr.is_complete());
-        assert_eq!(mr.executed_quantity().unwrap(), 10);
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(10));
     }
 
     // -----------------------------------------------------------------------
@@ -123,7 +123,7 @@ mod tests {
         assert!(result.is_ok());
         let mr = result.unwrap();
         assert!(mr.is_complete());
-        assert_eq!(mr.executed_quantity().unwrap(), 10);
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(10));
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
         // Should succeed with partial fill (STP only returns error when zero fills)
         assert!(result.is_ok(), "expected Ok, got: {result:?}");
         let mr = result.unwrap();
-        assert_eq!(mr.executed_quantity().unwrap(), 5);
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(5));
         assert!(!mr.is_complete());
     }
 
@@ -189,7 +189,7 @@ mod tests {
         let result = book.match_market_order_with_user(taker_id, 10, Side::Buy, same_user);
         assert!(result.is_ok());
         let mr = result.unwrap();
-        assert_eq!(mr.executed_quantity().unwrap(), 10);
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(10));
         assert!(mr.is_complete());
 
         // Same user's maker order should be gone
@@ -241,7 +241,7 @@ mod tests {
         let result = book.match_market_order_with_user(taker_id, 10, Side::Buy, same_user);
         assert!(result.is_ok());
         let mr = result.unwrap();
-        assert_eq!(mr.executed_quantity().unwrap(), 10);
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(10));
 
         // Maker at 100 should be gone
         assert!(book.get_order(maker1).is_none());
@@ -295,7 +295,7 @@ mod tests {
         // Partial fill occurred, so result is Ok (not error)
         assert!(result.is_ok());
         let mr = result.unwrap();
-        assert_eq!(mr.executed_quantity().unwrap(), 3);
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(3));
         assert!(!mr.is_complete());
 
         // Same-user maker should be cancelled
@@ -416,7 +416,7 @@ mod tests {
         let result = book.match_market_order_with_user(taker_id, 10, Side::Sell, same_user);
         assert!(result.is_ok());
         let mr = result.unwrap();
-        assert_eq!(mr.executed_quantity().unwrap(), 10);
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(10));
 
         // Same user maker gone
         assert!(book.get_order(maker_id).is_none());
@@ -569,7 +569,7 @@ mod tests {
 
         assert!(result.is_ok());
         let mr = result.unwrap();
-        assert_eq!(mr.executed_quantity().unwrap(), 5);
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(5));
         assert!(!mr.is_complete());
     }
 

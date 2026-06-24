@@ -16,7 +16,7 @@
 
 use orderbook_rs::orderbook::trade::{TradeListener, TradeResult};
 use orderbook_rs::{FeeSchedule, OrderBook, OrderBookError};
-use pricelevel::{Id, Side, TimeInForce};
+use pricelevel::{Id, Quantity, Side, TimeInForce};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -68,7 +68,7 @@ fn test_buy_single_level_exact_fit() {
     assert_eq!(result.executed_value().expect("executed value"), 5_000);
     assert_eq!(
         result.remaining_quantity(),
-        0,
+        Quantity::new(0),
         "notional path must not leak the u64::MAX working sentinel"
     );
     assert!(result.is_complete());
@@ -87,7 +87,10 @@ fn test_buy_walks_three_levels() {
     let trades = result.trades().as_vec();
     assert_eq!(trades.len(), 3);
     assert_eq!(result.executed_value().expect("executed value"), 3_030);
-    assert_eq!(result.executed_quantity().expect("executed qty"), 30);
+    assert_eq!(
+        result.executed_quantity().expect("executed qty"),
+        Quantity::new(30)
+    );
 }
 
 #[test]
@@ -313,7 +316,10 @@ fn test_buy_partial_fill_when_book_too_thin() {
         .match_market_order_by_amount(Id::new_uuid(), 1_000_000, Side::Buy)
         .expect("partial fill must return Ok");
     assert_eq!(result.executed_value().expect("executed value"), 50 * 100);
-    assert_eq!(result.executed_quantity().expect("executed qty"), 50);
+    assert_eq!(
+        result.executed_quantity().expect("executed qty"),
+        Quantity::new(50)
+    );
 }
 
 #[test]

@@ -136,7 +136,7 @@ pub(crate) fn check_stp_at_level(
                     return STPAction::CancelTaker { safe_quantity };
                 }
                 // Sum visible quantity of non-same-user orders
-                safe_quantity = safe_quantity.saturating_add(order.visible_quantity());
+                safe_quantity = safe_quantity.saturating_add(order.visible_quantity().as_u64());
             }
             STPAction::NoConflict
         }
@@ -166,7 +166,7 @@ pub(crate) fn check_stp_at_level(
                         maker_order_id: order.id(),
                     };
                 }
-                safe_quantity = safe_quantity.saturating_add(order.visible_quantity());
+                safe_quantity = safe_quantity.saturating_add(order.visible_quantity().as_u64());
             }
             STPAction::NoConflict
         }

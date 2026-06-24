@@ -292,7 +292,7 @@ fn print_orderbook_state(book: &OrderBook) {
         info!(
             "Price: {}, Quantity: {} (visible: {}, hidden: {}), Orders: {}",
             level.price(),
-            level.visible_quantity() + level.hidden_quantity(),
+            level.visible_quantity().as_u64() + level.hidden_quantity().as_u64(),
             level.visible_quantity(),
             level.hidden_quantity(),
             level.order_count()
@@ -304,7 +304,7 @@ fn print_orderbook_state(book: &OrderBook) {
         info!(
             "Price: {}, Quantity: {} (visible: {}, hidden: {}), Orders: {}",
             level.price(),
-            level.visible_quantity() + level.hidden_quantity(),
+            level.visible_quantity().as_u64() + level.hidden_quantity().as_u64(),
             level.visible_quantity(),
             level.hidden_quantity(),
             level.order_count()

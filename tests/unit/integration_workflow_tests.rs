@@ -298,7 +298,7 @@ fn book_manager_multi_book_operations() {
     let snap = book.create_snapshot(usize::MAX);
     assert_eq!(snap.asks.len(), 1);
     // Remaining ask quantity should be 40
-    assert_eq!(snap.asks[0].visible_quantity(), 40);
+    assert_eq!(snap.asks[0].visible_quantity(), Quantity::new(40));
 }
 
 #[test]

@@ -177,7 +177,7 @@ mod tests {
 
         // Verify the update was applied
         let updated_order = book.get_order(order_id).unwrap();
-        assert_eq!(updated_order.visible_quantity(), 20);
+        assert_eq!(updated_order.visible_quantity(), Quantity::new(20));
     }
 
     #[test]
@@ -281,7 +281,7 @@ mod tests {
 
         // Should be fully matched (5 from 1000 and 2 from 990)
         assert!(match_result.is_complete());
-        assert_eq!(match_result.executed_quantity().unwrap(), 7);
+        assert_eq!(match_result.executed_quantity().unwrap(), Quantity::new(7));
 
         // Verify the best bid is now 990
         assert_eq!(book.best_bid(), Some(990));
@@ -319,8 +319,8 @@ mod tests {
             // If it doesn't return an error, we verify that it has been executed partially
             #[allow(clippy::unnecessary_unwrap)]
             let match_result = result.unwrap();
-            assert_eq!(match_result.executed_quantity().unwrap(), 10);
-            assert_eq!(match_result.remaining_quantity(), 10);
+            assert_eq!(match_result.executed_quantity().unwrap(), Quantity::new(10));
+            assert_eq!(match_result.remaining_quantity(), Quantity::new(10));
             assert!(!match_result.is_complete());
 
             // The book should now be empty
@@ -514,10 +514,10 @@ mod tests {
         assert_eq!(snapshot.asks.len(), 2);
 
         // Check prices are in correct order
-        assert_eq!(snapshot.bids[0].price(), 1000); // Best bid first
-        assert_eq!(snapshot.bids[1].price(), 990);
-        assert_eq!(snapshot.asks[0].price(), 1100); // Best ask first
-        assert_eq!(snapshot.asks[1].price(), 1110);
+        assert_eq!(snapshot.bids[0].price(), Price::new(1000)); // Best bid first
+        assert_eq!(snapshot.bids[1].price(), Price::new(990));
+        assert_eq!(snapshot.asks[0].price(), Price::new(1100)); // Best ask first
+        assert_eq!(snapshot.asks[1].price(), Price::new(1110));
     }
 
     #[test]
@@ -577,7 +577,7 @@ mod tests {
 #[cfg(test)]
 mod test_orderbook_book {
     use crate::OrderBook;
-    use pricelevel::{Id, Side, TimeInForce};
+    use pricelevel::{Id, Price, Side, TimeInForce};
 
     // Helper function to create a unique order ID
     fn create_order_id() -> Id {
@@ -710,11 +710,11 @@ mod test_orderbook_book {
         assert_eq!(snapshot.asks.len(), 2); // Limited to 2 levels
 
         // Check prices are in correct order
-        assert_eq!(snapshot.bids[0].price(), 1000); // Highest bid first
-        assert_eq!(snapshot.bids[1].price(), 990); // Second highest
+        assert_eq!(snapshot.bids[0].price(), Price::new(1000)); // Highest bid first
+        assert_eq!(snapshot.bids[1].price(), Price::new(990)); // Second highest
 
-        assert_eq!(snapshot.asks[0].price(), 1010); // Lowest ask first
-        assert_eq!(snapshot.asks[1].price(), 1020); // Second lowest
+        assert_eq!(snapshot.asks[0].price(), Price::new(1010)); // Lowest ask first
+        assert_eq!(snapshot.asks[1].price(), Price::new(1020)); // Second lowest
 
         // Create a full depth snapshot
         let full_snapshot = book.create_snapshot(10);
@@ -992,7 +992,7 @@ mod test_book_remaining {
 #[cfg(test)]
 mod test_book_specific {
     use crate::OrderBook;
-    use pricelevel::{Id, Side, TimeInForce};
+    use pricelevel::{Id, Side, TimeInForce, TimestampMs};
 
     fn create_order_id() -> Id {
         Id::new_uuid()
@@ -1097,7 +1097,8 @@ mod test_book_specific {
         assert!(fetched.is_some(), "order not found in book");
         let stamped = fetched.as_ref().map(|o| o.timestamp()).unwrap_or_default();
         assert_eq!(
-            stamped, 1000,
+            stamped,
+            TimestampMs::new(1000),
             "order timestamp should come from the injected stub clock"
         );
     }
@@ -1119,7 +1120,7 @@ mod test_book_specific {
             .as_ref()
             .map(|o| o.timestamp())
             .unwrap_or_default();
-        assert_eq!(ts_a, 500);
+        assert_eq!(ts_a, TimestampMs::new(500));
 
         // Replace the clock mid-flight; the next order should use clock B.
         let clock_b: Arc<dyn Clock> = Arc::new(StubClock::starting_at(9_000));
@@ -1134,7 +1135,8 @@ mod test_book_specific {
             .map(|o| o.timestamp())
             .unwrap_or_default();
         assert_eq!(
-            ts_b, 9_000,
+            ts_b,
+            TimestampMs::new(9_000),
             "order submitted after set_clock must use the new clock source"
         );
     }

@@ -465,8 +465,8 @@ mod tests {
         let match_result = result.unwrap();
 
         // Check the match result
-        assert_eq!(match_result.executed_quantity().unwrap(), 5);
-        assert_eq!(match_result.remaining_quantity(), 5);
+        assert_eq!(match_result.executed_quantity().unwrap(), Quantity::new(5));
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(5));
         assert!(!match_result.is_complete());
 
         // Ask side should be empty now

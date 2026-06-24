@@ -10,7 +10,7 @@ use crate::orderbook::pool::MatchingPool;
 use crate::orderbook::stp::{STPAction, check_stp_at_level};
 use crate::{OrderBook, OrderBookError};
 use either::Either;
-use pricelevel::{Hash32, Id, MatchResult, OrderUpdate, Side};
+use pricelevel::{Hash32, Id, MatchResult, OrderUpdate, Quantity, Side, TakerKind, TimeInForce};
 use std::sync::atomic::Ordering;
 
 /// Selects how the matching loop measures its budget.
@@ -257,10 +257,15 @@ where
         taker_user_id: Hash32,
     ) -> Result<MatchResult, OrderBookError> {
         self.cache.invalidate();
-        let mut match_result = MatchResult::new(order_id, mode.initial_match_quantity());
+        let mut match_result =
+            MatchResult::new(order_id, Quantity::new(mode.initial_match_quantity()));
         let mut stop = StopCondition::from_mode(&mode);
         let limit_price = mode.limit_price();
         let lot = self.lot_size.unwrap_or(1);
+        // Deterministic taker timestamp for per-level matching: `pricelevel` 0.8's
+        // `match_order` no longer reads the wall clock. Computed once so every trade
+        // in this submit shares the taker's match time and replay stays deterministic.
+        let taker_ts = self.clock().now_millis();
 
         // Determine if STP checks are needed for this match
         let stp_active = self.stp_mode.is_enabled() && taker_user_id != Hash32::zero();
@@ -342,10 +347,14 @@ where
                                 let price_level_match = price_level.match_order(
                                     match_qty,
                                     order_id,
+                                    TimeInForce::Gtc,
+                                    TakerKind::Standard,
+                                    taker_ts,
                                     &self.transaction_id_generator,
                                 );
-                                let executed = match_qty
-                                    .saturating_sub(price_level_match.remaining_quantity());
+                                let executed = match_qty.saturating_sub(
+                                    price_level_match.remaining_quantity().as_u64(),
+                                );
                                 self.process_level_match(
                                     &mut match_result,
                                     &price_level_match,
@@ -397,10 +406,14 @@ where
                                 let price_level_match = price_level.match_order(
                                     match_qty,
                                     order_id,
+                                    TimeInForce::Gtc,
+                                    TakerKind::Standard,
+                                    taker_ts,
                                     &self.transaction_id_generator,
                                 );
-                                let executed = match_qty
-                                    .saturating_sub(price_level_match.remaining_quantity());
+                                let executed = match_qty.saturating_sub(
+                                    price_level_match.remaining_quantity().as_u64(),
+                                );
                                 self.process_level_match(
                                     &mut match_result,
                                     &price_level_match,
@@ -435,9 +448,15 @@ where
             }
 
             // --- Normal matching (no STP conflict or after CancelMaker cleanup) ---
-            let price_level_match =
-                price_level.match_order(qty_cap, order_id, &self.transaction_id_generator);
-            let executed = qty_cap.saturating_sub(price_level_match.remaining_quantity());
+            let price_level_match = price_level.match_order(
+                qty_cap,
+                order_id,
+                TimeInForce::Gtc,
+                TakerKind::Standard,
+                taker_ts,
+                &self.transaction_id_generator,
+            );
+            let executed = qty_cap.saturating_sub(price_level_match.remaining_quantity().as_u64());
 
             self.process_level_match(
                 &mut match_result,
@@ -568,7 +587,7 @@ where
             .iter()
             .map(|t| t.quantity().as_u64())
             .fold(0u64, u64::saturating_add);
-        let mut rebuilt = MatchResult::new(order_id, executed_qty);
+        let mut rebuilt = MatchResult::new(order_id, Quantity::new(executed_qty));
         for trade in src.trades().as_vec() {
             // `add_trade` only fails on underflow; with `executed_qty`
             // exactly equal to the sum of trade quantities this cannot

@@ -68,7 +68,10 @@ mod test_order_modifications {
         assert!(updated_order.is_some());
         let updated_order = updated_order.unwrap();
         assert_eq!(updated_order.price().as_u128(), new_price);
-        assert_eq!(updated_order.visible_quantity(), new_quantity);
+        assert_eq!(
+            updated_order.visible_quantity(),
+            Quantity::new(new_quantity)
+        );
     }
 
     #[test]
@@ -139,7 +142,10 @@ mod test_order_modifications {
         assert!(replaced_order.is_some());
         let replaced_order = replaced_order.unwrap();
         assert_eq!(replaced_order.price().as_u128(), new_price);
-        assert_eq!(replaced_order.visible_quantity(), new_quantity);
+        assert_eq!(
+            replaced_order.visible_quantity(),
+            Quantity::new(new_quantity)
+        );
     }
 
     #[test]
@@ -201,7 +207,10 @@ mod test_order_modifications {
         let updated_order = book.get_order(id);
         assert!(updated_order.is_some());
         let updated_order = updated_order.unwrap();
-        assert_eq!(updated_order.visible_quantity(), new_quantity);
+        assert_eq!(
+            updated_order.visible_quantity(),
+            Quantity::new(new_quantity)
+        );
 
         // Hidden quantity should remain the same
         match &*updated_order {
@@ -323,7 +332,7 @@ mod test_modifications_remaining {
             timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
             replenish_threshold: Quantity::new(2),
-            replenish_amount: Some(Quantity::new(3)),
+            replenish_amount: Some(std::num::NonZeroU64::new(3).expect("nonzero")),
             auto_replenish: true,
             extra_fields: (),
         };
@@ -409,7 +418,7 @@ mod test_modifications_remaining {
             timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
             replenish_threshold: Quantity::new(2),
-            replenish_amount: Some(Quantity::new(3)),
+            replenish_amount: Some(std::num::NonZeroU64::new(3).expect("nonzero")),
             auto_replenish: true,
             extra_fields: (),
         };
@@ -433,7 +442,7 @@ mod test_modifications_remaining {
         let updated_order = book.get_order(id);
         assert!(updated_order.is_some());
         assert_eq!(updated_order.clone().unwrap().price().as_u128(), 1010);
-        assert_eq!(updated_order.unwrap().visible_quantity(), 15);
+        assert_eq!(updated_order.unwrap().visible_quantity(), Quantity::new(15));
     }
 
     #[test]
@@ -520,7 +529,7 @@ mod test_modifications_specific {
             timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Gtc,
             replenish_threshold: Quantity::new(2),
-            replenish_amount: Some(Quantity::new(3)),
+            replenish_amount: Some(std::num::NonZeroU64::new(3).expect("nonzero")),
             auto_replenish: true,
             extra_fields: (),
         };
@@ -745,7 +754,7 @@ mod tests {
         assert!(result.is_ok());
         let updated_order = book.get_order(original_order_id).unwrap();
         assert_eq!(updated_order.price().as_u128(), 92);
-        assert_eq!(updated_order.visible_quantity(), 12);
+        assert_eq!(updated_order.visible_quantity(), Quantity::new(12));
         assert!(book.bids.contains_key(&92));
         assert!(!book.bids.contains_key(&90));
     }
@@ -758,7 +767,7 @@ mod tests {
             price: Price::new(100),
             visible_quantity: Quantity::new(10),
             hidden_quantity: Quantity::new(90),
-            replenish_amount: Some(Quantity::new(10)),
+            replenish_amount: Some(std::num::NonZeroU64::new(10).expect("nonzero")),
             auto_replenish: true,
             replenish_threshold: Quantity::new(0),
             user_id: Hash32::zero(),

@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-06-24
+
+### Changed — Upgrade to `pricelevel` 0.8.0 (#130)
+
+- **Bumped `pricelevel` 0.7 → 0.8.0.** Picks up the upstream price-time-priority
+  fix where a partially-filled resting maker keeps its place at the front of the
+  level queue (PriceLevel#39), resolving #88 — a partial fill no longer demotes
+  the maker behind later same-price arrivals. A regression test on the matching
+  path (`test_partial_fill_preserves_price_time_priority_issue_88`) locks it in.
+- **Deterministic match timestamps.** `PriceLevel::match_order` no longer reads
+  the wall clock; the matching engine passes the book's `Clock` time as the taker
+  timestamp, so trade timestamps follow the installed clock (replay-safe).
+- **Domain newtypes on the public surface (breaking).** Through the `pricelevel`
+  re-exports and `MatchResult` / `OrderType` accessors, several values now carry
+  `Quantity` / `Price` / `TimestampMs` instead of raw `u64` / `u128`
+  (e.g. `MatchResult::remaining_quantity()` → `Quantity`). OrderBook-rs's own
+  method signatures (snapshot / statistics queries) are unchanged and still
+  return raw integers; downstream code reading `pricelevel` types through the
+  re-exports may need `.as_u64()` / `.as_u128()`. Minor bump under `0.x` semver.
+- **`ReserveOrder.replenish_amount` is now `Option<NonZeroU64>`** (pricelevel 0.8).
+
+### Changed — Dependency refresh
+
+- `async-nats` 0.47 → 0.49, `dashmap` 6.1 → 6.2, `bitflags` 2.11 → 2.13,
+  `either` 1.15 → 1.16, `crc32fast` 1 → 1.5, `proptest` 1.7 → 1.11.
+
 ## [0.8.0] — 2026-05-03
 
 ### Added — Quote-notional market orders (#85)

@@ -131,7 +131,7 @@ mod tests {
         // Verify order properties
         let order = retrieved_order.unwrap();
         assert_eq!(order.price().as_u128(), 100);
-        assert_eq!(order.visible_quantity(), 10);
+        assert_eq!(order.visible_quantity(), Quantity::new(10));
         assert_eq!(order.side(), Side::Buy);
     }
 
@@ -162,7 +162,7 @@ mod tests {
         // Verify order properties
         let order = retrieved_order.unwrap();
         assert_eq!(order.price().as_u128(), 100);
-        assert_eq!(order.visible_quantity(), 10);
+        assert_eq!(order.visible_quantity(), Quantity::new(10));
         assert_eq!(order.side(), Side::Sell);
     }
 
@@ -468,7 +468,7 @@ mod tests {
             timestamp: TimestampMs::new(timestamp),
             time_in_force: TimeInForce::Fok,
             replenish_threshold: Quantity::new(5),
-            replenish_amount: Some(Quantity::new(15)),
+            replenish_amount: Some(std::num::NonZeroU64::new(15).expect("nonzero")),
             auto_replenish: true,
             extra_fields: TestExtraFields {
                 metadata: "reserve".to_string(),
@@ -500,7 +500,10 @@ mod tests {
                 assert_eq!(converted_timestamp, TimestampMs::new(timestamp));
                 assert_eq!(converted_tif, TimeInForce::Fok);
                 assert_eq!(converted_threshold, Quantity::new(5));
-                assert_eq!(converted_amount, Some(Quantity::new(15)));
+                assert_eq!(
+                    converted_amount,
+                    Some(std::num::NonZeroU64::new(15).expect("nonzero"))
+                );
                 assert!(converted_auto);
                 // extra_fields is unit type as expected
             }

@@ -333,7 +333,7 @@ fn replay_market_order_command() {
         result: SequencerResult::TradeExecuted {
             trade_result: orderbook_rs::TradeResult::new(
                 "TEST".to_string(),
-                pricelevel::MatchResult::new(id2, 5),
+                pricelevel::MatchResult::new(id2, Quantity::new(5)),
             ),
         },
     };

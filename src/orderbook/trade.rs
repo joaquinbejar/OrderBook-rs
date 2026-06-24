@@ -214,7 +214,7 @@ mod tests {
         let order_id = Id::new_uuid();
         let total_qty: u64 = trades.iter().map(|t| t.quantity().as_u64()).sum();
         let initial_qty = if trades.is_empty() { 100 } else { total_qty };
-        let mut mr = MatchResult::new(order_id, initial_qty);
+        let mut mr = MatchResult::new(order_id, Quantity::new(initial_qty));
         for trade in trades {
             let _ = mr.add_trade(trade);
         }

@@ -1,7 +1,7 @@
 //! Additional unit tests to improve test coverage for matching.rs
 //! These tests target specific uncovered lines and edge cases
 
-use pricelevel::{Id, Side, TimeInForce};
+use pricelevel::{Id, Quantity, Side, TimeInForce};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct TestExtraFields {
@@ -56,7 +56,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 10); // No match occurred
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(10)); // No match occurred
         assert!(!match_result.is_complete());
         assert!(match_result.trades().as_vec().is_empty());
     }
@@ -80,7 +80,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 5); // No match due to price limit
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(5)); // No match due to price limit
         assert!(!match_result.is_complete());
         assert!(match_result.trades().as_vec().is_empty());
     }
@@ -104,7 +104,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 5); // No match due to price limit
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(5)); // No match due to price limit
         assert!(!match_result.is_complete());
         assert!(match_result.trades().as_vec().is_empty());
     }
@@ -124,7 +124,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 5); // No match since level was removed
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(5)); // No match since level was removed
         assert!(match_result.trades().as_vec().is_empty());
     }
 
@@ -142,7 +142,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 0); // Fully matched
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(0)); // Fully matched
         assert!(match_result.is_complete());
         assert!(!match_result.trades().as_vec().is_empty());
 
@@ -171,7 +171,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 0); // Fully matched
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(0)); // Fully matched
         assert!(match_result.is_complete());
 
         // Verify filled orders are tracked
@@ -201,7 +201,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 0);
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(0));
         assert!(match_result.is_complete());
 
         // Verify the price level is completely removed
@@ -229,7 +229,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 0);
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(0));
         assert!(match_result.is_complete());
 
         // Verify second price level was not touched (early exit)
@@ -259,7 +259,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 0);
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(0));
 
         // Verify all price levels are removed (batch removal)
         assert!(book.get_orders_at_price(100, Side::Sell).is_empty());
@@ -292,7 +292,7 @@ mod tests {
         // Market orders should partially fill and return remaining quantity
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 5); // 10 requested - 5 available = 5 remaining
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(5)); // 10 requested - 5 available = 5 remaining
         assert!(!match_result.is_complete());
 
         // Verify the available order was consumed

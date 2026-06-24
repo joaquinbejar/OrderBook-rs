@@ -445,7 +445,7 @@ mod tests {
             timestamp: TimestampMs::new(7000),
             time_in_force: TimeInForce::Gtc,
             replenish_threshold: Quantity::new(5),
-            replenish_amount: Some(Quantity::new(15)),
+            replenish_amount: Some(std::num::NonZeroU64::new(15).expect("nonzero")),
             auto_replenish: true,
             extra_fields: (),
         };
@@ -496,7 +496,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.executed_quantity().unwrap(), 5);
+        assert_eq!(match_result.executed_quantity().unwrap(), Quantity::new(5));
     }
 
     #[test]
@@ -514,7 +514,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.executed_quantity().unwrap(), 5);
+        assert_eq!(match_result.executed_quantity().unwrap(), Quantity::new(5));
     }
 
     #[test]
@@ -588,7 +588,7 @@ mod tests {
         );
         assert_eq!(
             trade.match_result.executed_quantity().unwrap(),
-            50,
+            Quantity::new(50),
             "Should have executed 50 units"
         );
     }

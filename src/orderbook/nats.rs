@@ -340,11 +340,11 @@ impl std::fmt::Debug for NatsTradePublisher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pricelevel::{Id, MatchResult};
+    use pricelevel::{Id, MatchResult, Quantity};
 
     fn make_trade_result(symbol: &str) -> TradeResult {
         let order_id = Id::new_uuid();
-        let match_result = MatchResult::new(order_id, 100);
+        let match_result = MatchResult::new(order_id, Quantity::new(100));
         TradeResult::new(symbol.to_string(), match_result)
     }
 

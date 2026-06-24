@@ -1,5 +1,5 @@
 use orderbook_rs::OrderBook;
-use pricelevel::{Id, Side, TimeInForce};
+use pricelevel::{Id, Quantity, Side, TimeInForce};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 struct TestExtraFields {
@@ -33,7 +33,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 5); // 25 - 20 = 5 (only first two orders matched)
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(5)); // 25 - 20 = 5 (only first two orders matched)
         assert!(!match_result.is_complete());
 
         // Verify the third order (at 1020) was not matched
@@ -62,7 +62,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 5); // 25 - 20 = 5 (only first two orders matched)
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(5)); // 25 - 20 = 5 (only first two orders matched)
         assert!(!match_result.is_complete());
 
         // Verify the third order (at 1000) was not matched

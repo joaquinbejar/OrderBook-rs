@@ -28,7 +28,11 @@ mod tests {
         let order = result.unwrap();
         assert_eq!(order.id(), id, "Order ID should match");
         assert_eq!(order.price().as_u128(), price, "Price should match");
-        assert_eq!(order.visible_quantity(), quantity, "Quantity should match");
+        assert_eq!(
+            order.visible_quantity(),
+            Quantity::new(quantity),
+            "Quantity should match"
+        );
         assert_eq!(order.side(), side, "Side should match");
         assert_eq!(
             order.time_in_force(),
@@ -67,12 +71,12 @@ mod tests {
         assert_eq!(order.price().as_u128(), price, "Price should match");
         assert_eq!(
             order.visible_quantity(),
-            visible_quantity,
+            Quantity::new(visible_quantity),
             "Visible quantity should match"
         );
         assert_eq!(
             order.hidden_quantity(),
-            hidden_quantity,
+            Quantity::new(hidden_quantity),
             "Hidden quantity should match"
         );
         assert_eq!(order.side(), side, "Side should match");
@@ -102,7 +106,11 @@ mod tests {
         let order = result.unwrap();
         assert_eq!(order.id(), id, "Order ID should match");
         assert_eq!(order.price().as_u128(), price, "Price should match");
-        assert_eq!(order.visible_quantity(), quantity, "Quantity should match");
+        assert_eq!(
+            order.visible_quantity(),
+            Quantity::new(quantity),
+            "Quantity should match"
+        );
         assert_eq!(order.side(), side, "Side should match");
         assert_eq!(
             order.time_in_force(),
@@ -174,12 +182,12 @@ mod tests {
         assert_eq!(match_result.order_id(), buy_id, "Order ID should match");
         assert_eq!(
             match_result.executed_quantity().unwrap(),
-            5,
+            Quantity::new(5),
             "Should execute requested quantity"
         );
         assert_eq!(
             match_result.remaining_quantity(),
-            0,
+            Quantity::new(0),
             "No remaining quantity"
         );
         assert!(match_result.is_complete(), "Order should be complete");
@@ -225,7 +233,7 @@ mod tests {
         );
         assert_eq!(
             updated_sell.unwrap().visible_quantity(),
-            5,
+            Quantity::new(5),
             "Sell order should have reduced quantity"
         );
     }
@@ -249,7 +257,7 @@ mod tests {
 
         assert_eq!(
             match_result.executed_quantity().unwrap(),
-            10,
+            Quantity::new(10),
             "Should execute full quantity"
         );
         assert!(
@@ -288,12 +296,12 @@ mod tests {
 
         assert_eq!(
             match_result.executed_quantity().unwrap(),
-            10,
+            Quantity::new(10),
             "Should execute available quantity"
         );
         assert_eq!(
             match_result.remaining_quantity(),
-            10,
+            Quantity::new(10),
             "Should have remaining quantity"
         );
         assert!(!match_result.is_complete(), "Order should not be complete");
@@ -363,7 +371,7 @@ mod tests {
         );
         assert_eq!(
             sell_order.unwrap().visible_quantity(),
-            5,
+            Quantity::new(5),
             "Sell order should have reduced quantity"
         );
     }
@@ -461,7 +469,7 @@ mod tests {
         );
         assert_eq!(
             sell_order.unwrap().visible_quantity(),
-            5,
+            Quantity::new(5),
             "Sell order quantity should be unchanged"
         );
     }
@@ -470,7 +478,7 @@ mod tests {
 #[cfg(test)]
 mod test_extra_fields {
     use crate::OrderBook;
-    use pricelevel::{Id, Side, TimeInForce};
+    use pricelevel::{Id, Quantity, Side, TimeInForce};
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -515,7 +523,7 @@ mod test_extra_fields {
         let order = result.unwrap();
         assert_eq!(order.id(), id);
         assert_eq!(order.price().as_u128(), 1000);
-        assert_eq!(order.visible_quantity(), 10);
+        assert_eq!(order.visible_quantity(), Quantity::new(10));
 
         // Verify the order is in the book and can be retrieved
         let book_order = order_book.get_order(id);
@@ -553,8 +561,8 @@ mod test_extra_fields {
         let order = result.unwrap();
         assert_eq!(order.id(), id);
         assert_eq!(order.price().as_u128(), 1000);
-        assert_eq!(order.visible_quantity(), 10);
-        assert_eq!(order.hidden_quantity(), 90);
+        assert_eq!(order.visible_quantity(), Quantity::new(10));
+        assert_eq!(order.hidden_quantity(), Quantity::new(90));
 
         // Verify the order is in the book
         let book_order = order_book.get_order(id);
@@ -588,7 +596,7 @@ mod test_extra_fields {
         let order = result.unwrap();
         assert_eq!(order.id(), id);
         assert_eq!(order.price().as_u128(), 1000);
-        assert_eq!(order.visible_quantity(), 10);
+        assert_eq!(order.visible_quantity(), Quantity::new(10));
         assert!(order.is_post_only());
 
         // Verify the order is in the book
@@ -647,20 +655,20 @@ mod test_extra_fields {
         let match_result = market_result.unwrap();
 
         // Verify the match occurred correctly
-        assert_eq!(match_result.executed_quantity().unwrap(), 5);
+        assert_eq!(match_result.executed_quantity().unwrap(), Quantity::new(5));
         assert_eq!(match_result.trades().len(), 1);
 
         // The remaining sell order should still be in the book
         let remaining_sell = order_book.get_order(sell_id);
         assert!(remaining_sell.is_some());
-        assert_eq!(remaining_sell.unwrap().visible_quantity(), 5);
+        assert_eq!(remaining_sell.unwrap().visible_quantity(), Quantity::new(5));
     }
 }
 
 #[cfg(test)]
 mod test_operations_remaining {
     use crate::OrderBook;
-    use pricelevel::{Id, Side, TimeInForce};
+    use pricelevel::{Id, Quantity, Side, TimeInForce};
 
     fn create_order_id() -> Id {
         Id::new_uuid()
@@ -684,7 +692,7 @@ mod test_operations_remaining {
         let order = result.unwrap();
         assert_eq!(order.id(), id);
         assert_eq!(order.price().as_u128(), price);
-        assert_eq!(order.visible_quantity(), quantity);
+        assert_eq!(order.visible_quantity(), Quantity::new(quantity));
     }
 
     #[test]
@@ -714,8 +722,8 @@ mod test_operations_remaining {
         let order = result.unwrap();
         assert_eq!(order.id(), id);
         assert_eq!(order.price().as_u128(), price);
-        assert_eq!(order.visible_quantity(), visible_quantity);
-        assert_eq!(order.hidden_quantity(), hidden_quantity);
+        assert_eq!(order.visible_quantity(), Quantity::new(visible_quantity));
+        assert_eq!(order.hidden_quantity(), Quantity::new(hidden_quantity));
     }
 
     #[test]
@@ -736,7 +744,7 @@ mod test_operations_remaining {
         let order = result.unwrap();
         assert_eq!(order.id(), id);
         assert_eq!(order.price().as_u128(), price);
-        assert_eq!(order.visible_quantity(), quantity);
+        assert_eq!(order.visible_quantity(), Quantity::new(quantity));
         assert!(order.is_post_only());
     }
 }
@@ -744,7 +752,7 @@ mod test_operations_remaining {
 #[cfg(test)]
 mod test_operations_specific {
     use crate::OrderBook;
-    use pricelevel::{Id, Side, TimeInForce};
+    use pricelevel::{Id, Quantity, Side, TimeInForce};
 
     use tracing::trace;
 
@@ -777,6 +785,6 @@ mod test_operations_specific {
         // Verify order was matched correctly
         let remaining_sell = book.get_order(sell_id);
         assert!(remaining_sell.is_some());
-        assert_eq!(remaining_sell.unwrap().visible_quantity(), 5);
+        assert_eq!(remaining_sell.unwrap().visible_quantity(), Quantity::new(5));
     }
 }

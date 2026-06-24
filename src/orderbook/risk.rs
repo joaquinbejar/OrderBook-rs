@@ -456,12 +456,13 @@ impl RiskState {
         self.orders.clear();
         self.counters.clear();
         for level in bids.iter().chain(asks.iter()) {
-            let price = level.price();
+            let price = level.price().as_u128();
             for order in level.orders() {
                 let account = order.user_id();
                 let remaining_qty = order
                     .visible_quantity()
-                    .saturating_add(order.hidden_quantity());
+                    .as_u64()
+                    .saturating_add(order.hidden_quantity().as_u64());
                 self.orders.insert(
                     order.id(),
                     RiskEntry {

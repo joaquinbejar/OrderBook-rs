@@ -561,7 +561,10 @@ mod tests {
             // consistent with a market-by-amount taker (and is not skipped
             // by the Rejected branch in `replay_from`).
             result: SequencerResult::TradeExecuted {
-                trade_result: TradeResult::new("TEST".to_string(), MatchResult::new(taker_id, 0)),
+                trade_result: TradeResult::new(
+                    "TEST".to_string(),
+                    MatchResult::new(taker_id, Quantity::new(0)),
+                ),
             },
         };
         assert!(journal.append(&ev).is_ok());

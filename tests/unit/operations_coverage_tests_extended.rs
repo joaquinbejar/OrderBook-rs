@@ -38,7 +38,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 0);
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(0));
         assert!(match_result.is_complete());
         assert_eq!(match_result.trades().len(), 1);
     }
@@ -62,7 +62,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 0);
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(0));
         assert!(match_result.is_complete());
         assert_eq!(match_result.trades().len(), 2);
     }
@@ -82,7 +82,7 @@ mod tests {
 
         assert!(result.is_ok());
         let match_result = result.unwrap();
-        assert_eq!(match_result.remaining_quantity(), 30); // 50 - 20 = 30
+        assert_eq!(match_result.remaining_quantity(), Quantity::new(30)); // 50 - 20 = 30
         assert!(!match_result.is_complete());
         assert_eq!(match_result.trades().len(), 1);
     }
@@ -107,7 +107,7 @@ mod tests {
         let order = result.unwrap();
         assert_eq!(order.id(), order_id);
         assert_eq!(order.price().as_u128(), 1020);
-        assert_eq!(order.visible_quantity(), 50);
+        assert_eq!(order.visible_quantity(), Quantity::new(50));
 
         // Order should not be in the book since it was completely filled
         assert!(book.get_order(order_id).is_none());

@@ -29,10 +29,10 @@ mod tests {
         // Test property getters
         assert_eq!(order.id(), id);
         assert_eq!(order.price().as_u128(), price);
-        assert_eq!(order.visible_quantity(), quantity);
-        assert_eq!(order.hidden_quantity(), 0); // Standard orders have no hidden quantity
+        assert_eq!(order.visible_quantity().as_u64(), quantity);
+        assert_eq!(order.hidden_quantity().as_u64(), 0); // Standard orders have no hidden quantity
         assert_eq!(order.side(), side);
-        assert_eq!(order.timestamp(), timestamp);
+        assert_eq!(order.timestamp().as_u64(), timestamp);
         assert_eq!(order.time_in_force(), time_in_force);
 
         // Test other properties
@@ -66,10 +66,10 @@ mod tests {
         // Test property getters
         assert_eq!(order.id(), id);
         assert_eq!(order.price().as_u128(), price);
-        assert_eq!(order.visible_quantity(), visible_quantity);
-        assert_eq!(order.hidden_quantity(), hidden_quantity);
+        assert_eq!(order.visible_quantity().as_u64(), visible_quantity);
+        assert_eq!(order.hidden_quantity().as_u64(), hidden_quantity);
         assert_eq!(order.side(), side);
-        assert_eq!(order.timestamp(), timestamp);
+        assert_eq!(order.timestamp().as_u64(), timestamp);
         assert_eq!(order.time_in_force(), time_in_force);
     }
 
@@ -96,10 +96,10 @@ mod tests {
         // Test property getters
         assert_eq!(order.id(), id);
         assert_eq!(order.price().as_u128(), price);
-        assert_eq!(order.visible_quantity(), quantity);
-        assert_eq!(order.hidden_quantity(), 0);
+        assert_eq!(order.visible_quantity().as_u64(), quantity);
+        assert_eq!(order.hidden_quantity().as_u64(), 0);
         assert_eq!(order.side(), side);
-        assert_eq!(order.timestamp(), timestamp);
+        assert_eq!(order.timestamp().as_u64(), timestamp);
         assert_eq!(order.time_in_force(), time_in_force);
 
         // Test post only property
@@ -236,7 +236,8 @@ mod tests {
             extra_fields: (),
         };
 
-        let (refreshed_order, used_hidden) = iceberg_order.refresh_iceberg(refresh_amount);
+        let (refreshed_order, used_hidden) = iceberg_order
+            .refresh_iceberg(std::num::NonZeroU64::new(refresh_amount).expect("nonzero"));
 
         match refreshed_order {
             OrderType::IcebergOrder {

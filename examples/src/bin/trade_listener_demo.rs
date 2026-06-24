@@ -218,7 +218,10 @@ fn display_trade_event(trade_result: &TradeResult) {
     info!("│ Order ID:           {}        │", match_result.order_id());
     info!(
         "│ Executed Quantity:  {} units                              │",
-        match_result.executed_quantity().unwrap_or(0)
+        match_result
+            .executed_quantity()
+            .map(|q| q.as_u64())
+            .unwrap_or(0)
     );
     info!(
         "│ Remaining Quantity: {} units                               │",

@@ -106,7 +106,7 @@ where
                 .trade_result
                 .match_result
                 .executed_quantity()
-                .unwrap_or(0)
+                .map_or(0, |q| q.as_u64())
         );
 
         for trade in event.trade_result.match_result.trades().as_vec() {
@@ -311,7 +311,7 @@ where
                 .trade_result
                 .match_result
                 .executed_quantity()
-                .unwrap_or(0)
+                .map_or(0, |q| q.as_u64())
         );
 
         for trade in event.trade_result.match_result.trades().as_vec() {
