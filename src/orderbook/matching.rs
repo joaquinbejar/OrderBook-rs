@@ -17,8 +17,18 @@ use std::sync::atomic::Ordering;
 /// hidden quantity the sweep can actually draw. An iceberg always replenishes
 /// its hidden tranche; a reserve only when `auto_replenish` is set — a
 /// non-auto-replenish reserve drops its hidden unfilled, so that hidden is NOT
-/// reachable depth. Used by FOK feasibility (#96) so undrawable hidden is never
-/// counted as fillable.
+/// reachable depth.
+///
+/// As of #136 the non-STP and STP-NoConflict FOK feasibility paths delegate to
+/// `PriceLevel::matchable_quantity` (the authoritative upstream dry run). This
+/// helper remains only for the STP `CancelMaker` case, which must sum the
+/// matchable depth of the *non-self* makers — a per-user filter the upstream
+/// primitive cannot express. It is therefore the one FOK-feasibility path that
+/// no longer rides on pricelevel's authoritative dry run, so its per-order total
+/// MUST stay equal to `OrderType::match_against`'s for every resting kind: if a
+/// new `OrderType` variant is added whose sweep total differs from
+/// `visible + drawable_hidden`, update this helper or the CancelMaker FOK path
+/// will silently mis-predict while the delegated paths stay correct.
 #[inline]
 fn order_matchable_qty(order: &OrderType<()>) -> u64 {
     let visible = order.visible_quantity().as_u64();
@@ -941,20 +951,26 @@ where
             let price_level = entry.value();
 
             // Reachable depth at this level — the quantity the real sweep could
-            // actually fill — using per-order *matchable* depth (visible + drawable
-            // hidden), not the level's raw total, so a non-auto-replenish reserve's
-            // undrawable hidden tranche is not counted (#96).
+            // actually fill. The non-STP and STP-NoConflict cases delegate to
+            // pricelevel's authoritative dry-run `PriceLevel::matchable_quantity`
+            // (pricelevel 0.8.2), the single upstream source of truth for what
+            // `match_order` would consume — including iceberg/reserve replenishment
+            // and the removal of a non-auto-replenish reserve's undrawable hidden —
+            // instead of re-deriving it from a hand-rolled per-order estimate that
+            // could silently drift from `match_against` (#136, follow-up to #96).
             let (reachable, stop_after) = if stp_active {
                 // Insertion-sequence order = the sweep's consumption order, so the
                 // feasibility STP decision matches the real match even under
                 // non-monotonic timestamps (#132).
                 let orders = price_level.snapshot_by_insertion_seq();
                 match check_stp_at_level(&orders, taker_user_id, self.stp_mode) {
-                    STPAction::NoConflict => {
-                        (orders.iter().map(|o| order_matchable_qty(o)).sum(), false)
-                    }
+                    // No self-trade: the whole level is reachable — delegate to the
+                    // upstream dry run.
+                    STPAction::NoConflict => (price_level.matchable_quantity(cap), false),
                     // Same-user makers are cancelled, not filled: only non-self
-                    // resting depth is reachable; the walk continues.
+                    // resting depth is reachable; the walk continues. The upstream
+                    // primitive cannot filter by user, so the non-self matchable
+                    // depth is still summed per order here.
                     STPAction::CancelMaker => {
                         let non_self: u64 = orders
                             .iter()
@@ -970,11 +986,7 @@ where
                     | STPAction::CancelBoth { safe_quantity, .. } => (safe_quantity, true),
                 }
             } else {
-                let reachable = price_level
-                    .iter_orders()
-                    .map(|o| order_matchable_qty(&o))
-                    .sum();
-                (reachable, false)
+                (price_level.matchable_quantity(cap), false)
             };
 
             matched = matched.saturating_add(cap.min(reachable));

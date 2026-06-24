@@ -186,6 +186,49 @@ mod tests {
         );
     }
 
+    /// #136: the non-STP FOK feasibility path now delegates to the upstream
+    /// `PriceLevel::matchable_quantity`, which counts an iceberg's replenishable
+    /// hidden depth as drawable. A FOK whose size is covered only by visible +
+    /// replenished hidden must fill (not be killed) — the positive complement to
+    /// the non-replenish-reserve case above.
+    #[test]
+    fn test_fok_fills_against_iceberg_replenishable_hidden_issue_136() {
+        let book: OrderBook<()> = OrderBook::new("TEST");
+        book.add_order(OrderType::IcebergOrder {
+            id: Id::new(),
+            price: Price::new(100),
+            visible_quantity: Quantity::new(2),
+            hidden_quantity: Quantity::new(8),
+            side: Side::Sell,
+            user_id: Hash32::zero(),
+            timestamp: TimestampMs::new(0),
+            time_in_force: TimeInForce::Gtc,
+            extra_fields: (),
+        })
+        .expect("iceberg admitted");
+
+        // FOK buy 10 at price 100. Visible is only 2, but the iceberg replenishes
+        // its 8 hidden, so `matchable_quantity` reports 10 drawable → the FOK
+        // fills fully and consumes the level.
+        let fok = OrderType::Standard {
+            id: Id::new(),
+            price: Price::new(100),
+            quantity: Quantity::new(10),
+            side: Side::Buy,
+            user_id: Hash32::zero(),
+            time_in_force: TimeInForce::Fok,
+            timestamp: TimestampMs::new(0),
+            extra_fields: (),
+        };
+        let result = book.add_order(fok);
+        assert!(
+            result.is_ok(),
+            "FOK must fill against an iceberg's replenishable depth, got {result:?}"
+        );
+        assert!(book.has_traded.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(book.asks.is_empty(), "the iceberg is fully consumed");
+    }
+
     #[test]
     fn test_market_buy_full_match() {
         let book = setup_book();

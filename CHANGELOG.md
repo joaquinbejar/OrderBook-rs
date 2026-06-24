@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.0] — 2026-06-24
 
+### Changed
+
+- **Delegate FOK matchable-depth to `PriceLevel::matchable_quantity` (#136).**
+  `fok_fillable_quantity` (#96) computed per-level reachable depth with a
+  hand-rolled `order_matchable_qty` sum (`visible + drawable_hidden`), a
+  re-implementation of pricelevel's authoritative dry-run that could silently
+  drift from `OrderType::match_against` if upstream replenishment/order-kind
+  semantics changed. The non-STP and STP-`NoConflict` paths now delegate to
+  `PriceLevel::matchable_quantity` (made `pub` in pricelevel 0.8.2) — the single
+  upstream source of truth for what `match_order` would consume — so the FOK
+  all-or-nothing verdict can no longer diverge from the real sweep. The
+  hand-rolled helper remains only for the STP `CancelMaker` case, which must sum
+  the *non-self* makers' depth (a per-user filter the upstream primitive cannot
+  express). Behavior is unchanged; the #96 reserve/iceberg FOK regression tests
+  still pass, plus a new iceberg-replenishable-hidden FOK fill test.
+
 ### Performance — Pool the per-level STP scan buffer (#107)
 
 - **Zero per-level heap allocation on the STP match path.** Under an active
