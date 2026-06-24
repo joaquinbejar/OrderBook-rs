@@ -86,6 +86,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   maker match what `match_order` actually consumes even under non-monotonic
   timestamps — closing the consumption-fidelity gap that #94 left open (and which the
   #94 determinism fix only addressed for monotonic timestamps).
+- **`cancel_all_orders` resets per-account risk counters (#99).** The bulk cancel
+  drained the book but never touched `risk_state`, so after a mass unwind every
+  account's `open_orders` / `notional` counters stayed at pre-cancel values and
+  permanently rejected new flow (the exact failure bulk cancel exists to avoid). It
+  now calls a new `RiskState::clear()` (also reused by `rebuild_from_snapshot`),
+  zeroing the per-account counters and the per-order risk map.
 
 ## [0.8.0] — 2026-05-03
 

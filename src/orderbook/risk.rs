@@ -441,6 +441,18 @@ impl RiskState {
         }
     }
 
+    /// Drop all per-order risk entries and per-account counters in one shot.
+    ///
+    /// Used by [`OrderBook::cancel_all_orders`](super::book::OrderBook::cancel_all_orders),
+    /// which empties the entire book in bulk — the per-order [`Self::on_cancel`]
+    /// accounting collapses to a single clear, and leaving the maps populated would
+    /// strand phantom open-order / notional counters that reject new flow (#99).
+    /// No-op semantics when no `RiskConfig` is installed (the maps are already empty).
+    pub(super) fn clear(&self) {
+        self.orders.clear();
+        self.counters.clear();
+    }
+
     /// Rebuild the per-order map and per-account counters by walking
     /// the supplied bid and ask snapshots.
     ///
@@ -453,8 +465,7 @@ impl RiskState {
         bids: &[PriceLevelSnapshot],
         asks: &[PriceLevelSnapshot],
     ) {
-        self.orders.clear();
-        self.counters.clear();
+        self.clear();
         for level in bids.iter().chain(asks.iter()) {
             let price = level.price().as_u128();
             for order in level.orders() {
