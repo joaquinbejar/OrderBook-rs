@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the stale `ISSUE_IV.md` implied-volatility design draft from the repo
   root (the implied-volatility solver now lives in `src/orderbook/implied_volatility/`).
 
+### Fixed
+
+- **STP per-level scan is now deterministic (#94).** The self-trade-prevention
+  pre-scan reads `PriceLevel::snapshot_orders()` (timestamp-ordered) instead of
+  `iter_orders()` (DashMap, non-stable order), so `safe_quantity` and the
+  CancelBoth `maker_order_id` follow price-time priority and are reproducible for a
+  given book state. Non-determinism there previously broke replay (`snapshots_match`
+  could diverge) for `CancelTaker` / `CancelBoth`.
+
 ## [0.8.0] — 2026-05-03
 
 ### Added — Quote-notional market orders (#85)

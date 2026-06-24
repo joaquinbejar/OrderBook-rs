@@ -58,6 +58,129 @@ mod tests {
         id
     }
 
+    /// Helper: add a resting sell order with an explicit user_id and timestamp,
+    /// used to pin price-time priority in the determinism tests below.
+    fn add_sell_order_with_ts(
+        book: &OrderBook<()>,
+        price: u128,
+        quantity: u64,
+        user_id: Hash32,
+        timestamp: u64,
+    ) -> Id {
+        let order = OrderType::Standard {
+            id: Id::new(),
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
+            side: Side::Sell,
+            user_id,
+            timestamp: TimestampMs::new(timestamp),
+            time_in_force: TimeInForce::Gtc,
+            extra_fields: (),
+        };
+        let id = order.id();
+        let result = book.add_order(order);
+        assert!(result.is_ok(), "failed to add sell order: {result:?}");
+        id
+    }
+
+    // -----------------------------------------------------------------------
+    // STP determinism (#94) — the per-level scan must follow price-time
+    // priority (timestamp order), not the DashMap iteration order. With the
+    // pre-scan reading `snapshot_orders()` (timestamp-sorted) instead of
+    // `iter_orders()` (DashMap, non-stable), `safe_quantity` and the
+    // CancelBoth maker selection are reproducible for a given book state.
+    // -----------------------------------------------------------------------
+
+    /// CancelTaker accumulates `safe_quantity` over the orders that precede the
+    /// first same-user maker *in timestamp order*, so the taker fills exactly the
+    /// older non-self liquidity before the self-trade is prevented.
+    #[test]
+    fn test_cancel_taker_scan_follows_time_priority_at_one_level() {
+        let mut book: OrderBook<()> = OrderBook::new("TEST");
+        book.set_stp_mode(STPMode::CancelTaker);
+
+        let taker_user = user(9);
+        let other = user(1);
+
+        // All at price 100, added in timestamp order. The taker's own resting
+        // order sits third by time, so only m1 + m2 are safe to fill.
+        let m1 = add_sell_order_with_ts(&book, 100, 3, other, 10);
+        let m2 = add_sell_order_with_ts(&book, 100, 4, other, 20);
+        let m_self = add_sell_order_with_ts(&book, 100, 5, taker_user, 30);
+        let m3 = add_sell_order_with_ts(&book, 100, 6, other, 40);
+
+        let taker_id = Id::new();
+        let result = book.match_market_order_with_user(taker_id, 50, Side::Buy, taker_user);
+
+        assert!(result.is_ok(), "expected partial fill, got {result:?}");
+        let mr = result.unwrap();
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(7));
+
+        let trades = mr.trades().as_vec();
+        assert_eq!(
+            trades.len(),
+            2,
+            "should fill exactly the two older non-self orders"
+        );
+        assert_eq!(trades[0].maker_order_id(), m1);
+        assert_eq!(trades[0].quantity(), Quantity::new(3));
+        assert_eq!(trades[1].maker_order_id(), m2);
+        assert_eq!(trades[1].quantity(), Quantity::new(4));
+
+        // The self order (and the later other-user order) are untouched.
+        assert!(
+            book.get_order(m_self).is_some(),
+            "self maker must survive STP"
+        );
+        assert!(
+            book.get_order(m3).is_some(),
+            "later order must not be reached"
+        );
+        assert!(book.get_order(m1).is_none());
+        assert!(book.get_order(m2).is_none());
+    }
+
+    /// CancelBoth cancels the *earliest* same-user maker by timestamp (not an
+    /// arbitrary one chosen by DashMap order) and fills the older non-self liquidity.
+    #[test]
+    fn test_cancel_both_cancels_earliest_self_maker_by_time() {
+        let mut book: OrderBook<()> = OrderBook::new("TEST");
+        book.set_stp_mode(STPMode::CancelBoth);
+
+        let taker_user = user(9);
+        let other = user(1);
+
+        // Price 100, timestamp order: other -> self1 -> self2.
+        let o1 = add_sell_order_with_ts(&book, 100, 8, other, 10);
+        let self1 = add_sell_order_with_ts(&book, 100, 5, taker_user, 20);
+        let self2 = add_sell_order_with_ts(&book, 100, 6, taker_user, 30);
+
+        let taker_id = Id::new();
+        let result = book.match_market_order_with_user(taker_id, 50, Side::Buy, taker_user);
+
+        assert!(result.is_ok(), "expected partial fill, got {result:?}");
+        let mr = result.unwrap();
+
+        let trades = mr.trades().as_vec();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].maker_order_id(), o1);
+        assert_eq!(trades[0].quantity(), Quantity::new(8));
+
+        // The earliest same-user maker is cancelled; the later one survives.
+        assert!(
+            book.get_order(self1).is_none(),
+            "earliest self maker should be cancelled"
+        );
+        assert!(
+            book.get_order(self2).is_some(),
+            "later self maker should remain"
+        );
+        assert!(
+            book.get_order(o1).is_none(),
+            "older non-self order fully consumed"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // STPMode::None — backward compatibility
     // -----------------------------------------------------------------------

@@ -331,7 +331,17 @@ where
             // When STP is active, check for self-trade conflicts before matching.
             // This is done per-price-level to handle partial fills correctly.
             if stp_active {
-                let orders: Vec<_> = price_level.iter_orders().collect();
+                // `check_stp_at_level` needs the resting orders in the order the sweep
+                // will consume them. `iter_orders()` is DashMap-backed (non-stable) and
+                // makes `safe_quantity` / the CancelBoth `maker_order_id` non-deterministic,
+                // which breaks replay (#94) — so use the deterministic `snapshot_orders()`.
+                //
+                // PRECONDITION: `snapshot_orders()` is `(timestamp, sequence)`-ordered,
+                // whereas `match_order` consumes by pure insertion sequence; these coincide
+                // only when timestamps are monotonic with insertion (the normal case). Under
+                // non-monotonic timestamps the scan can diverge from the sweep — tracked in
+                // #132 (needs an insertion-sequence accessor upstream, PriceLevel#102).
+                let orders = price_level.snapshot_orders();
                 let action = check_stp_at_level(&orders, taker_user_id, self.stp_mode);
 
                 match action {
