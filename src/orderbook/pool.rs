@@ -4,7 +4,9 @@ use std::cell::RefCell;
 /// A memory pool for reusing vectors to reduce allocations in hot paths.
 #[derive(Debug)]
 pub struct MatchingPool {
-    filled_orders_pool: RefCell<Vec<Vec<Id>>>,
+    /// Reusable buffers of `(fully_consumed_maker_id, filled_quantity)` collected
+    /// during a match so terminal `Filled` events carry the true fill (#104).
+    filled_orders_pool: RefCell<Vec<Vec<(Id, u64)>>>,
     price_vec_pool: RefCell<Vec<Vec<u128>>>,
 }
 
@@ -17,8 +19,9 @@ impl MatchingPool {
         }
     }
 
-    /// Retrieves a vector for filled orders from the pool.
-    pub fn get_filled_orders_vec(&self) -> Vec<Id> {
+    /// Retrieves a vector for filled orders (with their filled quantities) from
+    /// the pool.
+    pub fn get_filled_orders_vec(&self) -> Vec<(Id, u64)> {
         self.filled_orders_pool
             .borrow_mut()
             .pop()
@@ -26,7 +29,7 @@ impl MatchingPool {
     }
 
     /// Returns a filled orders vector to the pool for reuse.
-    pub fn return_filled_orders_vec(&self, mut vec: Vec<Id>) {
+    pub fn return_filled_orders_vec(&self, mut vec: Vec<(Id, u64)>) {
         vec.clear();
         self.filled_orders_pool.borrow_mut().push(vec);
     }

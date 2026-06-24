@@ -494,11 +494,18 @@ where
             self.record_depth_metric();
         }
 
-        // Batch remove filled orders from tracking and update state
-        for filled_id in &filled_orders {
-            // Track the resting order as Filled (quantity unknown here;
-            // use 0 as placeholder — the important thing is the terminal state)
-            self.track_state(*filled_id, OrderStatus::Filled { filled_quantity: 0 });
+        // Batch remove filled orders from tracking and update state. Each entry
+        // carries the maker's TRUE filled quantity (captured per-level in
+        // `process_level_match`), so OrderStateTracker / lifecycle consumers and
+        // any audit/risk reconciliation that sums filled quantity from terminal
+        // events see the real executed amount instead of a `0` placeholder (#104).
+        for (filled_id, filled_quantity) in &filled_orders {
+            self.track_state(
+                *filled_id,
+                OrderStatus::Filled {
+                    filled_quantity: *filled_quantity,
+                },
+            );
             self.order_locations.remove(filled_id);
             self.untrack_order_by_id(filled_id);
         }
@@ -668,7 +675,7 @@ where
         &self,
         match_result: &mut MatchResult,
         price_level_match: &MatchResult,
-        filled_orders: &mut Vec<Id>,
+        filled_orders: &mut Vec<(Id, u64)>,
         price: u128,
         price_level: &std::sync::Arc<pricelevel::PriceLevel>,
         side: Side,
@@ -705,10 +712,23 @@ where
             }
         }
 
-        // Collect filled orders for batch removal
+        // Collect fully-consumed makers for batch removal, each with its true
+        // filled quantity. Sum the maker's trades from THIS per-level result,
+        // where `filled_order_ids()` and `trades()` are kept consistent by
+        // pricelevel (an id is recorded only after its trade is added) — so the
+        // recorded `Filled { filled_quantity }` stays correct even if an aggregate
+        // `match_result.add_trade` were dropped (#104). Per-level trade counts are
+        // small; this is the cold path, not the matching hot loop.
         for &filled_order_id in price_level_match.filled_order_ids() {
             match_result.add_filled_order_id(filled_order_id);
-            filled_orders.push(filled_order_id);
+            let filled_quantity: u64 = price_level_match
+                .trades()
+                .as_vec()
+                .iter()
+                .filter(|trade| trade.maker_order_id() == filled_order_id)
+                .map(|trade| trade.quantity().as_u64())
+                .sum();
+            filled_orders.push((filled_order_id, filled_quantity));
         }
 
         // Check if price level is empty and mark for removal

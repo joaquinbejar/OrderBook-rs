@@ -76,6 +76,31 @@ mod tests {
         assert_eq!(t3[1].quantity(), Quantity::new(3));
     }
 
+    /// Regression for #104: a fully-consumed resting maker records its TRUE
+    /// filled quantity in the order-state tracker, not the old `0` placeholder.
+    #[test]
+    fn test_fully_consumed_maker_records_true_filled_quantity_issue_104() {
+        use crate::orderbook::order_state::{OrderStateTracker, OrderStatus};
+
+        let mut book = setup_book();
+        book.set_order_state_tracker(OrderStateTracker::new());
+
+        let maker = add_limit_order(&book, Side::Sell, 100, 10);
+        let taker = Id::new();
+        let result = book.match_order(taker, Side::Buy, 10, None).unwrap();
+        assert!(result.is_complete());
+
+        match book.order_status(maker) {
+            Some(OrderStatus::Filled { filled_quantity }) => {
+                assert_eq!(
+                    filled_quantity, 10,
+                    "fully-consumed maker must record its true 10-unit fill, not 0"
+                );
+            }
+            other => panic!("expected Filled {{ filled_quantity: 10 }}, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_market_buy_full_match() {
         let book = setup_book();

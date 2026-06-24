@@ -51,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counter. Previously these three effects were skipped, desynchronizing book-change
   consumers, leaving the maker in a non-terminal state, and leaking per-account
   open-order / notional counters.
+- **Fully-consumed makers record their true filled quantity (#104).** The
+  matching batch-removal path recorded `OrderStatus::Filled { filled_quantity: 0 }`
+  (a placeholder) for every fully-consumed resting maker; it now records the real
+  executed amount (the sum of the maker's trades in the submit), so
+  `OrderStateTracker` / lifecycle consumers and any audit/risk reconciliation that
+  sums filled quantity from terminal events are correct.
 
 ## [0.8.0] — 2026-05-03
 
