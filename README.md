@@ -56,7 +56,7 @@ This order book engine is built with the following design principles:
   partial fill no longer demotes the maker behind later same-price arrivals.
   Locked in by `test_partial_fill_preserves_price_time_priority_issue_88`.
 - **Deterministic match timestamps.** `PriceLevel::match_order` no longer
-  reads the wall clock; the engine passes the book's [`Clock`](crate::Clock)
+  reads the wall clock; the engine passes the book's [`Clock`]
   time as the taker timestamp, so trade timestamps follow the installed clock
   and replay stays deterministic.
 - **Domain newtypes on the public surface (breaking).** Through the
