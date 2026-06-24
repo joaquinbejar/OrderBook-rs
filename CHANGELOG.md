@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.0] — 2026-06-24
 
+### Performance — Pool the per-level STP scan buffer (#107)
+
+- **Zero per-level heap allocation on the STP match path.** Under an active
+  `STPMode`, each crossed price level previously allocated a fresh
+  `Vec<Arc<OrderType<()>>>` for the self-trade scan
+  (`PriceLevel::snapshot_by_insertion_seq`). The matching engine now reuses a
+  single pooled scratch buffer (`MatchingPool::get_order_snapshot_vec` /
+  `return_order_snapshot_vec`), refilled in place via the new
+  `PriceLevel::snapshot_by_seq_into` (pricelevel 0.8.2), so the snapshot is
+  reused across every conflicting level instead of allocated per level.
+- **Dropped the per-level maker-id `Vec`.** `STPAction::CancelMaker` is now a
+  unit variant — `check_stp_at_level` no longer `collect()`s same-user maker
+  IDs into a `Vec<Id>`. The matching engine re-scans the pooled snapshot in
+  insertion-sequence order and cancels each same-user maker inline. The cancel
+  order (and therefore emitted events / journal) is bit-identical to before, so
+  determinism and snapshot round-trip are unchanged.
+- **Bumped `pricelevel` 0.8.1 → 0.8.2** for the determinism-preserving
+  `snapshot_by_seq_into` drop-in.
+- New `stp_sweep_hdr` Criterion HDR bench covers the aggressive self-crossing
+  sweep under `STPMode::CancelMaker`.
+
 ### Changed — Upgrade to `pricelevel` 0.8.0 (#130)
 
 - **Bumped `pricelevel` 0.7 → 0.8.0.** Picks up the upstream price-time-priority

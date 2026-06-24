@@ -109,6 +109,11 @@ path = "benches/order_book/mass_cancel_burst_hdr.rs"
 harness = false
 
 [[bench]]
+name = "stp_sweep_hdr"
+path = "benches/order_book/stp_sweep_hdr.rs"
+harness = false
+
+[[bench]]
 name = "alloc_count"
 path = "benches/order_book/alloc_count.rs"
 harness = false
@@ -141,7 +146,7 @@ members = [
 
 [workspace.dependencies]
 orderbook-rs = { path = "." }
-pricelevel = "0.8.1"
+pricelevel = "0.8.2"
 tracing = "0.1"
 uuid = { version = "1.23", features = ["v4", "v5", "serde"] }
 dashmap = "6.2"

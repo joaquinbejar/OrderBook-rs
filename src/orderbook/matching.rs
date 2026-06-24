@@ -350,12 +350,20 @@ where
             static MATCHING_POOL: MatchingPool = MatchingPool::new();
         }
 
-        // Get reusable vectors from pool
-        let (mut filled_orders, mut empty_price_levels) = MATCHING_POOL.with(|pool| {
-            let filled = pool.get_filled_orders_vec();
-            let empty = pool.get_price_vec();
-            (filled, empty)
-        });
+        // Get reusable vectors from pool. `filled_orders` / `empty_price_levels`
+        // are needed by every sweep. `stp_orders` is the per-level STP scan
+        // scratch buffer (#107), reused across conflicting levels instead of a
+        // fresh allocation per level — but it is only acquired when STP is
+        // active, so the default (`STPMode::None`) hot path touches the pool
+        // exactly as it did before #107 (an empty `Vec::new()` allocates nothing
+        // and is never filled or returned).
+        let (mut filled_orders, mut empty_price_levels) =
+            MATCHING_POOL.with(|pool| (pool.get_filled_orders_vec(), pool.get_price_vec()));
+        let mut stp_orders = if stp_active {
+            MATCHING_POOL.with(|pool| pool.get_order_snapshot_vec())
+        } else {
+            Vec::new()
+        };
 
         // Track whether STP cancelled the taker
         let mut stp_taker_cancelled = false;
@@ -398,13 +406,17 @@ where
                 // `check_stp_at_level` must see the resting orders in the exact order
                 // the sweep consumes them — pure insertion sequence — so `safe_quantity`
                 // and the CancelBoth `maker_order_id` correspond to what `match_order`
-                // will actually fill/cancel. `snapshot_by_insertion_seq()` (pricelevel
-                // 0.8.1) gives that order; it is deterministic (fixing the #94 DashMap
-                // non-determinism) AND faithful to the sweep even under non-monotonic
-                // timestamps, unlike `snapshot_orders()` which is `(timestamp, seq)`-ordered
-                // (the residual gap closed by #132 / PriceLevel#102).
-                let orders = price_level.snapshot_by_insertion_seq();
-                let action = check_stp_at_level(&orders, taker_user_id, self.stp_mode);
+                // will actually fill/cancel. `snapshot_by_seq_into` (pricelevel 0.8.2)
+                // refills the pooled `stp_orders` scratch buffer in that exact order
+                // (clearing it first), so we reuse one allocation across every level
+                // instead of allocating a fresh `Vec` per conflicting level (#107). The
+                // order is identical to `snapshot_by_insertion_seq`: deterministic (fixing
+                // the #94 DashMap non-determinism) AND faithful to the sweep even under
+                // non-monotonic timestamps, unlike `snapshot_orders()` which is
+                // `(timestamp, seq)`-ordered (the residual gap closed by #132 /
+                // PriceLevel#102).
+                price_level.snapshot_by_seq_into(&mut stp_orders);
+                let action = check_stp_at_level(&stp_orders, taker_user_id, self.stp_mode);
 
                 match action {
                     STPAction::NoConflict => {
@@ -443,21 +455,27 @@ where
                         break;
                     }
 
-                    STPAction::CancelMaker { maker_order_ids } => {
-                        // Cancel same-user resting orders, then match normally.
+                    STPAction::CancelMaker => {
+                        // Cancel same-user resting orders, then match normally. We
+                        // re-scan the pooled snapshot in insertion-sequence order —
+                        // the exact order the old `maker_order_ids` Vec held — so the
+                        // cancel order (and therefore emitted events / journal) is
+                        // bit-identical to before, with no per-level allocation (#107).
                         // Each cancel runs on the level we already hold — it emits the
                         // level-change event, records OrderStatus::Cancelled
                         // { SelfTradePrevention }, and releases the per-account risk slot
                         // in lockstep, but does NOT remove the level from the map (no
                         // order_locations re-resolution either), so level removal stays
                         // with the post-walk empty_price_levels drain (#95).
-                        for maker_id in &maker_order_ids {
-                            self.cancel_resting_maker_on_level(
-                                price_level,
-                                side.opposite(),
-                                *maker_id,
-                                CancelReason::SelfTradePrevention,
-                            );
+                        for order in &stp_orders {
+                            if order.user_id() == taker_user_id {
+                                self.cancel_resting_maker_on_level(
+                                    price_level,
+                                    side.opposite(),
+                                    order.id(),
+                                    CancelReason::SelfTradePrevention,
+                                );
+                            }
                         }
                         // If the level is now empty, mark for removal and continue
                         if price_level.order_count() == 0 {
@@ -572,10 +590,15 @@ where
             self.untrack_order_by_id(filled_id);
         }
 
-        // Return vectors to pool for reuse
+        // Return vectors to pool for reuse. `stp_orders` only entered the pool
+        // when STP was active; otherwise it is an empty, never-filled `Vec` that
+        // is simply dropped.
         MATCHING_POOL.with(|pool| {
             pool.return_filled_orders_vec(filled_orders);
             pool.return_price_vec(empty_price_levels);
+            if stp_active {
+                pool.return_order_snapshot_vec(stp_orders);
+            }
         });
 
         let no_fills = match_result.trades().as_vec().is_empty();
@@ -932,7 +955,7 @@ where
                     }
                     // Same-user makers are cancelled, not filled: only non-self
                     // resting depth is reachable; the walk continues.
-                    STPAction::CancelMaker { .. } => {
+                    STPAction::CancelMaker => {
                         let non_self: u64 = orders
                             .iter()
                             .filter(|o| o.user_id() != taker_user_id)

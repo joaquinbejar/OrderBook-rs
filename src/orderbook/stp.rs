@@ -87,12 +87,11 @@ pub(crate) enum STPAction {
         safe_quantity: u64,
     },
 
-    /// CancelMaker triggered: these maker order IDs should be cancelled
-    /// before matching proceeds at this level.
-    CancelMaker {
-        /// Order IDs of same-user resting orders to cancel.
-        maker_order_ids: Vec<Id>,
-    },
+    /// CancelMaker triggered: at least one same-user resting order exists at
+    /// this level and must be cancelled before matching proceeds. The caller
+    /// re-scans the snapshot in insertion-sequence order and cancels each
+    /// same-user maker, so no per-level `Vec<Id>` is allocated here (#107).
+    CancelMaker,
 
     /// CancelBoth triggered: match up to `safe_quantity`, then cancel
     /// the maker and stop.
@@ -142,17 +141,13 @@ pub(crate) fn check_stp_at_level(
         }
 
         STPMode::CancelMaker => {
-            // Collect all same-user order IDs for cancellation
-            let maker_order_ids: Vec<Id> = orders
-                .iter()
-                .filter(|o| o.user_id() == taker_user_id)
-                .map(|o| o.id())
-                .collect();
-
-            if maker_order_ids.is_empty() {
-                STPAction::NoConflict
+            // Signal a conflict if any resting order belongs to the taker; the
+            // caller cancels the same-user makers by re-scanning the snapshot in
+            // insertion-sequence order, so no `Vec<Id>` is built here (#107).
+            if orders.iter().any(|o| o.user_id() == taker_user_id) {
+                STPAction::CancelMaker
             } else {
-                STPAction::CancelMaker { maker_order_ids }
+                STPAction::NoConflict
             }
         }
 
@@ -278,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_stp_cancel_maker_collects_ids() {
+    fn test_check_stp_cancel_maker_detects_same_user() {
         let taker_user = Hash32::new([1u8; 32]);
         let other_user = Hash32::new([2u8; 32]);
 
@@ -312,16 +307,12 @@ mod tests {
             time_in_force: pricelevel::TimeInForce::Gtc,
             extra_fields: (),
         });
-        let orders = vec![same1.clone(), other, same2.clone()];
+        let orders = vec![same1, other, same2];
+        // CancelMaker is now a unit variant; per-id cancellation is the caller's
+        // responsibility (it re-scans the snapshot), so the action just signals
+        // that a same-user maker exists at this level (#107).
         let action = check_stp_at_level(&orders, taker_user, STPMode::CancelMaker);
-        match action {
-            STPAction::CancelMaker { maker_order_ids } => {
-                assert_eq!(maker_order_ids.len(), 2);
-                assert_eq!(maker_order_ids[0], same1.id());
-                assert_eq!(maker_order_ids[1], same2.id());
-            }
-            _ => panic!("expected CancelMaker action"),
-        }
+        assert!(matches!(action, STPAction::CancelMaker));
     }
 
     #[test]

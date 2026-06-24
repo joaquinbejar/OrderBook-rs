@@ -277,6 +277,66 @@ mod tests {
         );
     }
 
+    /// #107: with same-user makers on BOTH sides of an interleaved other-user
+    /// maker (`same, other, same` in insertion/sweep order), CancelMaker cancels
+    /// EVERY same-user maker regardless of queue position and the taker fills
+    /// only the interleaved non-self maker. Pins the inline snapshot-buffer
+    /// cancel (which replaced the per-level `maker_order_ids` Vec) to the exact
+    /// CancelMaker set, position-independent, from the OrderBook side.
+    #[test]
+    fn test_cancel_maker_same_other_same_cancels_both_self_fills_other_issue_107() {
+        use crate::orderbook::order_state::{CancelReason, OrderStateTracker, OrderStatus};
+
+        let mut book: OrderBook<()> = OrderBook::new("TEST");
+        book.set_stp_mode(STPMode::CancelMaker);
+        book.set_order_state_tracker(OrderStateTracker::new());
+
+        let taker_user = user(9);
+        let other = user(1);
+
+        // Insertion (sweep) order at price 100: same -> other -> same.
+        let self_a = add_sell_order_with_user(&book, 100, 10, taker_user);
+        let other_b = add_sell_order_with_user(&book, 100, 7, other);
+        let self_c = add_sell_order_with_user(&book, 100, 20, taker_user);
+
+        // Same-user taker crosses with ample size.
+        let taker = Id::new();
+        let result = book.match_market_order_with_user(taker, 100, Side::Buy, taker_user);
+        assert!(
+            result.is_ok(),
+            "expected a fill against the non-self maker, got {result:?}"
+        );
+        let mr = result.unwrap();
+
+        // Only the interleaved other-user maker fills — exactly its 7 units, in
+        // one trade. The same-user makers never self-trade.
+        let trades = mr.trades().as_vec();
+        assert_eq!(trades.len(), 1, "only the non-self maker fills");
+        assert_eq!(trades[0].maker_order_id(), other_b);
+        assert_eq!(trades[0].quantity(), Quantity::new(7));
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(7));
+
+        // Both same-user makers are cancelled (SelfTradePrevention), regardless
+        // of their position around the non-self maker.
+        for self_id in [self_a, self_c] {
+            assert!(
+                book.get_order(self_id).is_none(),
+                "same-user maker must be STP-cancelled"
+            );
+            match book.order_status(self_id) {
+                Some(OrderStatus::Cancelled { reason, .. }) => {
+                    assert_eq!(reason, CancelReason::SelfTradePrevention);
+                }
+                other => panic!("expected Cancelled {{ SelfTradePrevention }}, got {other:?}"),
+            }
+        }
+        // The non-self maker was fully consumed.
+        assert!(
+            book.get_order(other_b).is_none(),
+            "non-self maker fully filled"
+        );
+    }
+
     /// CancelBoth: cancelling the maker releases its per-account risk slot (no
     /// counter leak) and records `Cancelled { SelfTradePrevention }`.
     #[test]
