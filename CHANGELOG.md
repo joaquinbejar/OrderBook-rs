@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **NATS publishers expose a graceful `shutdown`/flush path (#109).** Both
+  `NatsTradePublisher` and `NatsBookChangePublisher` spawned their background
+  batch task and discarded the `JoinHandle` with no cancellation signal, so a
+  pending batch could be silently lost on teardown and the detached task could
+  outlive the publisher. Each now retains the join handle plus a one-shot
+  shutdown signal and exposes an async `shutdown()` that signals the task to
+  drain every event still buffered in the channel, flush it, and exit, then
+  awaits the handle — no fire-and-forget task remains. A shared `drain_buffered`
+  helper (unit-tested) performs the non-blocking, FIFO, chunked drain. `nats`-gated.
 - **NATS trade publishing is batched/throttled off the matching hot path (#108).**
   `NatsTradePublisher::into_listener`'s callback used to serialize the payload,
   build two subjects with `format!`, convert to `Bytes`, and `runtime.spawn` a

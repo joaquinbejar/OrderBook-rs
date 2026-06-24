@@ -27,10 +27,31 @@
 use crate::orderbook::book_change_event::{PriceLevelChangedEvent, PriceLevelChangedListener};
 use pricelevel::Side;
 use serde::Serialize;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tracing::{error, trace, warn};
+
+/// Drain every immediately-available item from `rx` into `out` (up to `limit`),
+/// without awaiting new sends. Returns the number drained.
+///
+/// Used by the shutdown path to flush events that were already accepted into
+/// the channel before teardown, so none are silently lost. `try_recv` never
+/// blocks: it stops as soon as the channel is momentarily empty or closed.
+fn drain_buffered<T>(rx: &mut mpsc::Receiver<T>, out: &mut Vec<T>, limit: usize) -> usize {
+    let mut drained = 0;
+    while out.len() < limit {
+        match rx.try_recv() {
+            Ok(item) => {
+                out.push(item);
+                drained += 1;
+            }
+            Err(_) => break,
+        }
+    }
+    drained
+}
 
 /// Default batch window in milliseconds. Events are accumulated for at most
 /// this duration before being flushed to NATS.
@@ -215,6 +236,17 @@ pub struct NatsBookChangePublisher {
 
     /// Events dropped because the bounded channel was full.
     dropped_events: AtomicU64,
+
+    /// Join handle for the single background batch task, populated by
+    /// [`into_listener`](NatsBookChangePublisher::into_listener). Taken and
+    /// awaited by [`shutdown`](NatsBookChangePublisher::shutdown) so teardown
+    /// can join the task rather than leaving it detached.
+    task_handle: Mutex<Option<JoinHandle<()>>>,
+
+    /// One-shot signal that asks the background task to drain any buffered
+    /// events, flush them, and exit. Sent by
+    /// [`shutdown`](NatsBookChangePublisher::shutdown).
+    shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl NatsBookChangePublisher {
@@ -249,6 +281,8 @@ impl NatsBookChangePublisher {
             events_received: AtomicU64::new(0),
             batches_published: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
+            task_handle: Mutex::new(None),
+            shutdown_tx: Mutex::new(None),
         }
     }
 
@@ -379,12 +413,20 @@ impl NatsBookChangePublisher {
         let handle = Arc::clone(&publisher);
 
         let (tx, rx) = mpsc::channel::<PriceLevelChangedEvent>(channel_capacity);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-        // Spawn the background batch task
+        // Spawn the background batch task and retain its join handle so
+        // `shutdown` can await it instead of leaving it detached.
         let batch_publisher = Arc::clone(&publisher);
-        publisher
+        let join = publisher
             .runtime
-            .spawn(Self::batch_task(batch_publisher, rx));
+            .spawn(Self::batch_task(batch_publisher, rx, shutdown_rx));
+        if let Ok(mut slot) = publisher.task_handle.lock() {
+            *slot = Some(join);
+        }
+        if let Ok(mut slot) = publisher.shutdown_tx.lock() {
+            *slot = Some(shutdown_tx);
+        }
 
         // Build the listener closure
         let listener_publisher = Arc::clone(&publisher);
@@ -403,6 +445,38 @@ impl NatsBookChangePublisher {
         (handle, listener)
     }
 
+    /// Gracefully shut down the background batch task.
+    ///
+    /// Signals the background task to drain any events still buffered in the
+    /// channel, flush them to NATS, and exit, then awaits the task's join
+    /// handle so teardown does not race in-flight publishes. Safe to call more
+    /// than once and from any task — the second call is a no-op.
+    ///
+    /// Note that the [`PriceLevelChangedListener`] closure still holds a channel
+    /// sender, so shutdown does not rely on the listener being dropped first;
+    /// the explicit signal is what unblocks the task. After shutdown, further
+    /// events sent to the (now-departed) task are dropped and counted in
+    /// `dropped_events`.
+    pub async fn shutdown(&self) {
+        if let Ok(mut slot) = self.shutdown_tx.lock()
+            && let Some(tx) = slot.take()
+        {
+            // A failed send means the task already exited; nothing to drain.
+            let _ = tx.send(());
+        }
+
+        // Take the handle out of the mutex before awaiting so the guard is not
+        // held across the await point.
+        let handle = self
+            .task_handle
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(handle) = handle {
+            let _ = handle.await;
+        }
+    }
+
     /// Background task that drains the event channel, batches events, and
     /// publishes them to NATS.
     ///
@@ -412,7 +486,11 @@ impl NatsBookChangePublisher {
     ///
     /// When throttling is enabled (`min_publish_interval_ms > 0`), the task
     /// waits at least that duration between consecutive publishes.
-    async fn batch_task(publisher: Arc<Self>, mut rx: mpsc::Receiver<PriceLevelChangedEvent>) {
+    async fn batch_task(
+        publisher: Arc<Self>,
+        mut rx: mpsc::Receiver<PriceLevelChangedEvent>,
+        mut shutdown_rx: oneshot::Receiver<()>,
+    ) {
         let batch_window = std::time::Duration::from_millis(publisher.batch_window_ms);
         let min_interval = if publisher.min_publish_interval_ms > 0 {
             Some(std::time::Duration::from_millis(
@@ -426,11 +504,35 @@ impl NatsBookChangePublisher {
         let mut last_publish = tokio::time::Instant::now();
 
         loop {
-            // Wait for the first event or channel close
+            // Wait for the first event, a channel close, or a shutdown signal.
             if batch.is_empty() {
-                match rx.recv().await {
-                    Some(event) => batch.push(BookChangeEntry::from(event)),
-                    None => break, // Channel closed
+                let mut pending: Vec<PriceLevelChangedEvent> = Vec::new();
+                tokio::select! {
+                    biased;
+                    _ = &mut shutdown_rx => {
+                        // Drain everything already buffered, flushing in
+                        // max-sized chunks, so no accepted event is lost.
+                        loop {
+                            pending.clear();
+                            drain_buffered(&mut rx, &mut pending, publisher.max_batch_size);
+                            if pending.is_empty() {
+                                break;
+                            }
+                            batch.extend(pending.drain(..).map(BookChangeEntry::from));
+                            Self::flush_batch(
+                                &publisher,
+                                &mut batch,
+                                &mut last_publish,
+                                min_interval,
+                            )
+                            .await;
+                        }
+                        return;
+                    }
+                    maybe = rx.recv() => match maybe {
+                        Some(event) => batch.push(BookChangeEntry::from(event)),
+                        None => break, // Channel closed
+                    },
                 }
             }
 
@@ -864,6 +966,40 @@ mod tests {
         let value = result.unwrap_or(serde_json::Value::Null);
         assert_eq!(value.get("price").and_then(|v| v.as_u64()), Some(42_000));
         assert_eq!(value.get("quantity").and_then(|v| v.as_u64()), Some(500));
+    }
+
+    #[test]
+    fn test_drain_buffered_collects_all_pending_events() {
+        // The shutdown path must drain every already-accepted event so none is
+        // lost on teardown.
+        let (tx, mut rx) = mpsc::channel::<u32>(4);
+        for i in 0..3u32 {
+            tx.try_send(i).expect("channel has room");
+        }
+        let mut out = Vec::new();
+        let drained = drain_buffered(&mut rx, &mut out, 100);
+        assert_eq!(drained, 3, "all buffered events must be drained");
+        assert_eq!(out, vec![0, 1, 2], "drain preserves FIFO order");
+
+        let mut out2 = Vec::new();
+        assert_eq!(drain_buffered(&mut rx, &mut out2, 100), 0);
+        assert!(out2.is_empty());
+    }
+
+    #[test]
+    fn test_drain_buffered_respects_limit() {
+        // Draining stops once `out` reaches the limit, leaving the rest for the
+        // next flush chunk.
+        let (tx, mut rx) = mpsc::channel::<u32>(8);
+        for i in 0..5u32 {
+            tx.try_send(i).expect("channel has room");
+        }
+        let mut out = Vec::new();
+        assert_eq!(drain_buffered(&mut rx, &mut out, 2), 2);
+        assert_eq!(out, vec![0, 1]);
+        let mut rest = Vec::new();
+        assert_eq!(drain_buffered(&mut rx, &mut rest, 100), 3);
+        assert_eq!(rest, vec![2, 3, 4]);
     }
 
     #[test]
