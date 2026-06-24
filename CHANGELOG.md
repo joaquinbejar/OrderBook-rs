@@ -70,6 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also posited is not reachable through the validated admission path — it rejects
   non-lot-multiple orders — but the rounding is kept so the check stays faithful to
   the matching walk.)
+- **STP-cancelled takers no longer rest a self-cross residual (#97).** When a taker
+  partially filled against another user and then would self-cross under
+  `CancelTaker` / `CancelBoth`, the engine returned `Ok` with a resting remainder
+  (GTC) — defeating STP and never recording the terminal `SelfTradePrevention`
+  state. `match_order_inner` now returns a `MatchOutcome` carrying a
+  `taker_stp_cancelled` flag; `add_order` cancels the residual (records
+  `Cancelled { SelfTradePrevention }` with the true filled quantity and returns
+  `SelfTradePrevented`) instead of resting it. The public `match_order` /
+  `match_order_with_user` signatures are unchanged.
 
 ## [0.8.0] — 2026-05-03
 

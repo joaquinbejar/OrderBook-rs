@@ -36,6 +36,29 @@ fn order_matchable_qty(order: &OrderType<()>) -> u64 {
     visible.saturating_add(drawable_hidden)
 }
 
+/// Outcome of an internal match: the [`MatchResult`] plus whether self-trade
+/// prevention cancelled the taker. The flag lets the resting caller (`add_order`)
+/// know it must NOT rest the residual — a partially-filled taker that then
+/// self-crossed under `CancelTaker` / `CancelBoth` is cancelled, not rested (#97).
+#[derive(Debug)]
+pub(crate) struct MatchOutcome {
+    /// The trades, filled-order ids, and remaining quantity of the match.
+    pub(crate) result: MatchResult,
+    /// `true` when STP cancelled the taker, so any residual must not rest.
+    pub(crate) taker_stp_cancelled: bool,
+}
+
+impl MatchOutcome {
+    /// Wrap a `MatchResult` with no STP cancellation (common case / empty book).
+    #[inline]
+    fn resting(result: MatchResult) -> Self {
+        Self {
+            result,
+            taker_stp_cancelled: false,
+        }
+    }
+}
+
 /// Selects how the matching loop measures its budget.
 ///
 /// `BaseQty` is the legacy base-asset quantity path (existing market and
@@ -217,6 +240,21 @@ where
         limit_price: Option<u128>,
         taker_user_id: Hash32,
     ) -> Result<MatchResult, OrderBookError> {
+        self.match_order_with_user_outcome(order_id, side, quantity, limit_price, taker_user_id)
+            .map(|o| o.result)
+    }
+
+    /// Like [`Self::match_order_with_user`] but returns the full [`MatchOutcome`],
+    /// including the STP-cancel signal the resting caller in `add_order` needs to
+    /// avoid resting a self-cross residual (#97).
+    pub(crate) fn match_order_with_user_outcome(
+        &self,
+        order_id: Id,
+        side: Side,
+        quantity: u64,
+        limit_price: Option<u128>,
+        taker_user_id: Hash32,
+    ) -> Result<MatchOutcome, OrderBookError> {
         self.match_order_inner(
             order_id,
             side,
@@ -255,6 +293,7 @@ where
             MatchMode::QuoteAmount { amount },
             taker_user_id,
         )
+        .map(|o| o.result)
     }
 
     /// Unified matching loop driven by [`MatchMode`] / [`StopCondition`].
@@ -278,7 +317,7 @@ where
         side: Side,
         mode: MatchMode,
         taker_user_id: Hash32,
-    ) -> Result<MatchResult, OrderBookError> {
+    ) -> Result<MatchOutcome, OrderBookError> {
         self.cache.invalidate();
         let mut match_result =
             MatchResult::new(order_id, Quantity::new(mode.initial_match_quantity()));
@@ -301,7 +340,9 @@ where
 
         // Early exit if the opposite side is empty
         if match_side.is_empty() {
-            return self.empty_book_result(side, &mode, match_result);
+            return self
+                .empty_book_result(side, &mode, match_result)
+                .map(MatchOutcome::resting);
         }
 
         // Use static memory pool for better performance
@@ -610,7 +651,10 @@ where
             match_result = Self::normalize_notional_match_result(order_id, match_result);
         }
 
-        Ok(match_result)
+        Ok(MatchOutcome {
+            result: match_result,
+            taker_stp_cancelled: stp_taker_cancelled,
+        })
     }
 
     /// Rebuild a `MatchResult` produced by the quote-notional path so its

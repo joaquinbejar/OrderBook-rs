@@ -308,6 +308,101 @@ mod tests {
         );
     }
 
+    /// #97: a taker that partially fills against another user and then would
+    /// self-cross under CancelTaker must have its residual CANCELLED, not rested.
+    /// Previously the partial-fill path returned Ok with a resting remainder,
+    /// defeating STP and never recording the SelfTradePrevention terminal state.
+    #[test]
+    fn test_cancel_taker_partial_self_cross_does_not_rest_residual() {
+        use crate::orderbook::order_state::{CancelReason, OrderStateTracker, OrderStatus};
+
+        let mut book: OrderBook<()> = OrderBook::new("TEST");
+        book.set_stp_mode(STPMode::CancelTaker);
+        book.set_order_state_tracker(OrderStateTracker::new());
+
+        let taker_user = user(7);
+        let other = user(1);
+
+        // Non-self liquidity at the better price; the taker's own order behind it.
+        let other_maker = add_sell_order_with_user(&book, 100, 5, other);
+        let self_maker = add_sell_order_with_user(&book, 200, 10, taker_user);
+
+        // GTC buy 20 at limit 200: fills 5 vs `other` at 100, then hits its own
+        // order at 200 -> CancelTaker cancels the taker. The 15-unit residual must
+        // NOT rest, and the taker records Cancelled { SelfTradePrevention }.
+        let taker_id = Id::new();
+        let taker = OrderType::Standard {
+            id: taker_id,
+            price: Price::new(200),
+            quantity: Quantity::new(20),
+            side: Side::Buy,
+            user_id: taker_user,
+            time_in_force: TimeInForce::Gtc,
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
+            extra_fields: (),
+        };
+        let result = book.add_order(taker);
+
+        assert!(
+            matches!(result, Err(OrderBookError::SelfTradePrevented { .. })),
+            "partial self-cross under CancelTaker must surface the STP error, got {result:?}"
+        );
+        assert!(
+            book.get_order(taker_id).is_none(),
+            "STP-cancelled taker must not rest its residual"
+        );
+        assert!(book.bids.is_empty(), "no residual bid level should exist");
+
+        match book.order_status(taker_id) {
+            Some(OrderStatus::Cancelled {
+                filled_quantity,
+                reason,
+            }) => {
+                assert_eq!(reason, CancelReason::SelfTradePrevention);
+                assert_eq!(
+                    filled_quantity, 5,
+                    "filled quantity must reflect the 5-unit non-self fill"
+                );
+            }
+            other => panic!("expected Cancelled {{ SelfTradePrevention, 5 }}, got {other:?}"),
+        }
+
+        // The non-self maker was consumed; the self maker survives (CancelTaker).
+        assert!(book.get_order(other_maker).is_none());
+        assert!(book.get_order(self_maker).is_some());
+    }
+
+    /// #97 (notional path contract): `match_market_order_by_amount_with_user` is a
+    /// MATCH-ONLY API — a notional taker that partially fills then self-crosses
+    /// under CancelTaker returns `Ok(partial)` (the unspent notional is simply not
+    /// consumed), mirroring the base-qty market-order contract. It never rests a
+    /// residual and never emits a self-trade; the residual-cancel of #97 only
+    /// applies to the lifecycle-managing `add_order` path.
+    #[test]
+    fn test_notional_market_partial_self_cross_returns_partial() {
+        let mut book: OrderBook<()> = OrderBook::new("TEST");
+        book.set_stp_mode(STPMode::CancelTaker);
+
+        let taker_user = user(7);
+        let other = user(1);
+
+        let other_maker = add_sell_order_with_user(&book, 100, 5, other);
+        let self_maker = add_sell_order_with_user(&book, 200, 10, taker_user);
+
+        // Notional buy of 1000 quote: 5 @ 100 (500 spent) vs `other`, then the
+        // self-cross at 200 cancels the taker. Match-only -> Ok with the 5-unit fill.
+        let taker_id = Id::new();
+        let result =
+            book.match_market_order_by_amount_with_user(taker_id, 1000, Side::Buy, taker_user);
+
+        let mr = result.expect("notional partial self-cross returns Ok(partial)");
+        assert_eq!(mr.executed_quantity().unwrap(), Quantity::new(5));
+        assert!(book.get_order(taker_id).is_none(), "no residual rests");
+        assert!(book.bids.is_empty());
+        assert!(book.get_order(other_maker).is_none());
+        assert!(book.get_order(self_maker).is_some());
+    }
+
     // -----------------------------------------------------------------------
     // STPMode::None — backward compatibility
     // -----------------------------------------------------------------------

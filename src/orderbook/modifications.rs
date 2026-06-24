@@ -1,6 +1,7 @@
 use crate::orderbook::book::OrderBook;
 use crate::orderbook::book_change_event::PriceLevelChangedEvent;
 use crate::orderbook::error::OrderBookError;
+use crate::orderbook::matching::MatchOutcome;
 use crate::orderbook::order_state::{CancelReason, OrderStatus};
 use crate::orderbook::reject_reason::RejectReason;
 use crate::orderbook::trade::TradeResult;
@@ -862,8 +863,12 @@ where
         }
 
         self.cache.invalidate();
-        // Attempt to match the order immediately (with STP user_id propagation)
-        let match_result = self.match_order_with_user(
+        // Attempt to match the order immediately (with STP user_id propagation).
+        // The outcome also carries whether STP cancelled the taker (#97).
+        let MatchOutcome {
+            result: match_result,
+            taker_stp_cancelled,
+        } = self.match_order_with_user_outcome(
             order.id(),
             order.side(),
             order.total_quantity(), // Use total quantity for matching
@@ -885,9 +890,30 @@ where
             }
         }
 
-        // Track the incoming order's state based on matching result
+        // True (non-self) executed quantity. `remaining_quantity` only decrements on
+        // real trades, so STP-prevented self-fills never count toward it.
         let original_qty = order.total_quantity();
         let filled_qty = original_qty.saturating_sub(match_result.remaining_quantity().as_u64());
+
+        // If STP cancelled the taker, the residual must NOT rest — even though some
+        // non-self fills already occurred at earlier levels. Record the terminal
+        // SelfTradePrevention state with the true filled quantity and surface the STP
+        // error (#97). The zero-fills case already returned this error from the match.
+        if taker_stp_cancelled {
+            self.track_state(
+                order.id(),
+                OrderStatus::Cancelled {
+                    filled_quantity: filled_qty,
+                    reason: CancelReason::SelfTradePrevention,
+                },
+            );
+            crate::orderbook::metrics::record_reject(RejectReason::SelfTradePrevention);
+            return Err(OrderBookError::SelfTradePrevented {
+                mode: self.stp_mode,
+                taker_order_id: order.id(),
+                user_id: order.user_id(),
+            });
+        }
 
         // If the order was not fully filled, add the remainder to the book
         if match_result.remaining_quantity().as_u64() > 0 {
