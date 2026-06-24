@@ -54,6 +54,30 @@ fn drain_buffered<T>(rx: &mut mpsc::Receiver<T>, out: &mut Vec<T>, limit: usize)
     drained
 }
 
+/// Records the outcome of publishing one trade to its two subjects, using a
+/// single **per-trade** granularity shared with `publish_count`.
+///
+/// Increments `publish_count` once on a clean success (both subjects ok) or
+/// `error_count` once otherwise — so a partial failure (one subject ok, the
+/// other exhausted) counts as exactly one failed trade, never as two and never
+/// as none. Returns `true` on success. With this rule
+/// `publish_count + error_count` always equals the number of trades that reached
+/// the publish step.
+fn account_publish_outcome(
+    publish_count: &AtomicU64,
+    error_count: &AtomicU64,
+    symbol_ok: bool,
+    all_ok: bool,
+) -> bool {
+    if symbol_ok && all_ok {
+        publish_count.fetch_add(1, Ordering::Relaxed);
+        true
+    } else {
+        error_count.fetch_add(1, Ordering::Relaxed);
+        false
+    }
+}
+
 /// Default batch window in milliseconds. Trades are drained from the channel
 /// for at most this duration before the accumulated batch is published.
 const DEFAULT_BATCH_WINDOW_MS: u64 = 1;
@@ -97,9 +121,13 @@ const BASE_RETRY_DELAY_MS: u64 = 10;
 ///
 /// The publisher tracks the following counters via atomic operations:
 ///
-/// - **publish_count** — number of successfully published trades (a trade
-///   counts once when both its symbol and aggregate publishes succeed)
-/// - **error_count** — number of permanently failed publish/serialize attempts
+/// - **publish_count** — number of trades published successfully (counted once
+///   per trade, when both its symbol and aggregate publishes succeed)
+/// - **error_count** — number of trades that **failed** to publish, counted once
+///   per trade (a serialization failure, or one or both subjects exhausting
+///   their retries). Same per-trade granularity as `publish_count`, so
+///   `publish_count + error_count` equals the number of trades processed by the
+///   background task and a partial failure is attributable to exactly one trade.
 /// - **events_received** — total trades received from the listener callback
 /// - **batches_published** — total drain/flush cycles performed
 /// - **dropped_events** — trades dropped because the channel was full
@@ -160,11 +188,13 @@ pub struct NatsTradePublisher {
     /// signature spawns exactly one task per publisher).
     sequence: AtomicU64,
 
-    /// Count of successfully published trades (one per trade when both subjects
-    /// succeed).
+    /// Count of trades published successfully — incremented once per trade when
+    /// both its symbol and aggregate subjects succeed.
     publish_count: AtomicU64,
 
-    /// Count of permanently failed publish/serialize attempts.
+    /// Count of trades that failed to publish — incremented once per trade (a
+    /// serialize failure, or one or both subjects exhausting retries). Shares the
+    /// per-trade granularity of `publish_count`.
     error_count: AtomicU64,
 
     /// Total trades received from the listener callback.
@@ -613,8 +643,14 @@ impl NatsTradePublisher {
         // Publish to aggregate subject
         let all_ok = Self::publish_single(&publisher, &all_subject, payload, all_headers).await;
 
-        if symbol_ok && all_ok {
-            publisher.publish_count.fetch_add(1, Ordering::Relaxed);
+        // Per-trade accounting: a trade is either a clean success or a failure,
+        // counted once on the matching counter.
+        if account_publish_outcome(
+            &publisher.publish_count,
+            &publisher.error_count,
+            symbol_ok,
+            all_ok,
+        ) {
             trace!(symbol_seq, all_seq, symbol = %symbol_subject, "trade event published to NATS");
         }
     }
@@ -680,7 +716,10 @@ impl NatsTradePublisher {
             }
         }
 
-        publisher.error_count.fetch_add(1, Ordering::Relaxed);
+        // NOTE: `error_count` is NOT incremented here. It is accounted once per
+        // logical trade in `publish_with_retry` so it shares the per-trade
+        // granularity of `publish_count` (a per-subject increment here would
+        // double-count a trade whose two subjects both fail).
         error!(subject, "NATS publish failed after all retries");
         false
     }
@@ -831,6 +870,56 @@ mod tests {
             // All values saturate rather than panic
             assert!(delay >= BASE_RETRY_DELAY_MS);
         }
+    }
+
+    #[test]
+    fn test_publish_outcome_accounting_is_per_trade() {
+        // #127: publish_count and error_count share one per-trade granularity.
+        let publish_count = AtomicU64::new(0);
+        let error_count = AtomicU64::new(0);
+
+        // Clean success.
+        assert!(account_publish_outcome(
+            &publish_count,
+            &error_count,
+            true,
+            true
+        ));
+        // Partial failure: symbol ok, aggregate exhausted.
+        assert!(!account_publish_outcome(
+            &publish_count,
+            &error_count,
+            true,
+            false
+        ));
+        // Partial failure: aggregate ok, symbol exhausted.
+        assert!(!account_publish_outcome(
+            &publish_count,
+            &error_count,
+            false,
+            true
+        ));
+        // Full failure: both exhausted.
+        assert!(!account_publish_outcome(
+            &publish_count,
+            &error_count,
+            false,
+            false
+        ));
+
+        let pc = publish_count.load(Ordering::Relaxed);
+        let ec = error_count.load(Ordering::Relaxed);
+        assert_eq!(pc, 1, "exactly one successful trade");
+        assert_eq!(
+            ec, 3,
+            "three failed trades (two partial, one full), one increment each"
+        );
+        // Every trade incremented exactly one counter — the totals reconcile.
+        assert_eq!(
+            pc + ec,
+            4,
+            "publish_count + error_count == trades processed"
+        );
     }
 
     #[test]
