@@ -24,19 +24,27 @@ use crate::orderbook::book_change_event::PriceLevelChangedEvent;
 use crate::orderbook::trade::TradeResult;
 
 /// Errors that can occur during event serialization or deserialization.
-#[derive(Debug)]
-pub struct SerializationError {
-    /// Human-readable description of the failure.
-    pub message: String,
-}
+///
+/// A typed enum that preserves the underlying serde / bincode failure rather
+/// than flattening it to a string. It bridges into
+/// [`OrderBookError`](crate::orderbook::OrderBookError) via `From`, so an
+/// [`EventSerializer`] failure can be `?`-propagated on paths that return
+/// `OrderBookError`.
+#[derive(Debug, thiserror::Error)]
+pub enum SerializationError {
+    /// JSON (`serde_json`) serialization or deserialization failed.
+    #[error("JSON serialization error: {0}")]
+    Json(#[from] serde_json::Error),
 
-impl std::fmt::Display for SerializationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "event serialization error: {}", self.message)
-    }
-}
+    /// Binary (`bincode`) serialization or deserialization failed.
+    #[error("bincode serialization error: {0}")]
+    Bincode(String),
 
-impl std::error::Error for SerializationError {}
+    /// The decoded payload had unexpected trailing bytes (corruption or a
+    /// format mismatch).
+    #[error("{0}")]
+    TrailingBytes(String),
+}
 
 /// A pluggable serializer for order book events.
 ///
@@ -119,33 +127,25 @@ impl JsonEventSerializer {
 
 impl EventSerializer for JsonEventSerializer {
     fn serialize_trade(&self, trade: &TradeResult) -> Result<Vec<u8>, SerializationError> {
-        serde_json::to_vec(trade).map_err(|e| SerializationError {
-            message: e.to_string(),
-        })
+        serde_json::to_vec(trade).map_err(SerializationError::Json)
     }
 
     fn serialize_book_change(
         &self,
         event: &PriceLevelChangedEvent,
     ) -> Result<Vec<u8>, SerializationError> {
-        serde_json::to_vec(event).map_err(|e| SerializationError {
-            message: e.to_string(),
-        })
+        serde_json::to_vec(event).map_err(SerializationError::Json)
     }
 
     fn deserialize_trade(&self, data: &[u8]) -> Result<TradeResult, SerializationError> {
-        serde_json::from_slice(data).map_err(|e| SerializationError {
-            message: e.to_string(),
-        })
+        serde_json::from_slice(data).map_err(SerializationError::Json)
     }
 
     fn deserialize_book_change(
         &self,
         data: &[u8],
     ) -> Result<PriceLevelChangedEvent, SerializationError> {
-        serde_json::from_slice(data).map_err(|e| SerializationError {
-            message: e.to_string(),
-        })
+        serde_json::from_slice(data).map_err(SerializationError::Json)
     }
 
     #[inline]
@@ -191,37 +191,27 @@ impl BincodeEventSerializer {
 #[cfg(feature = "bincode")]
 impl EventSerializer for BincodeEventSerializer {
     fn serialize_trade(&self, trade: &TradeResult) -> Result<Vec<u8>, SerializationError> {
-        bincode::serde::encode_to_vec(trade, bincode::config::standard()).map_err(|e| {
-            SerializationError {
-                message: e.to_string(),
-            }
-        })
+        bincode::serde::encode_to_vec(trade, bincode::config::standard())
+            .map_err(|e| SerializationError::Bincode(e.to_string()))
     }
 
     fn serialize_book_change(
         &self,
         event: &PriceLevelChangedEvent,
     ) -> Result<Vec<u8>, SerializationError> {
-        bincode::serde::encode_to_vec(event, bincode::config::standard()).map_err(|e| {
-            SerializationError {
-                message: e.to_string(),
-            }
-        })
+        bincode::serde::encode_to_vec(event, bincode::config::standard())
+            .map_err(|e| SerializationError::Bincode(e.to_string()))
     }
 
     fn deserialize_trade(&self, data: &[u8]) -> Result<TradeResult, SerializationError> {
         let (value, bytes_read) =
             bincode::serde::decode_from_slice::<TradeResult, _>(data, bincode::config::standard())
-                .map_err(|e| SerializationError {
-                    message: e.to_string(),
-                })?;
+                .map_err(|e| SerializationError::Bincode(e.to_string()))?;
         if bytes_read != data.len() {
-            return Err(SerializationError {
-                message: format!(
-                    "trailing bytes after trade payload: consumed {bytes_read} of {}",
-                    data.len()
-                ),
-            });
+            return Err(SerializationError::TrailingBytes(format!(
+                "trailing bytes after trade payload: consumed {bytes_read} of {}",
+                data.len()
+            )));
         }
         Ok(value)
     }
@@ -234,16 +224,12 @@ impl EventSerializer for BincodeEventSerializer {
             data,
             bincode::config::standard(),
         )
-        .map_err(|e| SerializationError {
-            message: e.to_string(),
-        })?;
+        .map_err(|e| SerializationError::Bincode(e.to_string()))?;
         if bytes_read != data.len() {
-            return Err(SerializationError {
-                message: format!(
-                    "trailing bytes after book-change payload: consumed {bytes_read} of {}",
-                    data.len()
-                ),
-            });
+            return Err(SerializationError::TrailingBytes(format!(
+                "trailing bytes after book-change payload: consumed {bytes_read} of {}",
+                data.len()
+            )));
         }
         Ok(value)
     }
@@ -350,13 +336,32 @@ mod tests {
     }
 
     #[test]
-    fn test_serialization_error_display() {
-        let err = SerializationError {
-            message: "test error".to_string(),
-        };
+    fn test_serialization_error_display_preserves_underlying() {
+        // The Json variant preserves the typed serde error.
+        let serde_err = serde_json::from_str::<i32>("not a number").unwrap_err();
+        let err = SerializationError::Json(serde_err);
         let display = format!("{err}");
-        assert!(display.contains("event serialization error"));
-        assert!(display.contains("test error"));
+        assert!(display.contains("JSON serialization error"));
+
+        let trailing = SerializationError::TrailingBytes("consumed 3 of 5".to_string());
+        assert!(format!("{trailing}").contains("consumed 3 of 5"));
+    }
+
+    #[test]
+    fn test_serialization_error_propagates_into_orderbook_error() {
+        use crate::orderbook::error::OrderBookError;
+
+        // A function returning OrderBookError can `?` a SerializationError
+        // thanks to the `From` bridge.
+        fn run() -> Result<i32, OrderBookError> {
+            let parsed: i32 = serde_json::from_str("nope").map_err(SerializationError::Json)?;
+            Ok(parsed)
+        }
+
+        match run() {
+            Err(OrderBookError::SerializationError { .. }) => {}
+            other => panic!("expected OrderBookError::SerializationError, got {other:?}"),
+        }
     }
 
     // ─── Bincode tests ──────────────────────────────────────────────────

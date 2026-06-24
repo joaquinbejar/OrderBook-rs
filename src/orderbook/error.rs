@@ -333,6 +333,19 @@ impl From<PriceLevelError> for OrderBookError {
     }
 }
 
+impl From<crate::orderbook::serialization::SerializationError> for OrderBookError {
+    /// Folds a typed [`SerializationError`](crate::orderbook::serialization::SerializationError)
+    /// into [`OrderBookError::SerializationError`], preserving the underlying
+    /// serde / bincode message via the error's `Display`. Enables
+    /// `?`-propagation of an `EventSerializer` failure on paths returning
+    /// `OrderBookError`.
+    fn from(err: crate::orderbook::serialization::SerializationError) -> Self {
+        OrderBookError::SerializationError {
+            message: err.to_string(),
+        }
+    }
+}
+
 impl Clone for OrderBookError {
     fn clone(&self) -> Self {
         match self {

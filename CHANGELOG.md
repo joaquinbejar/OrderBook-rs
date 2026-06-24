@@ -38,6 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SerializationError` is a typed `thiserror` enum that bridges into `OrderBookError` (#118).**
+  The `EventSerializer` error was a hand-rolled `struct { message: String }` with
+  manual `Display`/`Error` impls and no `#[from]` bridge, flattening the structured
+  serde/bincode failure to a string and deviating from the documented typed-error
+  convention. It is now a `thiserror` enum — `Json(#[from] serde_json::Error)`
+  (preserves the typed serde error), `Bincode(String)`, `TrailingBytes(String)` —
+  and a `From<SerializationError> for OrderBookError` bridge folds it into
+  `OrderBookError::SerializationError`, so an `EventSerializer` failure can be
+  `?`-propagated on paths that return `OrderBookError`. Breaking for code that
+  constructed/matched the old struct (`SerializationError { message }`); permitted
+  under the 0.8 → 0.9 window.
 - **`OrderBook` Serialize is deterministic and documented as lossy (#117).** The
   hand-written `Serialize` for `OrderBook<T>` collected bids/asks/order_locations
   into `HashMap`s (non-deterministic JSON key order across runs) and serialized
