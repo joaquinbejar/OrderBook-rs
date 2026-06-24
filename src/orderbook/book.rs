@@ -2637,6 +2637,8 @@ where
         package.engine_seq = self.engine_seq();
         package.kill_switch_engaged = self.is_kill_switch_engaged();
         package.risk_config = self.risk_state.config().cloned();
+        package.market_close_timestamp = self.market_close_timestamp.load(Ordering::Relaxed);
+        package.has_market_close = self.has_market_close.load(Ordering::Relaxed);
         Ok(package)
     }
 
@@ -2650,7 +2652,7 @@ where
     /// This restores both the order data and the configuration fields
     /// (`fee_schedule`, `stp_mode`, `tick_size`, `lot_size`,
     /// `min_order_size`, `max_order_size`, `engine_seq`,
-    /// `kill_switch_engaged`) that were captured by
+    /// `kill_switch_engaged`, and the scheduled market close) that were captured by
     /// [`create_snapshot_package`](Self::create_snapshot_package).
     ///
     /// The kill-switch flag is operator-driven and not journaled by
@@ -2672,6 +2674,8 @@ where
         let engine_seq = package.engine_seq;
         let kill_switch_engaged = package.kill_switch_engaged;
         let risk_config = package.risk_config.clone();
+        let market_close_timestamp = package.market_close_timestamp;
+        let has_market_close = package.has_market_close;
 
         // Take ownership of the validated snapshot. We hold it locally
         // so that the per-account risk counters can be rebuilt from
@@ -2715,6 +2719,14 @@ where
         // operational mode it was halted in.
         self.kill_switch
             .store(kill_switch_engaged, Ordering::Relaxed);
+
+        // Restore the scheduled market close so DAY / GTD expiry resumes against the
+        // same session boundary the book was snapshotted with. `restore_from_snapshot`
+        // reset these to `0` / `false`, so re-apply them afterwards (#100).
+        self.market_close_timestamp
+            .store(market_close_timestamp, Ordering::Relaxed);
+        self.has_market_close
+            .store(has_market_close, Ordering::Relaxed);
 
         Ok(())
     }

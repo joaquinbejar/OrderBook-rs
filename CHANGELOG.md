@@ -92,6 +92,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   permanently rejected new flow (the exact failure bulk cancel exists to avoid). It
   now calls a new `RiskState::clear()` (also reused by `rebuild_from_snapshot`),
   zeroing the per-account counters and the per-order risk map.
+- **Snapshot packages preserve the scheduled market close (#100).**
+  `create_snapshot_package` did not capture `market_close_timestamp` /
+  `has_market_close`, and `restore_from_snapshot` reset them to `0` / `false`, so a
+  book with a configured market close silently lost it (and its DAY / GTD expiry
+  schedule) after a snapshot round-trip or replay. The two values are now carried on
+  `OrderBookSnapshotPackage` (additive `#[serde(default)]`, format version stays 2)
+  and re-applied on restore, mirroring `kill_switch_engaged`.
 
 ## [0.8.0] — 2026-05-03
 

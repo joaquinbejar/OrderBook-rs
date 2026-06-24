@@ -228,6 +228,23 @@ pub struct OrderBookSnapshotPackage {
     /// always came back without any risk gates engaged.
     #[serde(default)]
     pub risk_config: Option<RiskConfig>,
+
+    /// Scheduled market-close timestamp (milliseconds since epoch) active at the
+    /// time of snapshot — drives DAY / GTD expiry. `0` together with
+    /// `has_market_close = false` means no close is configured. Restored by
+    /// [`OrderBook::restore_from_snapshot_package`](super::book::OrderBook::restore_from_snapshot_package)
+    /// so a recovered book keeps its session schedule (#100).
+    ///
+    /// `#[serde(default)]` keeps the format version at `2`: payloads written before
+    /// these fields existed deserialize with `0` / `false`, matching the previous
+    /// behaviour where a restored book always came back with no market close.
+    #[serde(default)]
+    pub market_close_timestamp: u64,
+
+    /// Whether a market close was configured at the time of snapshot. See
+    /// [`Self::market_close_timestamp`].
+    #[serde(default)]
+    pub has_market_close: bool,
 }
 
 impl OrderBookSnapshotPackage {
@@ -250,6 +267,8 @@ impl OrderBookSnapshotPackage {
             engine_seq: 0,
             kill_switch_engaged: false,
             risk_config: None,
+            market_close_timestamp: 0,
+            has_market_close: false,
         })
     }
 

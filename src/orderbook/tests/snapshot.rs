@@ -818,4 +818,39 @@ mod test_snapshot_engine_seq {
             "omitted engine_seq must default to 0 via #[serde(default)]"
         );
     }
+
+    /// #100: a configured market close must survive a snapshot package round-trip
+    /// (including the JSON serde path). Previously `create_snapshot_package` did not
+    /// capture it and `restore_from_snapshot` reset it to `0` / `false`.
+    #[test]
+    fn test_market_close_survives_snapshot_package_round_trip_issue_100() {
+        use crate::orderbook::OrderBookSnapshotPackage;
+        use crate::orderbook::book::OrderBook;
+        use std::sync::atomic::Ordering;
+
+        let book: OrderBook<()> = OrderBook::new("TEST");
+        book.set_market_close_timestamp(1_700_000_000_000);
+
+        let json = book
+            .create_snapshot_package(10)
+            .expect("snapshot package")
+            .to_json()
+            .expect("to_json");
+        let package = OrderBookSnapshotPackage::from_json(&json).expect("from_json");
+
+        let mut restored: OrderBook<()> = OrderBook::new("TEST");
+        restored
+            .restore_from_snapshot_package(package)
+            .expect("restore");
+
+        assert!(
+            restored.has_market_close.load(Ordering::Relaxed),
+            "has_market_close must survive the round trip"
+        );
+        assert_eq!(
+            restored.market_close_timestamp.load(Ordering::Relaxed),
+            1_700_000_000_000,
+            "market_close_timestamp must survive the round trip"
+        );
+    }
 }
