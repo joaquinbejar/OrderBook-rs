@@ -38,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`#[must_use]` on pure iterator constructors and fallible decoders/IV entry points (#121).**
+  Several public functions lacked the project-mandated `#[must_use]`: the
+  `OrderBook` iterator constructors (`levels_with_cumulative_depth`,
+  `levels_until_depth`, `levels_in_range` — dropping their result is a silent
+  no-op, so these get a bare `#[must_use]`); the wire decoders (`decode_frame`,
+  `decode_new_order`/`_cancel_order`/`_cancel_replace`/`_mass_cancel`/`_exec_report`/
+  `_trade_print`/`_book_update`) and `MessageKind::from_u8`; and the IV entry
+  points (`solve_iv`, `solve_iv_bisection`, `implied_volatility`,
+  `implied_volatility_with_config`). The `Result`-returning functions use the
+  `#[must_use = "…"]` message form (a bare `#[must_use]` on an
+  already-`#[must_use]` `Result` trips `clippy::double_must_use`). No behavior
+  change.
 - **Analytics paths use ordered skiplist iteration with early exit (#120).**
   `enriched_snapshot_with_metrics` collected every bid/ask key into `Vec`s, sorted
   them, truncated to depth, then did a redundant second skiplist lookup per kept

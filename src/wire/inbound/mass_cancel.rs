@@ -59,6 +59,7 @@ impl MassCancelWire {
 /// reserved padding bits are non-zero (for `BySide` only the low bit of
 /// `_pad[0]` is allowed).
 #[inline]
+#[must_use = "the decoded value (or error) must be handled"]
 pub fn decode_mass_cancel(payload: &[u8]) -> Result<MassCancelWire, WireError> {
     let view = MassCancelWire::ref_from_bytes(payload)
         .map_err(|_| WireError::InvalidPayload("MassCancel: payload size mismatch"))?;

@@ -106,6 +106,7 @@ where
     ///     Err(e) => eprintln!("Failed to calculate IV: {}", e),
     /// }
     /// ```
+    #[must_use = "the implied-volatility result (or error) must be handled"]
     pub fn implied_volatility(
         &self,
         params: &IVParams,
@@ -124,6 +125,7 @@ where
     /// # Returns
     /// - `Ok(IVResult)` with calculated IV and metadata
     /// - `Err(IVError)` if calculation fails
+    #[must_use = "the implied-volatility result (or error) must be handled"]
     pub fn implied_volatility_with_config(
         &self,
         params: &IVParams,

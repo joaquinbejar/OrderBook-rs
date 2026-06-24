@@ -94,6 +94,7 @@ pub fn encode_exec_report(report: &ExecReport, out: &mut Vec<u8>) {
 /// Returns [`WireError::InvalidPayload`] when the buffer length differs from
 /// [`EXEC_REPORT_SIZE`].
 #[inline]
+#[must_use = "the decoded value (or error) must be handled"]
 pub fn decode_exec_report(payload: &[u8]) -> Result<ExecReport, WireError> {
     if payload.len() != EXEC_REPORT_SIZE {
         return Err(WireError::InvalidPayload(

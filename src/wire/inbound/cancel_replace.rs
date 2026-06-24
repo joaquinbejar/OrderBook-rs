@@ -51,6 +51,7 @@ impl CancelReplaceWire {
 /// Returns [`WireError::InvalidPayload`] when the buffer length differs from
 /// 40 bytes.
 #[inline]
+#[must_use = "the decoded value (or error) must be handled"]
 pub fn decode_cancel_replace(payload: &[u8]) -> Result<CancelReplaceWire, WireError> {
     let view = CancelReplaceWire::ref_from_bytes(payload)
         .map_err(|_| WireError::InvalidPayload("CancelReplace: payload size mismatch"))?;

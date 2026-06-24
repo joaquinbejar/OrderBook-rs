@@ -2144,6 +2144,7 @@ where
     ///     }
     /// }
     /// ```
+    #[must_use]
     pub fn levels_with_cumulative_depth(&self, side: Side) -> LevelsWithCumulativeDepth<'_> {
         let price_levels = match side {
             Side::Buy => &self.bids,
@@ -2183,6 +2184,7 @@ where
     /// let levels: Vec<_> = book.levels_until_depth(30, Side::Buy).collect();
     /// println!("Levels needed: {}", levels.len());
     /// ```
+    #[must_use]
     pub fn levels_until_depth(&self, target_depth: u64, side: Side) -> LevelsUntilDepth<'_> {
         let price_levels = match side {
             Side::Buy => &self.bids,
@@ -2226,6 +2228,7 @@ where
     ///     .sum();
     /// println!("Total quantity in range: {}", total_qty);
     /// ```
+    #[must_use]
     pub fn levels_in_range(
         &self,
         min_price: u128,

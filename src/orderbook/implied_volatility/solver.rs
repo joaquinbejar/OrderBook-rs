@@ -181,6 +181,7 @@ fn smart_initial_guess(params: &IVParams, market_price: f64) -> f64 {
 /// let (iv, iterations) = solve_iv(&params, market_price, &config)?;
 /// println!("IV: {:.2}%, converged in {} iterations", iv * 100.0, iterations);
 /// ```
+#[must_use = "the implied-volatility result (or error) must be handled"]
 pub fn solve_iv(
     params: &IVParams,
     market_price: f64,
@@ -291,6 +292,7 @@ pub fn solve_iv(
 /// # Returns
 /// - `Ok((iv, iterations))`: Converged IV and iterations
 /// - `Err(IVError)`: If no solution exists in bounds
+#[must_use = "the implied-volatility result (or error) must be handled"]
 pub fn solve_iv_bisection(
     params: &IVParams,
     market_price: f64,

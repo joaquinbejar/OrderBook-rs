@@ -45,6 +45,7 @@ impl CancelOrderWire {
 /// Returns [`WireError::InvalidPayload`] when the buffer length differs from
 /// 24 bytes.
 #[inline]
+#[must_use = "the decoded value (or error) must be handled"]
 pub fn decode_cancel_order(payload: &[u8]) -> Result<CancelOrderWire, WireError> {
     let view = CancelOrderWire::ref_from_bytes(payload)
         .map_err(|_| WireError::InvalidPayload("CancelOrder: payload size mismatch"))?;

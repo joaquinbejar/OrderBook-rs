@@ -54,6 +54,7 @@ pub fn encode_trade_print(trade: &TradePrintWire, out: &mut Vec<u8>) {
 /// Returns [`WireError::InvalidPayload`] when the buffer length differs from
 /// [`TRADE_PRINT_SIZE`].
 #[inline]
+#[must_use = "the decoded value (or error) must be handled"]
 pub fn decode_trade_print(payload: &[u8]) -> Result<TradePrintWire, WireError> {
     if payload.len() != TRADE_PRINT_SIZE {
         return Err(WireError::InvalidPayload(

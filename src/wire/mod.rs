@@ -96,6 +96,7 @@ impl MessageKind {
     /// Returns [`WireError::UnknownKind`] for any byte outside the
     /// documented set.
     #[inline]
+    #[must_use = "the decoded value (or error) must be handled"]
     pub fn from_u8(byte: u8) -> Result<Self, WireError> {
         match byte {
             0x01 => Ok(Self::NewOrder),

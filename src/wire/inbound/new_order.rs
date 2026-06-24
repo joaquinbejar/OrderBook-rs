@@ -84,6 +84,7 @@ impl NewOrderWire {
 /// Returns [`WireError::InvalidPayload`] when the buffer length differs from
 /// 48 bytes.
 #[inline]
+#[must_use = "the decoded value (or error) must be handled"]
 pub fn decode_new_order(payload: &[u8]) -> Result<NewOrderWire, WireError> {
     let view = NewOrderWire::ref_from_bytes(payload)
         .map_err(|_| WireError::InvalidPayload("NewOrder: payload size mismatch"))?;

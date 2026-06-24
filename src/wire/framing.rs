@@ -68,6 +68,7 @@ pub fn encode_frame<W: Write>(kind: u8, payload: &[u8], out: &mut W) -> io::Resu
 /// Returns [`WireError::Truncated`] if `buf` is shorter than the framing
 /// header or shorter than the body length declared by the header.
 #[inline]
+#[must_use = "the decoded value (or error) must be handled"]
 pub fn decode_frame(buf: &[u8]) -> Result<(u8, &[u8], usize), WireError> {
     if buf.len() < MIN_FRAME_SIZE {
         return Err(WireError::Truncated);

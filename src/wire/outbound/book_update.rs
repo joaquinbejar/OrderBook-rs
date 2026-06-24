@@ -58,6 +58,7 @@ pub fn encode_book_update(update: &BookUpdateWire, out: &mut Vec<u8>) {
 /// Returns [`WireError::InvalidPayload`] when the buffer length differs from
 /// [`BOOK_UPDATE_SIZE`].
 #[inline]
+#[must_use = "the decoded value (or error) must be handled"]
 pub fn decode_book_update(payload: &[u8]) -> Result<BookUpdateWire, WireError> {
     if payload.len() != BOOK_UPDATE_SIZE {
         return Err(WireError::InvalidPayload(
