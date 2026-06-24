@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`file_journal` no longer truncates a mapped segment or swallows poisoned
+  mutexes (#111).** Two robustness defects in the journal subsystem the recovery
+  path depends on. (1) `rotate_segment` called `set_len` to shrink a just-rotated
+  segment that a concurrent reader may already have mmap'd at full capacity —
+  touching pages past the new EOF is UB / SIGBUS on Unix and contradicted the
+  `SegmentWriter` SAFETY invariant. The best-effort truncation is removed; the
+  unused tail is a sparse hole (grown with `set_len`, never written), so there is
+  no physical disk to reclaim and the "never truncated while mapped" invariant now
+  holds. (2) `append` and `rotate_segment` updated `last_seq` / `segment_start_seq`
+  behind `if let Ok(..)`, silently swallowing a poisoned lock — leaving
+  `last_sequence()` under-reporting (breaking replay bounds) and `segment_start_seq`
+  stale (so `archive_segments_before` could archive the active segment). Both now
+  map a poisoned lock to `JournalError::MutexPoisoned` and propagate, so `append`
+  never reports success while `last_seq` is unadvanced. `journal`-gated.
 - **Journal reopen CRC-validates the tail and truncates a torn entry (#110).**
   `scan_write_position` determined the write position purely from
   `entry_length`, so a crash mid-flush that left an intact header but a torn

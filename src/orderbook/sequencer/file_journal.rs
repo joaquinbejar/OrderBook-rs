@@ -321,31 +321,35 @@ where
         writer: &mut SegmentWriter,
         start_seq: u64,
     ) -> Result<(), JournalError> {
-        // Truncate the old segment to its actual size to reclaim space
+        // Flush the old segment's mmap before rotating away from it.
         let old_path = writer.path.clone();
-        let old_len = writer.write_pos;
-        // Flush before truncation
         writer.mmap.flush().map_err(|e| JournalError::Io {
             message: e.to_string(),
             path: Some(old_path.clone()),
         })?;
 
-        // Create the new segment
+        // Create the new segment and swap it in.
         let new_path = segment_path(&self.dir, start_seq);
         let new_writer = SegmentWriter::create(&new_path, self.segment_size)?;
-
-        // Replace the writer
         *writer = new_writer;
 
-        // Truncate old segment file to its actual used size (best effort)
-        if let Ok(file) = OpenOptions::new().write(true).open(&old_path) {
-            let _ = file.set_len(old_len as u64);
-        }
+        // NOTE: we deliberately do NOT `set_len` the old segment down to its
+        // used size. A concurrent reader (`read_from` / `verify_integrity`) may
+        // already have it mmap'd at full capacity, and shrinking a mapped file
+        // makes touching pages past the new EOF undefined behaviour (SIGBUS on
+        // Unix) — exactly what the `SegmentWriter` SAFETY comments rely on never
+        // happening. The unused tail is a sparse hole (the segment was grown
+        // with `set_len`, never written), so it costs no physical disk; there is
+        // nothing to reclaim.
 
-        // Update segment_start_seq
-        if let Ok(mut start) = self.segment_start_seq.lock() {
-            *start = start_seq;
-        }
+        // Advance segment_start_seq, surfacing a poisoned lock rather than
+        // swallowing it. Leaving it stale would let `archive_segments_before`
+        // archive the now-active segment.
+        let mut start = self
+            .segment_start_seq
+            .lock()
+            .map_err(|_| JournalError::MutexPoisoned)?;
+        *start = start_seq;
 
         Ok(())
     }
@@ -443,10 +447,15 @@ where
 
         writer.write_entry(&entry_bytes)?;
 
-        // Update last_seq
-        if let Ok(mut last) = self.last_seq.lock() {
-            *last = Some(event.sequence_num);
-        }
+        // Advance last_seq, surfacing a poisoned lock rather than swallowing it.
+        // Swallowing would leave `last_sequence()` under-reporting and break
+        // replay bounds / gap detection; returning the error here means append
+        // never reports success while last_seq is left unadvanced.
+        let mut last = self
+            .last_seq
+            .lock()
+            .map_err(|_| JournalError::MutexPoisoned)?;
+        *last = Some(event.sequence_num);
 
         Ok(())
     }
@@ -483,6 +492,11 @@ where
     }
 
     fn last_sequence(&self) -> Option<u64> {
+        // The `Journal` trait returns `Option`, so a poisoned `last_seq` lock
+        // surfaces here as `None` rather than a typed error (unlike `append`,
+        // which returns `JournalError::MutexPoisoned`). Either way the on-disk
+        // state is authoritative: a reopen reconstructs `last_seq` from the
+        // CRC-validated tail scan, so a poisoned in-memory value is transient.
         self.last_seq.lock().ok().and_then(|guard| *guard)
     }
 
@@ -1246,6 +1260,53 @@ mod tests {
         for (i, entry) in entries.iter().enumerate() {
             let e = entry.as_ref().unwrap_or_else(|_| panic!("entry decodes"));
             assert_eq!(e.event.sequence_num, i as u64);
+        }
+    }
+
+    /// Poison a mutex by panicking while holding its guard, so a later `lock()`
+    /// returns `Err(PoisonError)`.
+    fn poison<G>(mutex: &Mutex<G>) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex.lock().unwrap_or_else(|_| panic!("lock to poison"));
+            panic!("intentional poison");
+        }));
+    }
+
+    #[test]
+    fn test_append_surfaces_poisoned_last_seq() {
+        let dir = tempfile::tempdir().unwrap_or_else(|_| panic!("tempdir"));
+        let journal = FileJournal::<()>::open(dir.path()).unwrap_or_else(|_| panic!("open"));
+
+        poison(&journal.last_seq);
+
+        // append must surface the poison as a typed error, not swallow it.
+        match journal.append(&make_event(0)) {
+            Err(JournalError::MutexPoisoned) => {}
+            other => panic!("expected MutexPoisoned, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_rotate_surfaces_poisoned_segment_start_seq() {
+        let dir = tempfile::tempdir().unwrap_or_else(|_| panic!("tempdir"));
+
+        // Size the segment so exactly one entry fits and the second append must
+        // rotate (which locks segment_start_seq).
+        let entry_total = FileJournal::<()>::encode_entry(&make_event(0))
+            .unwrap_or_else(|_| panic!("encode"))
+            .len();
+        let segment_size = entry_total + 8; // >= one entry, < two entries
+        let journal = FileJournal::<()>::open_with_segment_size(dir.path(), segment_size)
+            .unwrap_or_else(|_| panic!("open"));
+
+        assert!(journal.append(&make_event(0)).is_ok(), "first entry fits");
+
+        poison(&journal.segment_start_seq);
+
+        // The second append triggers rotation, which must surface the poison.
+        match journal.append(&make_event(1)) {
+            Err(JournalError::MutexPoisoned) => {}
+            other => panic!("expected MutexPoisoned from rotation, got {other:?}"),
         }
     }
 
