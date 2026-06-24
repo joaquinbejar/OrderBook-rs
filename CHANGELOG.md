@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **NATS trade publishing is batched/throttled off the matching hot path (#108).**
+  `NatsTradePublisher::into_listener`'s callback used to serialize the payload,
+  build two subjects with `format!`, convert to `Bytes`, and `runtime.spawn` a
+  fresh Tokio task **per trade** on the matching thread — per-operation heap
+  allocation and task-spawn pressure that floods the runtime under a burst. The
+  callback now only clones the `TradeResult` into a bounded channel and returns;
+  a single background task drains, batches (configurable window / size), and
+  optionally throttles before serializing and publishing — mirroring
+  `NatsBookChangePublisher`. The `{prefix}.all` subject is precomputed once at
+  construction. New builders (`with_batch_window_ms`, `with_max_batch_size`,
+  `with_channel_capacity`, `with_min_publish_interval_ms`) and metrics
+  (`events_received`, `batches_published`, `dropped_events`) match the
+  book-change publisher; the per-trade wire format, subjects, and pluggable
+  serializer are unchanged. `nats`-gated.
 - **Replay protocol sequence counter uses `checked_add` (#126).** `replay_into`
   advanced `expected_seq` (and the applied-event tally) with `saturating_add`,
   which violates the no-saturating-on-protocol-counters rule and would silently
