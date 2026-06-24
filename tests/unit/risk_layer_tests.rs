@@ -746,4 +746,64 @@ mod tests_risk_layer {
         );
         assert_eq!(pkg.version, 2);
     }
+
+    /// #99: `cancel_all_orders` must reset the per-account risk counters; otherwise
+    /// an account stays pinned at its open-order limit and new flow is permanently
+    /// rejected after a bulk unwind (the exact failure bulk cancel exists to avoid).
+    #[test]
+    fn cancel_all_orders_resets_open_order_counter() {
+        let mut book = new_book();
+        book.set_risk_config(RiskConfig::new().with_max_open_orders_per_account(2));
+        let acct = account(11);
+
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            100,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("first admitted (1/2)");
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            101,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("second admitted (2/2)");
+        // At the limit, a third is rejected.
+        assert!(matches!(
+            book.add_limit_order_with_user(
+                Id::new_uuid(),
+                102,
+                1,
+                Side::Buy,
+                TimeInForce::Gtc,
+                acct,
+                None
+            ),
+            Err(OrderBookError::RiskMaxOpenOrders { .. })
+        ));
+
+        // Bulk cancel must reset the per-account counters.
+        let res = book.cancel_all_orders();
+        assert_eq!(res.cancelled_count(), 2);
+
+        // A fresh order from the same account is now admitted (counter was reset).
+        book.add_limit_order_with_user(
+            Id::new_uuid(),
+            103,
+            1,
+            Side::Buy,
+            TimeInForce::Gtc,
+            acct,
+            None,
+        )
+        .expect("re-admitted after cancel_all_orders");
+    }
 }

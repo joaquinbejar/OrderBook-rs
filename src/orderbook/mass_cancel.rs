@@ -191,6 +191,12 @@ where
         #[cfg(feature = "special_orders")]
         self.special_order_tracker.clear();
 
+        // 6. Reset the pre-trade risk state. cancel_all empties the whole book, so
+        // the per-order on_cancel accounting collapses to a single clear — otherwise
+        // every account's open_orders / notional counters would stay at pre-cancel
+        // values and permanently reject new flow (#99). No-op without a RiskConfig.
+        self.risk_state.clear();
+
         self.cache.invalidate();
         // Refresh the depth gauges; both sides are now empty.
         self.record_depth_metric();
