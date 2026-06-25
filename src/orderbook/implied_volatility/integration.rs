@@ -143,7 +143,7 @@ where
     ///   `config.max_spread_bps`.
     /// - [`IVError::PriceBelowIntrinsic`] if the extracted price is below the
     ///   option's intrinsic value.
-    /// - Any solver error from [`solve_iv`](crate::orderbook::implied_volatility::solver::solve_iv):
+    /// - Any solver error from [`solve_iv`]:
     ///   [`IVError::InvalidParams`], [`IVError::TimeToExpiryTooSmall`],
     ///   [`IVError::VolatilityOutOfBounds`], or [`IVError::ConvergenceFailure`].
     #[must_use = "the implied-volatility result (or error) must be handled"]
