@@ -3414,15 +3414,22 @@ use crate::orderbook::repricing::{
 };
 
 #[cfg(feature = "special_orders")]
-impl<T> RepricingOperations<T> for OrderBook<T>
+impl<T> OrderBook<T>
 where
     T: Clone + Default + Send + Sync + 'static,
 {
-    /// Re-prices all pegged orders based on current market conditions
-    fn reprice_pegged_orders(&self) -> Result<usize, OrderBookError> {
+    /// Re-price every pegged order, returning the count repriced and pushing a
+    /// `(order_id, reason)` pair onto `failures` for each one whose
+    /// `update_order` is **rejected** (e.g. a risk-admission rejection). The
+    /// validate-first modify (#98/#168) means a rejected re-price leaves the
+    /// order at its old price — but it was previously swallowed by
+    /// `if ...is_ok()`; now it is surfaced (#174). A peg that simply has no
+    /// reference / no valid passive tick this cycle is a no-op, not a failure,
+    /// and is not recorded.
+    fn reprice_pegged_collecting(&self, failures: &mut Vec<(Id, String)>) -> usize {
         let pegged_ids = self.special_order_tracker.pegged_order_ids();
         if pegged_ids.is_empty() {
-            return Ok(0);
+            return 0;
         }
 
         let best_bid = self.best_bid();
@@ -3461,12 +3468,24 @@ where
                         order_id,
                         new_price: pricelevel::Price::new(new_price),
                     };
-                    if self.update_order(update).is_ok() {
-                        repriced_count += 1;
-                        trace!(
-                            "Re-priced pegged order {} from {} to {}",
-                            order_id, current_price, new_price
-                        );
+                    match self.update_order(update) {
+                        Ok(_) => {
+                            repriced_count += 1;
+                            trace!(
+                                "Re-priced pegged order {} from {} to {}",
+                                order_id, current_price, new_price
+                            );
+                        }
+                        Err(e) => {
+                            trace!(
+                                "Pegged re-price of {} to {} rejected: {}",
+                                order_id, new_price, e
+                            );
+                            failures.push((
+                                order_id,
+                                format!("pegged re-price to {new_price} rejected: {e}"),
+                            ));
+                        }
                     }
                 }
             } else {
@@ -3476,14 +3495,16 @@ where
             }
         }
 
-        Ok(repriced_count)
+        repriced_count
     }
 
-    /// Re-prices all trailing stop orders based on current market conditions
-    fn reprice_trailing_stops(&self) -> Result<usize, OrderBookError> {
+    /// Re-price every trailing stop, returning the count repriced and pushing a
+    /// `(order_id, reason)` pair onto `failures` for each rejected
+    /// `update_order` (mirrors [`Self::reprice_pegged_collecting`], #174).
+    fn reprice_trailing_collecting(&self, failures: &mut Vec<(Id, String)>) -> usize {
         let trailing_ids = self.special_order_tracker.trailing_stop_ids();
         if trailing_ids.is_empty() {
-            return Ok(0);
+            return 0;
         }
 
         let mut repriced_count = 0;
@@ -3521,16 +3542,30 @@ where
                             order_id,
                             new_price: pricelevel::Price::new(new_stop_price),
                         };
-                        if self.update_order(update).is_ok() {
-                            repriced_count += 1;
-                            trace!(
-                                "Re-priced trailing stop {} from {} to {} (ref: {} -> {})",
-                                order_id,
-                                current_stop_price,
-                                new_stop_price,
-                                last_reference_price,
-                                new_reference
-                            );
+                        match self.update_order(update) {
+                            Ok(_) => {
+                                repriced_count += 1;
+                                trace!(
+                                    "Re-priced trailing stop {} from {} to {} (ref: {} -> {})",
+                                    order_id,
+                                    current_stop_price,
+                                    new_stop_price,
+                                    last_reference_price,
+                                    new_reference
+                                );
+                            }
+                            Err(e) => {
+                                trace!(
+                                    "Trailing-stop re-price of {} to {} rejected: {}",
+                                    order_id, new_stop_price, e
+                                );
+                                failures.push((
+                                    order_id,
+                                    format!(
+                                        "trailing-stop re-price to {new_stop_price} rejected: {e}"
+                                    ),
+                                ));
+                            }
                         }
                     }
                 }
@@ -3541,18 +3576,51 @@ where
             }
         }
 
-        Ok(repriced_count)
+        repriced_count
+    }
+}
+
+#[cfg(feature = "special_orders")]
+impl<T> RepricingOperations<T> for OrderBook<T>
+where
+    T: Clone + Default + Send + Sync + 'static,
+{
+    /// Re-prices all pegged orders based on current market conditions.
+    ///
+    /// Returns the number repriced. Per-order re-price *failures* are not
+    /// surfaced through this count-only entry point — use
+    /// [`reprice_special_orders`](Self::reprice_special_orders), whose
+    /// [`RepricingResult::failed_orders`] records every rejected re-price.
+    fn reprice_pegged_orders(&self) -> Result<usize, OrderBookError> {
+        Ok(self.reprice_pegged_collecting(&mut Vec::new()))
     }
 
-    /// Re-prices all special orders (both pegged and trailing stops)
+    /// Re-prices all trailing stop orders based on current market conditions.
+    ///
+    /// Returns the number repriced. See
+    /// [`reprice_special_orders`](Self::reprice_special_orders) for the
+    /// failure-reporting variant.
+    fn reprice_trailing_stops(&self) -> Result<usize, OrderBookError> {
+        Ok(self.reprice_trailing_collecting(&mut Vec::new()))
+    }
+
+    /// Re-prices all special orders (both pegged and trailing stops) and reports
+    /// per-order failures.
+    ///
+    /// [`RepricingResult::failed_orders`] is populated with a `(order_id,
+    /// reason)` pair for every re-price whose `update_order` was rejected (e.g.
+    /// a risk-admission rejection). These were previously swallowed (#174); a
+    /// rejected re-price leaves the order at its prior price (validate-first
+    /// modify, #98/#168).
     fn reprice_special_orders(&self) -> Result<RepricingResult, OrderBookError> {
-        let pegged_count = self.reprice_pegged_orders()?;
-        let trailing_count = self.reprice_trailing_stops()?;
+        let mut failed_orders = Vec::new();
+        let pegged_count = self.reprice_pegged_collecting(&mut failed_orders);
+        let trailing_count = self.reprice_trailing_collecting(&mut failed_orders);
 
         Ok(RepricingResult {
             pegged_orders_repriced: pegged_count,
             trailing_stops_repriced: trailing_count,
-            failed_orders: Vec::new(),
+            failed_orders,
         })
     }
 

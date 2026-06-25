@@ -194,6 +194,10 @@ pub fn calculate_pegged_price(
     } else {
         reference_price.saturating_sub((-offset) as u128)
     };
+    // The raw target the user requested (`reference ± offset`), before any
+    // passive-side clamp / tick snap. Used only for the price-sliding telemetry
+    // below — the returned value is unaffected (#174).
+    let raw_target = new_price;
 
     // Effective tick step (1 when unset / <= 1 preserves non-tick-book behavior).
     let step = tick_size.filter(|t| *t > 1).unwrap_or(1);
@@ -231,14 +235,30 @@ pub fn calculate_pegged_price(
     match side {
         Side::Buy => {
             if best_ask.is_some_and(|a| priced >= a) {
+                trace!(
+                    "pegged re-price skipped (Buy): no valid passive tick below best_ask; raw target {raw_target} would cross"
+                );
                 return None;
             }
         }
         Side::Sell => {
             if best_bid.is_some_and(|b| priced <= b) {
+                trace!(
+                    "pegged re-price skipped (Sell): no valid passive tick above best_bid; raw target {raw_target} would cross"
+                );
                 return None;
             }
         }
+    }
+
+    // Price-sliding telemetry (#174): signal when the order was clamped/snapped
+    // off its requested `reference ± offset` to the passive side, so a consumer
+    // can distinguish a peg that tracked its reference from one that was
+    // price-slid to avoid a cross. Does not affect the returned value.
+    if priced != raw_target {
+        trace!(
+            "pegged price clamped to passive side ({side:?}): requested reference+offset {raw_target} -> resting at {priced}"
+        );
     }
     Some(priced)
 }

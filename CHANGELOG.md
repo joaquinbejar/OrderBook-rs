@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Surface swallowed re-price failures + clamp telemetry (#174).** The special-order
+  re-price loops used `if self.update_order(update).is_ok()` and discarded the
+  `Err`, and `reprice_special_orders` hardcoded `failed_orders: Vec::new()`, so a
+  re-price rejected by admission (e.g. a risk `RiskMaxNotional`) silently left the
+  order at its stale price with nothing recorded. The loops now capture each
+  rejected `update_order` and `RepricingResult::failed_orders` is populated with a
+  `(order_id, reason)` pair for every failure (a rejected re-price keeps the
+  order's prior price — validate-first modify, #98/#168). The public
+  `RepricingOperations` trait signatures are unchanged: `reprice_pegged_orders` /
+  `reprice_trailing_stops` still return the repriced count; the failure detail is
+  reported through `reprice_special_orders`. Separately, `calculate_pegged_price`
+  now emits a `trace!` when a peg is price-slid off its requested
+  `reference ± offset` to the passive side (or skipped because no valid passive
+  tick exists), so a consumer can distinguish a peg that tracked its reference
+  from one that was clamped.
 - **Extend modify atomicity to the STP self-cross taker-cancellation edge (#168).**
   #98 made `UpdatePrice` / `UpdatePriceAndQuantity` / `Replace` validate-first for
   every *pre-match* admission rejection, but one *post-match* case slipped

@@ -338,3 +338,67 @@ fn sell_pegged_reprice_tick_aligned_and_moves_issue_106() {
     let best_bid = book.best_bid().expect("best bid present");
     assert!(new_price > best_bid, "must rest above best bid");
 }
+
+/// #174: a re-price whose `update_order` is rejected by the risk layer is no
+/// longer silently swallowed — it is recorded in `RepricingResult.failed_orders`
+/// with a reason, and (validate-first) the order keeps its prior price.
+#[test]
+fn reprice_records_risk_rejected_peg_in_failed_orders_issue_174() {
+    use orderbook_rs::RiskConfig;
+
+    let mut book: OrderBook<()> = OrderBook::new("TEST");
+    book.set_risk_config(RiskConfig::new().with_max_notional_per_account(600));
+
+    // Market maker (anonymous account) provides best bid 100, best ask 105.
+    book.add_limit_order(Id::from_u64(1), 100, 1, Side::Buy, TimeInForce::Gtc, None)
+        .expect("bid admitted");
+    book.add_limit_order(Id::from_u64(2), 105, 1, Side::Sell, TimeInForce::Gtc, None)
+        .expect("ask admitted");
+
+    // A pegged buy on its OWN account, resting passively at 90 (notional 540 <= 600).
+    let pegger = Hash32::new([7u8; 32]);
+    let peg_id = Id::from_u64(100);
+    book.add_order(OrderType::PeggedOrder {
+        id: peg_id,
+        price: Price::new(90),
+        quantity: Quantity::new(6),
+        side: Side::Buy,
+        user_id: pegger,
+        timestamp: TimestampMs::new(1),
+        time_in_force: TimeInForce::Gtc,
+        reference_price_offset: 20,
+        reference_price_type: PegReferenceType::BestBid,
+        extra_fields: (),
+    })
+    .expect("peg admitted (540 <= 600)");
+
+    // Re-price target = BestBid(100)+20 = 120, clamped to best_ask-1 = 104.
+    // 6 * 104 = 624 > 600 -> the modify-aware risk check rejects the re-price,
+    // which is now recorded (previously swallowed by `if ...is_ok()`).
+    let result = book.reprice_special_orders().expect("reprice runs");
+    assert_eq!(
+        result.pegged_orders_repriced, 0,
+        "the risk-rejected peg did not re-price"
+    );
+    assert_eq!(
+        result.failed_orders.len(),
+        1,
+        "the rejection is recorded in failed_orders"
+    );
+    assert_eq!(result.failed_orders[0].0, peg_id);
+    let reason = &result.failed_orders[0].1;
+    assert!(
+        reason.contains("rejected"),
+        "the reason explains the failure: {reason}"
+    );
+
+    // Validate-first: the rejected re-price left the peg at its original price.
+    let peg = book
+        .get_order(peg_id)
+        .expect("peg survives the rejected re-price");
+    assert_eq!(
+        peg.price().as_u128(),
+        90,
+        "a rejected re-price leaves the peg at its old price"
+    );
+}
