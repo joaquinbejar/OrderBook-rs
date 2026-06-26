@@ -1017,11 +1017,30 @@ where
 
     /// Add a new order to the book, automatically matching it if it's aggressive.
     ///
+    /// This convenience method calls [`Self::add_order_with_result`] internally but
+    /// ignores the trade result in the output.
+    ///
     /// # Errors
     /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
     /// is engaged. The check runs before any cache invalidation, STP
     /// validation, tick/lot validation, or matching work.
-    pub fn add_order(&self, mut order: OrderType<T>) -> Result<Arc<OrderType<T>>, OrderBookError> {
+    pub fn add_order(&self, order: OrderType<T>) -> Result<Arc<OrderType<T>>, OrderBookError> {
+        self.add_order_with_result(order).map(|(order, _)| order)
+    }
+
+    /// Add a new order to the book, automatically matching it if it's aggressive, also
+    /// returning the trade result directly.
+    ///
+    /// This method also calls the trade listener if enabled in addition to returning the trade result.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
+    /// is engaged. The check runs before any cache invalidation, STP
+    /// validation, tick/lot validation, or matching work.    
+    pub fn add_order_with_result(
+        &self,
+        mut order: OrderType<T>,
+    ) -> Result<(Arc<OrderType<T>>, Option<TradeResult>), OrderBookError> {
         self.check_kill_switch_or_reject(order.id())?;
         // Pre-trade risk gate: per-account open-orders / notional /
         // price band. No-op when no `RiskConfig` is installed.
@@ -1096,20 +1115,6 @@ where
             order.user_id(),
         )?;
 
-        let trades_emitted = match_result.trades().len() as u64;
-        if trades_emitted > 0 {
-            crate::orderbook::metrics::record_trades(trades_emitted);
-            if let Some(ref listener) = self.trade_listener {
-                let mut trade_result = TradeResult::with_fees(
-                    self.symbol.clone(),
-                    match_result.clone(),
-                    self.fee_schedule,
-                );
-                trade_result.engine_seq = self.next_engine_seq();
-                listener(&trade_result) // emit trade events to listener
-            }
-        }
-
         // True (non-self) executed quantity. `remaining_quantity` only decrements on
         // real trades, so STP-prevented self-fills never count toward it.
         let original_qty = order.total_quantity();
@@ -1134,6 +1139,24 @@ where
                 user_id: order.user_id(),
             });
         }
+
+        let trades_emitted = match_result.trades().len() as u64;
+        let trade_result = if trades_emitted > 0 {
+            crate::orderbook::metrics::record_trades(trades_emitted);
+            let mut trade_result = TradeResult::with_fees(
+                self.symbol.clone(),
+                match_result.clone(),
+                self.fee_schedule,
+            );
+            trade_result.engine_seq = self.next_engine_seq();
+            if let Some(ref listener) = self.trade_listener {
+                listener(&trade_result)
+            }
+
+            Some(trade_result)
+        } else {
+            None
+        };
 
         // If the order was not fully filled, add the remainder to the book
         if match_result.remaining_quantity().as_u64() > 0 {
@@ -1238,7 +1261,7 @@ where
 
             // Convert back to generic type for return
             let generic_order = self.convert_from_unit_type(&unit_order_arc);
-            Ok(Arc::new(generic_order))
+            Ok((Arc::new(generic_order), trade_result))
         } else {
             // The order was fully matched
             self.track_state(
@@ -1247,7 +1270,7 @@ where
                     filled_quantity: original_qty,
                 },
             );
-            Ok(Arc::new(order))
+            Ok((Arc::new(order), trade_result))
         }
     }
 }
