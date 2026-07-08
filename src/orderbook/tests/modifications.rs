@@ -795,3 +795,238 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod test_add_order_with_result {
+    use crate::orderbook::modifications::OrderQuantity;
+    use crate::orderbook::stp::STPMode;
+    use crate::{OrderBook, OrderBookError, TradeListener, TradeResult};
+    use pricelevel::{Hash32, Id, OrderType, Price, Quantity, Side, TimeInForce, TimestampMs};
+    use std::sync::{Arc, Mutex};
+
+    /// Helper: create a non-zero user hash from a single byte value.
+    fn user(byte: u8) -> Hash32 {
+        Hash32::new([byte; 32])
+    }
+
+    /// Helper: build a standard GTC order.
+    fn standard_order(price: u128, quantity: u64, side: Side, user_id: Hash32) -> OrderType<()> {
+        OrderType::Standard {
+            id: Id::new(),
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
+            side,
+            user_id,
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
+            time_in_force: TimeInForce::Gtc,
+            extra_fields: (),
+        }
+    }
+
+    /// Helper: book whose trade listener captures every emitted `TradeResult`.
+    fn book_with_capturing_listener() -> (OrderBook<()>, Arc<Mutex<Vec<TradeResult>>>) {
+        let captured: Arc<Mutex<Vec<TradeResult>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&captured);
+        let listener: TradeListener = Arc::new(move |tr: &TradeResult| {
+            if let Ok(mut guard) = sink.lock() {
+                guard.push(tr.clone());
+            }
+        });
+        (OrderBook::with_trade_listener("TEST", listener), captured)
+    }
+
+    #[test]
+    fn test_add_order_with_result_full_fill_returns_trade_result() {
+        let book: OrderBook<()> = OrderBook::new("TEST");
+        let maker = user(1);
+        let taker = user(2);
+
+        let result = book.add_order(standard_order(100, 5, Side::Sell, maker));
+        assert!(result.is_ok(), "failed to rest maker: {result:?}");
+
+        let result = book.add_order_with_result(standard_order(100, 5, Side::Buy, taker));
+        let Ok((_, Some(trade_result))) = result else {
+            panic!("expected Ok with a trade result, got {result:?}");
+        };
+        assert_eq!(trade_result.symbol, "TEST");
+        assert_eq!(
+            trade_result.match_result.executed_quantity().ok(),
+            Some(Quantity::new(5)),
+            "full fill must execute the entire quantity"
+        );
+        assert!(trade_result.match_result.is_complete());
+    }
+
+    #[test]
+    fn test_add_order_with_result_resting_order_returns_none() {
+        let book: OrderBook<()> = OrderBook::new("TEST");
+
+        let order = standard_order(100, 10, Side::Buy, user(1));
+        let order_id = order.id();
+        let result = book.add_order_with_result(order);
+        let Ok((added, trade_result)) = result else {
+            panic!("expected Ok, got {result:?}");
+        };
+        assert!(
+            trade_result.is_none(),
+            "an order that matched nothing must return no trade result"
+        );
+        assert_eq!(added.id(), order_id);
+        assert!(book.get_order(order_id).is_some(), "order must rest");
+    }
+
+    #[test]
+    fn test_add_order_with_result_partial_fill_rests_remainder() {
+        let book: OrderBook<()> = OrderBook::new("TEST");
+        let maker = user(1);
+        let taker = user(2);
+
+        let result = book.add_order(standard_order(100, 5, Side::Sell, maker));
+        assert!(result.is_ok(), "failed to rest maker: {result:?}");
+
+        let result = book.add_order_with_result(standard_order(100, 20, Side::Buy, taker));
+        let Ok((added, Some(trade_result))) = result else {
+            panic!("expected Ok with a trade result, got {result:?}");
+        };
+        assert_eq!(
+            trade_result.match_result.executed_quantity().ok(),
+            Some(Quantity::new(5)),
+            "only the resting 5 units can fill"
+        );
+        assert_eq!(added.quantity(), 15, "the 15-unit remainder must rest");
+        assert!(book.get_order(added.id()).is_some());
+    }
+
+    #[test]
+    fn test_add_order_with_result_listener_receives_same_trade_result() {
+        let (book, captured) = book_with_capturing_listener();
+        let maker = user(1);
+        let taker = user(2);
+
+        let result = book.add_order(standard_order(100, 5, Side::Sell, maker));
+        assert!(result.is_ok(), "failed to rest maker: {result:?}");
+
+        let result = book.add_order_with_result(standard_order(100, 5, Side::Buy, taker));
+        let Ok((_, Some(trade_result))) = result else {
+            panic!("expected Ok with a trade result, got {result:?}");
+        };
+
+        let captured = captured.lock().expect("listener mutex poisoned");
+        assert_eq!(captured.len(), 1, "listener must fire exactly once");
+        assert_eq!(
+            captured[0].engine_seq, trade_result.engine_seq,
+            "listener and caller must see the same engine_seq"
+        );
+        assert_eq!(
+            captured[0].match_result.executed_quantity().ok(),
+            trade_result.match_result.executed_quantity().ok(),
+            "listener and caller must see the same fills"
+        );
+    }
+
+    /// Regression: the trade emission block must run BEFORE the STP
+    /// taker-cancel early return. A taker that partially fills against
+    /// another user and is then STP-cancelled surfaces the typed error,
+    /// but the real (non-self) fills must still reach the trade listener.
+    #[test]
+    fn test_add_order_stp_cancel_taker_partial_fill_still_reaches_listener() {
+        let (mut book, captured) = book_with_capturing_listener();
+        book.set_stp_mode(STPMode::CancelTaker);
+
+        let taker_user = user(7);
+        let other = user(1);
+
+        // Non-self liquidity at the better price; the taker's own order behind it.
+        let result = book.add_order(standard_order(100, 5, Side::Sell, other));
+        assert!(result.is_ok(), "failed to rest other maker: {result:?}");
+        let result = book.add_order(standard_order(200, 10, Side::Sell, taker_user));
+        assert!(result.is_ok(), "failed to rest self maker: {result:?}");
+
+        // GTC buy 20 at limit 200: fills 5 vs `other` at 100, then hits its own
+        // order at 200 -> CancelTaker cancels the taker.
+        let result = book.add_order(standard_order(200, 20, Side::Buy, taker_user));
+        assert!(
+            matches!(result, Err(OrderBookError::SelfTradePrevented { .. })),
+            "partial self-cross under CancelTaker must surface the STP error, got {result:?}"
+        );
+
+        let captured = captured.lock().expect("listener mutex poisoned");
+        assert_eq!(
+            captured.len(),
+            1,
+            "the 5-unit non-self fill must reach the trade listener"
+        );
+        assert_eq!(
+            captured[0].match_result.executed_quantity().ok(),
+            Some(Quantity::new(5))
+        );
+    }
+
+    /// Same STP partial-fill scenario through `add_order_with_result`: the
+    /// typed error is returned (no trade result), the listener still fires.
+    #[test]
+    fn test_add_order_with_result_stp_cancel_taker_partial_fill_errors_and_emits() {
+        let (mut book, captured) = book_with_capturing_listener();
+        book.set_stp_mode(STPMode::CancelTaker);
+
+        let taker_user = user(7);
+        let other = user(1);
+
+        let result = book.add_order(standard_order(100, 5, Side::Sell, other));
+        assert!(result.is_ok(), "failed to rest other maker: {result:?}");
+        let result = book.add_order(standard_order(200, 10, Side::Sell, taker_user));
+        assert!(result.is_ok(), "failed to rest self maker: {result:?}");
+
+        let result = book.add_order_with_result(standard_order(200, 20, Side::Buy, taker_user));
+        assert!(
+            matches!(result, Err(OrderBookError::SelfTradePrevented { .. })),
+            "partial self-cross under CancelTaker must surface the STP error, got {result:?}"
+        );
+
+        let captured = captured.lock().expect("listener mutex poisoned");
+        assert_eq!(
+            captured.len(),
+            1,
+            "the 5-unit non-self fill must reach the trade listener"
+        );
+    }
+
+    /// An IOC that partially fills and cannot complete returns
+    /// `InsufficientLiquidity`; the partial fill still reaches the listener.
+    #[test]
+    fn test_add_order_with_result_ioc_partial_fill_errors_and_emits() {
+        let (book, captured) = book_with_capturing_listener();
+        let maker = user(1);
+        let taker = user(2);
+
+        let result = book.add_order(standard_order(100, 5, Side::Sell, maker));
+        assert!(result.is_ok(), "failed to rest maker: {result:?}");
+
+        let ioc = OrderType::Standard {
+            id: Id::new(),
+            price: Price::new(100),
+            quantity: Quantity::new(20),
+            side: Side::Buy,
+            user_id: taker,
+            timestamp: TimestampMs::new(crate::utils::current_time_millis()),
+            time_in_force: TimeInForce::Ioc,
+            extra_fields: (),
+        };
+        let result = book.add_order_with_result(ioc);
+        assert!(
+            matches!(result, Err(OrderBookError::InsufficientLiquidity { .. })),
+            "unfillable IOC remainder must error, got {result:?}"
+        );
+
+        let captured = captured.lock().expect("listener mutex poisoned");
+        assert_eq!(
+            captured.len(),
+            1,
+            "the 5-unit partial fill must reach the trade listener"
+        );
+        assert_eq!(
+            captured[0].match_result.executed_quantity().ok(),
+            Some(Quantity::new(5))
+        );
+    }
+}

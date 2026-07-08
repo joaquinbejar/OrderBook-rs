@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.0] — 2026-06-24
 
+### Added
+
+- **`OrderBook::add_order_with_result` (#184).** Submit an order and receive
+  the `TradeResult` produced by the match directly in the return value —
+  `Ok((Arc<OrderType<T>>, Option<TradeResult>))` — instead of relying on the
+  `TradeListener` callback. The trade result is `None` when the order produced
+  no fills; when a listener is installed it still fires with the exact same
+  `TradeResult` (same fills, fees, and `engine_seq`). `add_order` is now a thin
+  wrapper that discards the result, and the `TradeResult` is only constructed
+  when a listener is installed and/or the caller asked for it, so the plain
+  `add_order` path without a listener stays free of the extra `MatchResult`
+  clone. Contributed by @Dev380.
+
 ### Performance
 
 - **Bump `pricelevel` 0.8.2 → 0.8.3 — fixes per-match over-allocation
