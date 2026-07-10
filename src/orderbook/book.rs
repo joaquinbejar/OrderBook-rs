@@ -1121,7 +1121,13 @@ where
         &self.symbol
     }
 
-    /// Set the market close timestamp for DAY orders
+    /// Set the market close timestamp for DAY orders.
+    ///
+    /// `timestamp` is **milliseconds since the Unix epoch** — the same clock
+    /// unit `has_expired` compares against (`self.clock().now_millis()`). A
+    /// `Day` order is expired once the current time reaches this value; passing
+    /// a seconds-based timestamp would place market close in 1970 and expire
+    /// every `Day` order immediately.
     pub fn set_market_close_timestamp(&self, timestamp: u64) {
         self.market_close_timestamp
             .store(timestamp, Ordering::SeqCst);
@@ -2378,6 +2384,163 @@ where
     {
         self.levels_with_cumulative_depth(side)
             .find(|level| predicate(level))
+    }
+
+    /// Returns the visible (displayed) resting quantity at a price level, in
+    /// quantity units, or `None` when no level exists there.
+    ///
+    /// O(log N) `SkipMap` point lookup followed by a single relaxed atomic
+    /// load of the level's visible counter — no per-order [`Arc`] is
+    /// materialized and no `T: Default` conversion is performed, so this is
+    /// the cheap way to poll displayed depth at one price (contrast
+    /// [`Self::get_orders_at_price`], which clones every order).
+    ///
+    /// # Arguments
+    /// - `price`: The price level to read (in price units).
+    /// - `side`: The side to read (`Buy` for bids, `Sell` for asks).
+    ///
+    /// # Returns
+    /// - `Some(qty)` when a level exists at `price`. `Some(0)` denotes a live
+    ///   level whose visible depth is momentarily zero (e.g. a fully-hidden
+    ///   iceberg tranche) — distinct from `None`.
+    /// - `None` when no level exists at `price` on that side.
+    ///
+    /// # Consistency
+    /// This is an **advisory, eventually-consistent** counter read (see
+    /// `pricelevel`'s `PriceLevel::visible_quantity`): under concurrent
+    /// `add_order` / matching / `update_order` it can briefly lead or lag the
+    /// queue contents, and it is not guaranteed mutually consistent with a
+    /// separately-read [`Self::order_count_at_price`] /
+    /// [`Self::hidden_quantity_at_price`] / [`Self::total_quantity_at_price`].
+    /// For a view where the counters and the order list agree, take
+    /// [`Self::create_snapshot`] and read from it.
+    #[must_use]
+    pub fn visible_quantity_at_price(&self, price: u128, side: Side) -> Option<u64> {
+        let price_levels = match side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+        price_levels
+            .get(&price)
+            .map(|entry| entry.value().visible_quantity())
+    }
+
+    /// Returns the hidden (reserve) resting quantity at a price level, in
+    /// quantity units, or `None` when no level exists there.
+    ///
+    /// The symmetric counterpart to [`Self::visible_quantity_at_price`]: same
+    /// O(log N) lookup plus one relaxed atomic load of the level's hidden
+    /// counter, no allocation, no `T: Default` bound. Hidden quantity is the
+    /// undisplayed reserve of iceberg / reserve orders.
+    ///
+    /// # Arguments
+    /// - `price`: The price level to read (in price units).
+    /// - `side`: The side to read (`Buy` for bids, `Sell` for asks).
+    ///
+    /// # Returns
+    /// - `Some(qty)` when a level exists at `price` (`Some(0)` = a live level
+    ///   with no hidden reserve, distinct from `None`).
+    /// - `None` when no level exists at `price` on that side.
+    ///
+    /// # Consistency
+    /// **Advisory, eventually-consistent** counter read (see
+    /// `pricelevel`'s `PriceLevel::hidden_quantity`): under concurrent
+    /// mutation it can briefly lead or lag the queue, and it is not guaranteed
+    /// mutually consistent with a separately-read visible / count / total. For
+    /// a mutually-consistent view, take [`Self::create_snapshot`].
+    #[must_use]
+    pub fn hidden_quantity_at_price(&self, price: u128, side: Side) -> Option<u64> {
+        let price_levels = match side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+        price_levels
+            .get(&price)
+            .map(|entry| entry.value().hidden_quantity())
+    }
+
+    /// Returns the total (visible + hidden) resting quantity at a price level,
+    /// in quantity units, or `None` when no level exists there.
+    ///
+    /// O(log N) `SkipMap` point lookup plus two relaxed atomic loads summed by
+    /// `pricelevel`'s `PriceLevel::total_quantity`. That sum returns a
+    /// `Result` that only errors on a `u64` overflow of `visible + hidden`,
+    /// which is unreachable for any real book; on that overflow this method
+    /// **saturates to `u64::MAX`** rather than collapsing to `0`, so an
+    /// overflow signals "enormous", never "empty" (a `0` would be the exact
+    /// inversion of an overflowed level).
+    ///
+    /// # Arguments
+    /// - `price`: The price level to read (in price units).
+    /// - `side`: The side to read (`Buy` for bids, `Sell` for asks).
+    ///
+    /// # Returns
+    /// - `Some(qty)` when a level exists at `price`. A `Some(0)` here is only a
+    ///   brief concurrency transient during level removal — an empty level is
+    ///   eagerly removed from the `SkipMap` on every removal path, so a settled
+    ///   level always has positive total quantity. `Some(u64::MAX)` denotes a
+    ///   (practically unreachable) counter overflow, never an empty level.
+    /// - `None` when no level exists at `price` on that side.
+    ///
+    /// # Consistency
+    /// **Advisory, eventually-consistent** read — it sums two independent
+    /// atomic counters (see `pricelevel`'s `PriceLevel::visible_quantity`), so
+    /// under concurrent mutation the two loads may straddle a mutation and it
+    /// is not guaranteed mutually consistent with the per-side visible / hidden
+    /// / count read separately. For a mutually-consistent view, take
+    /// [`Self::create_snapshot`].
+    #[must_use]
+    pub fn total_quantity_at_price(&self, price: u128, side: Side) -> Option<u64> {
+        let price_levels = match side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+        price_levels
+            .get(&price)
+            // Saturate an (unreachable) `visible + hidden` overflow to
+            // `u64::MAX`: a `0` would read as "empty level" — the exact
+            // inversion — so signal "enormous" instead.
+            .map(|entry| entry.value().total_quantity().unwrap_or(u64::MAX))
+    }
+
+    /// Returns the number of resting orders at a price level, or `None` when no
+    /// level exists there.
+    ///
+    /// Cheaper counterpart to [`Self::queue_ahead_at_price`], which counts by
+    /// iterating the level's order queue. Both do the same O(log N) `SkipMap`
+    /// point lookup; this method then reads the level's maintained
+    /// `order_count` atomic (a single relaxed load) instead of walking the K
+    /// orders at the level, so it drops the per-order term: O(log N) here vs
+    /// O(log N + K) for `queue_ahead_at_price`. Prefer this when you only need
+    /// the count; [`Self::queue_ahead_at_price`] is left unchanged and still
+    /// returns `0` (not `None`) for an absent level.
+    ///
+    /// # Arguments
+    /// - `price`: The price level to read (in price units).
+    /// - `side`: The side to read (`Buy` for bids, `Sell` for asks).
+    ///
+    /// # Returns
+    /// - `Some(count)` when a level exists at `price`. A `Some(0)` here is only
+    ///   a brief concurrency transient during level removal — an empty level is
+    ///   eagerly removed from the `SkipMap` on every removal path, so a settled
+    ///   level always has at least one order.
+    /// - `None` when no level exists at `price` on that side.
+    ///
+    /// # Consistency
+    /// **Advisory, eventually-consistent** counter read (see `pricelevel`'s
+    /// `PriceLevel::order_count`): under concurrent mutation it can briefly
+    /// lead or lag the queue and is not guaranteed mutually consistent with a
+    /// separately-read quantity. For a mutually-consistent view, take
+    /// [`Self::create_snapshot`].
+    #[must_use]
+    pub fn order_count_at_price(&self, price: u128, side: Side) -> Option<usize> {
+        let price_levels = match side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+        price_levels
+            .get(&price)
+            .map(|entry| entry.value().order_count())
     }
 
     /// Get all orders at a specific price level

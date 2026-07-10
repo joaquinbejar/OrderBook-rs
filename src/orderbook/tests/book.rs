@@ -1377,4 +1377,166 @@ mod test_book_specific {
         book.release_kill_switch();
         assert!(!book.is_kill_switch_engaged());
     }
+
+    // ---- O(1) per-price aggregate accessors (#186) ----
+
+    /// Seed a book with a mix of standard and iceberg orders on several
+    /// price levels across both sides. Returns the book plus the levels
+    /// exercised on each side.
+    fn seed_mixed_book() -> (OrderBook<()>, [(u128, Side); 4]) {
+        let book = OrderBook::<()>::new("TEST");
+
+        // Bid side: two standard orders share level 100; an iceberg rests at 99.
+        let _ = book.add_limit_order(
+            create_order_id(),
+            100,
+            10,
+            Side::Buy,
+            TimeInForce::Gtc,
+            None,
+        );
+        let _ = book.add_limit_order(
+            create_order_id(),
+            100,
+            20,
+            Side::Buy,
+            TimeInForce::Gtc,
+            None,
+        );
+        let _ = book.add_iceberg_order(
+            create_order_id(),
+            99,
+            5,
+            15,
+            Side::Buy,
+            TimeInForce::Gtc,
+            None,
+        );
+
+        // Ask side: one standard at 110; an iceberg at 111.
+        let _ = book.add_limit_order(
+            create_order_id(),
+            110,
+            30,
+            Side::Sell,
+            TimeInForce::Gtc,
+            None,
+        );
+        let _ = book.add_iceberg_order(
+            create_order_id(),
+            111,
+            8,
+            12,
+            Side::Sell,
+            TimeInForce::Gtc,
+            None,
+        );
+
+        (
+            book,
+            [
+                (100, Side::Buy),
+                (99, Side::Buy),
+                (110, Side::Sell),
+                (111, Side::Sell),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_visible_quantity_at_price_equals_sum_of_orders() {
+        let (book, levels) = seed_mixed_book();
+
+        for (price, side) in levels {
+            let expected: u64 = book
+                .get_orders_at_price(price, side)
+                .iter()
+                .map(|o| o.visible_quantity().as_u64())
+                .sum();
+            assert_eq!(
+                book.visible_quantity_at_price(price, side),
+                Some(expected),
+                "visible aggregate must equal the per-order sum at {price} on {side:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_hidden_quantity_at_price_equals_sum_of_orders() {
+        let (book, levels) = seed_mixed_book();
+
+        for (price, side) in levels {
+            let expected: u64 = book
+                .get_orders_at_price(price, side)
+                .iter()
+                .map(|o| o.hidden_quantity().as_u64())
+                .sum();
+            assert_eq!(
+                book.hidden_quantity_at_price(price, side),
+                Some(expected),
+                "hidden aggregate must equal the per-order sum at {price} on {side:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_total_quantity_at_price_equals_visible_plus_hidden() {
+        let (book, levels) = seed_mixed_book();
+
+        for (price, side) in levels {
+            let visible = book
+                .visible_quantity_at_price(price, side)
+                .expect("level exists");
+            let hidden = book
+                .hidden_quantity_at_price(price, side)
+                .expect("level exists");
+            assert_eq!(
+                book.total_quantity_at_price(price, side),
+                Some(visible + hidden),
+                "total must equal visible + hidden at {price} on {side:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_order_count_at_price_equals_queue_ahead() {
+        let (book, levels) = seed_mixed_book();
+
+        for (price, side) in levels {
+            assert_eq!(
+                book.order_count_at_price(price, side),
+                Some(book.queue_ahead_at_price(price, side)),
+                "order_count must equal queue_ahead at {price} on {side:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_aggregate_accessors_none_on_absent_level() {
+        let (book, _levels) = seed_mixed_book();
+
+        // A price with no level on either side yields `None` from every
+        // accessor — distinct from a live-but-empty `Some(0)`.
+        for side in [Side::Buy, Side::Sell] {
+            assert_eq!(book.visible_quantity_at_price(500, side), None);
+            assert_eq!(book.hidden_quantity_at_price(500, side), None);
+            assert_eq!(book.total_quantity_at_price(500, side), None);
+            assert_eq!(book.order_count_at_price(500, side), None);
+        }
+
+        // A live bid level is absent on the ask side (and vice versa).
+        assert_eq!(book.visible_quantity_at_price(100, Side::Sell), None);
+        assert!(book.visible_quantity_at_price(100, Side::Buy).is_some());
+    }
+
+    #[test]
+    fn test_iceberg_level_visible_hidden_split() {
+        let (book, _levels) = seed_mixed_book();
+
+        // The iceberg at bid 99 was seeded visible=5, hidden=15.
+        assert_eq!(book.visible_quantity_at_price(99, Side::Buy), Some(5));
+        assert_eq!(book.hidden_quantity_at_price(99, Side::Buy), Some(15));
+        assert_eq!(book.total_quantity_at_price(99, Side::Buy), Some(20));
+        assert_eq!(book.order_count_at_price(99, Side::Buy), Some(1));
+    }
 }

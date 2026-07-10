@@ -1029,4 +1029,116 @@ mod test_add_order_with_result {
             Some(Quantity::new(5))
         );
     }
+
+    /// Per-call fill attribution under concurrency (#185): several threads
+    /// submit crossing takers on the SAME book at the same instant, and each
+    /// returned `TradeResult` must carry only that call's own fills — the
+    /// engine builds it from this call's private `MatchResult`, never from a
+    /// shared accumulator.
+    ///
+    /// Each iteration seeds resting liquidity exactly equal to the combined
+    /// taker demand, releases all takers in lockstep via a `Barrier`, and
+    /// asserts, per thread: the result's `order_id` equals the submitted id,
+    /// the per-trade quantities sum to the order's executed quantity, and that
+    /// executed quantity is this taker's full size. Across the batch the
+    /// executed quantities sum to the consumed resting size and the book is
+    /// emptied.
+    #[test]
+    fn test_add_order_with_result_concurrent_per_call_attribution() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        const NUM_TAKERS: usize = 4;
+        const PER_TAKER: u64 = 5;
+        const RESTING_TOTAL: u64 = NUM_TAKERS as u64 * PER_TAKER;
+        const ITERATIONS: usize = 250;
+
+        for iteration in 0..ITERATIONS {
+            let book: OrderBook<()> = OrderBook::new("TEST");
+
+            // Seed resting liquidity exactly equal to the combined demand.
+            let seed = standard_order(100, RESTING_TOTAL, Side::Sell, user(1));
+            assert!(
+                book.add_order(seed).is_ok(),
+                "iteration {iteration}: failed to seed resting liquidity"
+            );
+
+            let barrier = Barrier::new(NUM_TAKERS);
+            let mut combined_executed: u64 = 0;
+
+            thread::scope(|scope| {
+                let handles: Vec<_> = (0..NUM_TAKERS)
+                    .map(|i| {
+                        let book = &book;
+                        let barrier = &barrier;
+                        scope.spawn(move || {
+                            // Distinct, non-zero taker identities.
+                            let taker = user(10 + i as u8);
+                            let order = standard_order(100, PER_TAKER, Side::Buy, taker);
+                            let submitted_id = order.id();
+                            // Release all takers together to maximize overlap.
+                            barrier.wait();
+                            let result = book.add_order_with_result(order);
+                            (submitted_id, result)
+                        })
+                    })
+                    .collect();
+
+                for handle in handles {
+                    let (submitted_id, result) = handle.join().expect("taker thread panicked");
+                    let Ok((added, Some(trade_result))) = result else {
+                        panic!("iteration {iteration}: expected a filled taker, got {result:?}");
+                    };
+
+                    // Per-call attribution: both the returned order and the
+                    // TradeResult identify THIS call's own order, never a peer's.
+                    assert_eq!(
+                        added.id(),
+                        submitted_id,
+                        "iteration {iteration}: returned order id must be the submitted id"
+                    );
+                    assert_eq!(
+                        trade_result.match_result.order_id(),
+                        submitted_id,
+                        "iteration {iteration}: TradeResult must attribute to the submitting call"
+                    );
+
+                    // The result's per-trade fills sum to this order's executed
+                    // quantity, and this taker fully filled its own size.
+                    let per_trade_sum: u64 = trade_result
+                        .match_result
+                        .trades()
+                        .as_vec()
+                        .iter()
+                        .map(|t| t.quantity().as_u64())
+                        .sum();
+                    let executed = trade_result
+                        .match_result
+                        .executed_quantity()
+                        .expect("executed quantity")
+                        .as_u64();
+                    assert_eq!(
+                        per_trade_sum, executed,
+                        "iteration {iteration}: per-trade fills must sum to executed quantity"
+                    );
+                    assert_eq!(
+                        executed, PER_TAKER,
+                        "iteration {iteration}: each taker must fully fill its own size"
+                    );
+
+                    combined_executed += executed;
+                }
+            });
+
+            // Combined fills equal the consumed resting size; the book empties.
+            assert_eq!(
+                combined_executed, RESTING_TOTAL,
+                "iteration {iteration}: combined fills must equal consumed resting size"
+            );
+            assert!(
+                book.best_ask().is_none(),
+                "iteration {iteration}: all resting liquidity must have been consumed"
+            );
+        }
+    }
 }

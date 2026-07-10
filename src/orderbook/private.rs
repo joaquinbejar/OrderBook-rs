@@ -8,7 +8,14 @@ impl<T> OrderBook<T>
 where
     T: Clone + Send + Sync + Default + 'static,
 {
-    /// Check if an order has expired
+    /// Check if an order has expired.
+    ///
+    /// The comparison unit is **milliseconds since the Unix epoch**: the
+    /// current time comes from `self.clock().now_millis()`, and a `Gtd`
+    /// order's deadline (and the market-close timestamp used for `Day` orders,
+    /// see [`Self::set_market_close_timestamp`]) must be supplied in the same
+    /// unit. A deadline expressed in seconds would be treated as a moment in
+    /// 1970 and the order would read as instantly expired.
     pub fn has_expired(&self, order: &OrderType<T>) -> bool {
         let time_in_force = order.time_in_force();
         let current_time = self.clock().now_millis().as_u64();

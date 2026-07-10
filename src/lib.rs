@@ -32,6 +32,42 @@
 //! - **Research**: Platform for studying market microstructure and order flow
 //! - **Educational**: Reference implementation for understanding modern exchange architecture
 //!
+//! ## What's New in Version 0.9.2
+//!
+//! ### v0.9.2 — constant-work per-price aggregates + attribution & unit docs (#185, #186, #187)
+//!
+//! - **Constant-work per-price aggregate accessors (#186)** — an O(log N)
+//!   point lookup + O(1) counter read, with no per-order materialization. New
+//!   read-only methods on [`OrderBook<T>`]: `visible_quantity_at_price`,
+//!   `hidden_quantity_at_price`, `total_quantity_at_price`, and
+//!   `order_count_at_price`. Each does an O(log N) `SkipMap` point lookup then
+//!   reads the level's maintained atomic counter (one relaxed load; two for
+//!   `total_quantity_at_price`, which sums visible + hidden) — no per-order
+//!   `Arc` is materialized and no `T: Default` conversion runs, so they are the
+//!   cheap way to poll one level's depth or count. `order_count_at_price` is
+//!   the counterpart to `queue_ahead_at_price` that drops the per-order term:
+//!   O(log N) here vs O(log N + K) for the queue-walking version. All four
+//!   return `None` for an absent level and read advisory, eventually-consistent
+//!   counters — take `create_snapshot` for a mutually-consistent view.
+//! - **Per-call fill attribution, documented and proven (#185).** The
+//!   `add_order_with_result` guarantee is now explicit: concurrent submits on
+//!   the same book each receive exactly their own fills, because the
+//!   `TradeResult` is built from that call's private `MatchResult` and the
+//!   engine holds no shared trade accumulator. On the error-after-fills paths
+//!   (an unfillable IOC remainder, or a self-trade-prevention cancellation
+//!   after earlier non-self fills) the caller instead gets the typed `Err` and
+//!   the executed fills reach only the trade listener. A multi-thread
+//!   concurrency test pins it. New convenience wrappers
+//!   `add_limit_order_with_result` and `add_limit_order_with_user_and_result`
+//!   mirror the plain `add_limit_order*` builders while returning the
+//!   `TradeResult` directly.
+//! - **GTD / market-close millisecond unit documented (#187).** `has_expired`,
+//!   `set_market_close_timestamp`, and the `time_in_force` parameter docs now
+//!   state that GTD deadlines and the market-close timestamp are milliseconds
+//!   since the Unix epoch (the same unit `clock().now_millis()` compares
+//!   against). A pinning test proves a seconds-form deadline reads as instantly
+//!   expired.
+//!
 //! ## What's New in Version 0.9.1
 //!
 //! ### v0.9.1 — `add_order_with_result` (#184)

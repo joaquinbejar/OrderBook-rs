@@ -2,6 +2,7 @@
 
 use super::book::OrderBook;
 use super::error::OrderBookError;
+use super::trade::TradeResult;
 use pricelevel::{Hash32, Id, MatchResult, OrderType, Price, Quantity, Side, TimeInForce};
 use std::sync::Arc;
 use tracing::trace;
@@ -15,6 +16,9 @@ where
     /// This convenience method sets `user_id` to `Hash32::zero()`.  When STP
     /// is enabled on this book, use [`Self::add_limit_order_with_user`] instead
     /// to supply the owner identity.
+    ///
+    /// `time_in_force` accepts a GTD deadline in Unix milliseconds — see
+    /// [`Self::add_limit_order_with_user`] for full argument docs.
     ///
     /// # Errors
     /// Returns [`OrderBookError::MissingUserId`] when STP is enabled.
@@ -48,7 +52,7 @@ where
     /// * `price` — Limit price.
     /// * `quantity` — Order quantity.
     /// * `side` — Buy or Sell.
-    /// * `time_in_force` — Time-in-force policy.
+    /// * `time_in_force` — Time-in-force policy (GTD deadline in Unix milliseconds).
     /// * `user_id` — Owner identity for STP checks.
     /// * `extra_fields` — Optional application-specific payload.
     ///
@@ -87,10 +91,116 @@ where
         self.add_order(order)
     }
 
+    /// Add a limit order to the book and return the [`TradeResult`] produced by
+    /// the match directly to the caller.
+    ///
+    /// The result-returning counterpart of [`Self::add_limit_order`]: it builds
+    /// the same `Standard` order and routes through
+    /// [`Self::add_order_with_result`], so the returned tuple carries the
+    /// resting order plus `Some(TradeResult)` when the order produced fills, or
+    /// `None` when it rested without matching. This convenience method sets
+    /// `user_id` to `Hash32::zero()`; when STP is enabled use
+    /// [`Self::add_limit_order_with_user_and_result`] instead.
+    ///
+    /// Per-call attribution: the `TradeResult` is built from this call's own
+    /// private match outcome, never from shared capture state, so concurrent
+    /// submits on the same book each receive exactly their own fills.
+    ///
+    /// `time_in_force` accepts a GTD deadline in Unix milliseconds — see
+    /// [`Self::add_limit_order_with_user_and_result`] for full argument docs.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::MissingUserId`] when STP is enabled.
+    pub fn add_limit_order_with_result(
+        &self,
+        id: Id,
+        price: u128,
+        quantity: u64,
+        side: Side,
+        time_in_force: TimeInForce,
+        extra_fields: Option<T>,
+    ) -> Result<(Arc<OrderType<T>>, Option<TradeResult>), OrderBookError> {
+        self.add_limit_order_with_user_and_result(
+            id,
+            price,
+            quantity,
+            side,
+            time_in_force,
+            Hash32::zero(),
+            extra_fields,
+        )
+    }
+
+    /// Add a limit order to the book with an explicit `user_id` and return the
+    /// [`TradeResult`] produced by the match directly to the caller.
+    ///
+    /// The result-returning counterpart of [`Self::add_limit_order_with_user`]:
+    /// it builds the same `Standard` order and routes through
+    /// [`Self::add_order_with_result`]. The returned tuple carries the resting
+    /// order plus `Some(TradeResult)` when the order produced fills, or `None`
+    /// when it rested without matching. When a trade listener is installed it
+    /// still fires with the exact same `TradeResult` (same fills, same fees,
+    /// same `engine_seq`).
+    ///
+    /// Per-call attribution: the `TradeResult` is built from this call's own
+    /// private match outcome, never from shared capture state, so concurrent
+    /// submits on the same book each receive exactly their own fills.
+    ///
+    /// # Arguments
+    /// * `id` — Unique order identifier.
+    /// * `price` — Limit price.
+    /// * `quantity` — Order quantity.
+    /// * `side` — Buy or Sell.
+    /// * `time_in_force` — Time-in-force policy (GTD deadline in Unix milliseconds).
+    /// * `user_id` — Owner identity for STP checks.
+    /// * `extra_fields` — Optional application-specific payload.
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::MissingUserId`] when STP is enabled and
+    /// `user_id` is `Hash32::zero()`.
+    /// On error paths that follow real fills (an unfillable IOC remainder, or a
+    /// self-trade-prevention cancellation after earlier non-self fills) the
+    /// typed error is returned instead, so those fills reach the trade listener
+    /// only.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_limit_order_with_user_and_result(
+        &self,
+        id: Id,
+        price: u128,
+        quantity: u64,
+        side: Side,
+        time_in_force: TimeInForce,
+        user_id: Hash32,
+        extra_fields: Option<T>,
+    ) -> Result<(Arc<OrderType<T>>, Option<TradeResult>), OrderBookError> {
+        // Top-of-fn kill-switch gate so we skip the clock read and
+        // extra_fields / OrderType construction below when halted.
+        self.check_kill_switch_or_reject(id)?;
+        let extra_fields: T = extra_fields.unwrap_or_default();
+        let order = OrderType::Standard {
+            id,
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
+            side,
+            user_id,
+            timestamp: self.clock().now_millis(),
+            time_in_force,
+            extra_fields,
+        };
+        trace!(
+            "Adding limit order (with result) {} {} {} {} {}",
+            id, price, quantity, side, time_in_force
+        );
+        self.add_order_with_result(order)
+    }
+
     /// Add an iceberg order to the book.
     ///
     /// This convenience method sets `user_id` to `Hash32::zero()`.  When STP
     /// is enabled, use [`Self::add_iceberg_order_with_user`] instead.
+    ///
+    /// `time_in_force` accepts a GTD deadline in Unix milliseconds — see
+    /// [`Self::add_iceberg_order_with_user`] for full argument docs.
     ///
     /// # Errors
     /// Returns [`OrderBookError::MissingUserId`] when STP is enabled.
@@ -125,7 +235,7 @@ where
     /// * `visible_quantity` — Displayed quantity.
     /// * `hidden_quantity` — Hidden (reserve) quantity.
     /// * `side` — Buy or Sell.
-    /// * `time_in_force` — Time-in-force policy.
+    /// * `time_in_force` — Time-in-force policy (GTD deadline in Unix milliseconds).
     /// * `user_id` — Owner identity for STP checks.
     /// * `extra_fields` — Optional application-specific payload.
     ///
@@ -171,6 +281,9 @@ where
     /// This convenience method sets `user_id` to `Hash32::zero()`.  When STP
     /// is enabled, use [`Self::add_post_only_order_with_user`] instead.
     ///
+    /// `time_in_force` accepts a GTD deadline in Unix milliseconds — see
+    /// [`Self::add_post_only_order_with_user`] for full argument docs.
+    ///
     /// # Errors
     /// Returns [`OrderBookError::MissingUserId`] when STP is enabled.
     pub fn add_post_only_order(
@@ -200,7 +313,7 @@ where
     /// * `price` — Limit price.
     /// * `quantity` — Order quantity.
     /// * `side` — Buy or Sell.
-    /// * `time_in_force` — Time-in-force policy.
+    /// * `time_in_force` — Time-in-force policy (GTD deadline in Unix milliseconds).
     /// * `user_id` — Owner identity for STP checks.
     /// * `extra_fields` — Optional application-specific payload.
     ///
