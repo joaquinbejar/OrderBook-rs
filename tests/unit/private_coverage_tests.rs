@@ -553,6 +553,50 @@ mod tests {
         assert!(book.has_expired(&gtd_order));
     }
 
+    /// Pins the GTD deadline unit to milliseconds since the Unix epoch.
+    ///
+    /// `has_expired` compares against `clock().now_millis()`, so a deadline
+    /// expressed in seconds (roughly `now_millis / 1000`) lands ~1970 and reads
+    /// as instantly expired — the observable proof that the unit is
+    /// milliseconds, not seconds.
+    #[test]
+    fn gtd_expiry_unit_is_milliseconds() {
+        let book = OrderBook::<TestExtraFields>::new("TEST");
+        let now_millis = current_time_millis();
+
+        let gtd = |deadline: u64| OrderType::Standard {
+            id: create_order_id(),
+            price: Price::new(100),
+            quantity: Quantity::new(10),
+            side: Side::Buy,
+            user_id: Hash32::zero(),
+            timestamp: TimestampMs::new(now_millis),
+            time_in_force: TimeInForce::Gtd(deadline),
+            extra_fields: TestExtraFields::default(),
+        };
+
+        // A deadline 60 s into the future (in milliseconds) is NOT expired.
+        assert!(
+            !book.has_expired(&gtd(now_millis + 60_000)),
+            "a millisecond deadline in the future must not be expired"
+        );
+
+        // A deadline 1 s in the past (in milliseconds) IS expired.
+        assert!(
+            book.has_expired(&gtd(now_millis - 1_000)),
+            "a millisecond deadline in the past must be expired"
+        );
+
+        // The SAME logical future instant expressed in SECONDS collapses to
+        // ~1970 when interpreted as milliseconds, so it reads as expired.
+        // This is the pin: it can only pass if the unit is milliseconds.
+        assert!(
+            book.has_expired(&gtd((now_millis + 60_000) / 1000)),
+            "a seconds-form deadline must (wrongly) read as instantly expired, \
+             proving the comparison unit is milliseconds"
+        );
+    }
+
     #[test]
     fn test_will_cross_market_no_opposite_side() {
         // Test will_cross_market when there's no opposite side

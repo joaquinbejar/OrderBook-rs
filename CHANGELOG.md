@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] — 2026-07-10
+
+### Added
+
+- **Constant-work per-price aggregate accessors (#186)** — an O(log N) point
+  lookup + O(1) counter read, with no per-order materialization. Four read-only
+  methods on `OrderBook<T>`: `visible_quantity_at_price`,
+  `hidden_quantity_at_price`, `total_quantity_at_price`, and
+  `order_count_at_price`. Each performs an O(log N) `SkipMap` point lookup then
+  reads the level's maintained atomic counter (one relaxed load; two for
+  `total_quantity_at_price`, which sums visible + hidden) — no per-order `Arc`
+  is materialized and no `T: Default` conversion runs, so they are the cheap
+  way to poll one level's depth or order count. `order_count_at_price` is the
+  counterpart to `queue_ahead_at_price` that drops the per-order term: O(log N)
+  here vs O(log N + K) for the queue-walking version, which is left unchanged.
+  All four return `None` for an absent level and read advisory,
+  eventually-consistent counters; use `create_snapshot` for a
+  mutually-consistent view. `total_quantity_at_price` saturates a (practically
+  unreachable) `visible + hidden` overflow to `u64::MAX`, never `0`, so an
+  overflow signals "enormous", never "empty".
+- **`add_limit_order_with_result` / `add_limit_order_with_user_and_result`
+  (#185).** Result-returning counterparts of `add_limit_order` /
+  `add_limit_order_with_user`: they build the same `Standard` order and route
+  through `add_order_with_result`, returning
+  `Ok((Arc<OrderType<T>>, Option<TradeResult>))` so callers get the match's
+  `TradeResult` directly instead of relying on the `TradeListener` callback.
+
+### Documentation
+
+- **Per-call fill attribution guarantee for `add_order_with_result` (#185).**
+  The rustdoc now states explicitly that concurrent submits on the same book
+  each receive exactly their own fills — the `TradeResult` is built from that
+  call's private `MatchResult`, never from shared capture state, because the
+  engine holds no cross-call trade accumulator. On the error-after-fills paths
+  (an unfillable IOC remainder, or a self-trade-prevention cancellation after
+  earlier non-self fills) the caller instead gets the typed `Err` and the
+  executed fills reach only the trade listener. A multi-thread concurrency test
+  (`test_add_order_with_result_concurrent_per_call_attribution`) pins the
+  guarantee.
+- **GTD / market-close timestamps documented as milliseconds (#187).**
+  `has_expired`, `set_market_close_timestamp`, and the `time_in_force`
+  parameter docs on the limit / iceberg / post-only builders now state that GTD
+  deadlines and the market-close timestamp are **milliseconds since the Unix
+  epoch** — the same unit `clock().now_millis()` compares against. The pinning
+  test `gtd_expiry_unit_is_milliseconds` proves a seconds-form deadline reads
+  as instantly expired.
+
 ## [0.9.1] — 2026-07-08
 
 ### Added

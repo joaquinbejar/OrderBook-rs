@@ -1040,6 +1040,14 @@ where
     /// is installed, the listener is invoked with the exact same `TradeResult`
     /// that is returned here — same fills, same fees, same `engine_seq`.
     ///
+    /// Per-call attribution: concurrent submits on the same book each receive
+    /// exactly their own fills; the result is built from this call's private
+    /// match outcome, never from shared capture state. The engine holds no
+    /// cross-call trade accumulator — each returned `TradeResult` is
+    /// constructed from the `MatchResult` produced by this invocation alone —
+    /// so two threads submitting crossing orders concurrently cannot observe
+    /// each other's fills in their own returned result.
+    ///
     /// On error paths that follow real fills (an unfillable IOC remainder, or
     /// a self-trade-prevention cancellation after earlier non-self fills) the
     /// typed error is returned instead, so those fills reach the trade
