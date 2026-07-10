@@ -11,6 +11,7 @@ mod integration_workflow_tests;
 mod kill_switch_tests;
 mod manager_coverage_tests;
 mod market_order_by_amount_tests;
+mod mass_cancel_determinism_tests;
 mod mass_cancel_tests;
 mod matching_coverage_tests;
 mod matching_coverage_tests_extended;
