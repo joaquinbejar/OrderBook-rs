@@ -610,6 +610,12 @@ where
             } => {
                 let _ = book.cancel_orders_by_price_range(*side, *min_price, *max_price);
             }
+            SequencerCommand::EvictExpiredOrders { now_ms } => {
+                // Apply the journaled cutoff, never the replay clock, so the
+                // sweep evicts exactly the orders it evicted live. The sweep
+                // is idempotent, so a duplicate replay is a no-op.
+                let _ = book.evict_expired_orders(*now_ms);
+            }
         }
 
         Ok(())
@@ -1073,5 +1079,137 @@ mod tests {
             }
             other => panic!("expected MarketOrderByAmount, got {other:?}"),
         }
+    }
+
+    /// #189: the appended `EvictExpiredOrders` command round-trips through
+    /// JSON — the `now_ms` cutoff decodes byte-identically. `TimestampMs` is
+    /// `#[serde(transparent)]`, so it encodes as a bare millisecond count.
+    #[test]
+    fn test_evict_expired_orders_command_serde_json_roundtrip() {
+        let cmd: SequencerCommand<()> = SequencerCommand::EvictExpiredOrders {
+            now_ms: TimestampMs::new(1_700_000_000_000),
+        };
+        let json = serde_json::to_vec(&cmd).expect("serialize");
+        let decoded: SequencerCommand<()> = serde_json::from_slice(&json).expect("deserialize");
+        match decoded {
+            SequencerCommand::EvictExpiredOrders { now_ms } => {
+                assert_eq!(now_ms, TimestampMs::new(1_700_000_000_000));
+            }
+            other => panic!("expected EvictExpiredOrders, got {other:?}"),
+        }
+    }
+
+    /// #189: the appended `EvictExpiredOrders` command round-trips through
+    /// bincode with no trailing bytes. Because the variant is appended after
+    /// every prior variant, old journals keep their bincode variant indices.
+    #[cfg(feature = "bincode")]
+    #[test]
+    fn test_evict_expired_orders_command_bincode_roundtrip() {
+        use bincode::config::standard;
+        use bincode::serde::{decode_from_slice, encode_to_vec};
+        let cmd: SequencerCommand<()> = SequencerCommand::EvictExpiredOrders {
+            now_ms: TimestampMs::new(42_000),
+        };
+        let bytes = encode_to_vec(&cmd, standard()).expect("encode");
+        let (decoded, n) =
+            decode_from_slice::<SequencerCommand<()>, _>(&bytes, standard()).expect("decode");
+        assert_eq!(n, bytes.len());
+        match decoded {
+            SequencerCommand::EvictExpiredOrders { now_ms } => {
+                assert_eq!(now_ms, TimestampMs::new(42_000));
+            }
+            other => panic!("expected EvictExpiredOrders, got {other:?}"),
+        }
+    }
+
+    /// #189: an `EvictExpiredOrders` command replays deterministically. Drive a
+    /// live book through a set of GTD / GTC adds plus a sweep, journaling each
+    /// command; replay the journal into a fresh book (with a matching logical
+    /// clock so the small GTD deadlines re-admit) and require the post-sweep
+    /// state to match the live one. `snapshots_match` is the oracle. The sweep
+    /// consumes the journaled `now_ms`, never the replay clock — that is the
+    /// determinism contract for the variant.
+    #[test]
+    fn test_replay_evict_expired_orders_matches_live_book() {
+        use crate::orderbook::mass_cancel::MassCancelResult;
+
+        fn order(id: Id, price: u128, qty: u64, side: Side, tif: TimeInForce) -> OrderType<()> {
+            OrderType::Standard {
+                id,
+                price: Price::new(price),
+                quantity: Quantity::new(qty),
+                side,
+                time_in_force: tif,
+                user_id: Hash32::zero(),
+                timestamp: TimestampMs::new(0),
+                extra_fields: (),
+            }
+        }
+
+        let symbol = "TEST";
+        let journal: InMemoryJournal<()> = InMemoryJournal::new();
+
+        // Two GTD orders expire at t=1_000; one GTD rests until t=10_000; a GTC
+        // order never expires. Built once so the live book and the journal carry
+        // identical AddOrder commands.
+        let expiring_bid = order(Id::new_uuid(), 100, 5, Side::Buy, TimeInForce::Gtd(1_000));
+        let future_bid = order(Id::new_uuid(), 99, 3, Side::Buy, TimeInForce::Gtd(10_000));
+        let gtc_bid = order(Id::new_uuid(), 98, 4, Side::Buy, TimeInForce::Gtc);
+        let expiring_ask = order(Id::new_uuid(), 101, 7, Side::Sell, TimeInForce::Gtd(1_000));
+        let orders = [expiring_bid, future_bid, gtc_bid, expiring_ask];
+
+        // Live book on a logical clock so the small deadlines admit (wall-clock
+        // admission would treat them as already expired).
+        let clock_live: Arc<dyn Clock> = Arc::new(StubClock::starting_at(0));
+        let live = OrderBook::<()>::with_clock(symbol, clock_live);
+
+        let mut seq = 0u64;
+        for ord in &orders {
+            live.add_order(*ord).expect("live add");
+            let ev = SequencerEvent::<()> {
+                sequence_num: seq,
+                timestamp_ns: 0,
+                command: SequencerCommand::AddOrder(*ord),
+                result: SequencerResult::OrderAdded { order_id: ord.id() },
+            };
+            assert!(journal.append(&ev).is_ok());
+            seq += 1;
+        }
+
+        // Sweep live at t=5_000: evicts the two t=1_000 orders, keeps the rest.
+        let now = TimestampMs::new(5_000);
+        let evicted = live.evict_expired_orders(now);
+        assert_eq!(evicted.len(), 2, "two GTD orders expire by t=5_000");
+        let sweep = SequencerEvent::<()> {
+            sequence_num: seq,
+            timestamp_ns: 0,
+            command: SequencerCommand::EvictExpiredOrders { now_ms: now },
+            result: SequencerResult::MassCancelled {
+                result: MassCancelResult::new(
+                    evicted.len(),
+                    evicted.iter().map(|o| o.id()).collect(),
+                ),
+            },
+        };
+        assert!(journal.append(&sweep).is_ok());
+
+        // Replay with a matching logical clock so AddOrder re-admissions succeed;
+        // the sweep applies the journaled cutoff, not the clock.
+        let clock_replay: Arc<dyn Clock> = Arc::new(StubClock::starting_at(0));
+        let (replayed, last_seq) =
+            ReplayEngine::<()>::replay_from_with_clock(&journal, 0, symbol, clock_replay)
+                .expect("replay must succeed");
+        assert_eq!(last_seq, seq);
+
+        let live_snap = live.create_snapshot(usize::MAX);
+        let replayed_snap = replayed.create_snapshot(usize::MAX);
+        assert!(
+            snapshots_match(&live_snap, &replayed_snap),
+            "post-sweep live and replayed snapshots must match"
+        );
+
+        // Sanity: the expired levels are gone, the survivors remain.
+        assert_eq!(replayed_snap.bids.len(), 2, "99 and 98 bids survive");
+        assert!(replayed_snap.asks.is_empty(), "the only ask expired");
     }
 }

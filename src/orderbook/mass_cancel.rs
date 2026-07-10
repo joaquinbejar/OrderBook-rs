@@ -12,8 +12,9 @@
 use super::book::OrderBook;
 use super::book_change_event::PriceLevelChangedEvent;
 use super::order_state::{CancelReason, OrderStatus};
-use pricelevel::{Hash32, Id, Side};
+use pricelevel::{Hash32, Id, OrderType, Side, TimestampMs};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tracing::trace;
 
 /// Result of a mass cancel operation.
@@ -371,6 +372,148 @@ where
         }
 
         self.cancel_order_batch_with_reason(&order_ids, CancelReason::MassCancelByPriceRange)
+    }
+
+    /// Evict every resting order whose time-in-force has expired at `now_ms`.
+    ///
+    /// Resting `Gtd` and `Day` orders are only checked for expiry at
+    /// *admission* (via `validate_order_shape`); once resting they are never
+    /// re-examined by the matching hot path. This is the explicit sweep that
+    /// removes them after their deadline. It is **not** invoked automatically —
+    /// call it from a scheduler, a per-tick pass, or the sequencer so the
+    /// timestamp is journalled and replay stays deterministic.
+    ///
+    /// # Timestamp
+    ///
+    /// `now_ms` is **caller-supplied Unix milliseconds** — the same unit as a
+    /// `Gtd` deadline and the market-close timestamp. It is taken as an
+    /// argument (this method never reads the book's own clock) precisely so the
+    /// sequencer can journal the exact instant and reproduce the eviction
+    /// byte-for-byte on replay. Boundary behaviour matches admission's
+    /// `has_expired`: an order is expired when `now_ms >= deadline` (`Gtd`) or
+    /// `now_ms >= market_close` (`Day`); a `Gtd` whose deadline equals `now_ms`
+    /// is evicted. `Gtc`, `Ioc`, and `Fok` resting orders are never touched.
+    ///
+    /// # Determinism contract
+    ///
+    /// The returned vector — and the [`PriceLevelChangedEvent`] and
+    /// `Cancelled { reason: TimeInForceExpired }` state transitions emitted as a
+    /// side effect — follow one fixed, replay-stable order:
+    ///
+    /// 1. **Bids first, then asks.**
+    /// 2. Within a side, price levels in **ascending price** order (the
+    ///    `SkipMap`'s natural key order — no sorting required).
+    /// 3. Within a price level, orders in **ascending insertion sequence** —
+    ///    the exact order the matching engine consumes resting orders
+    ///    (`PriceLevel::snapshot_by_seq_into`), i.e. oldest first. Note
+    ///    this is stable regardless of client-supplied timestamps, unlike the
+    ///    non-deterministic `iter_orders` view.
+    ///
+    /// Every evicted order is removed through the same single-order cancel path
+    /// as [`Self::cancel_order`], so the price-level cache, depth statistics,
+    /// `order_locations` / `user_orders` indices, risk state, special-order
+    /// tracker, and the order-state tracker all stay consistent. Each removal is
+    /// tagged with [`CancelReason::TimeInForceExpired`].
+    ///
+    /// # Idempotence
+    ///
+    /// A second sweep at the same `now_ms` returns an empty vector: the expired
+    /// orders are already gone.
+    ///
+    /// # Returns
+    ///
+    /// The evicted orders as `Arc<OrderType<T>>`, in the deterministic order
+    /// above. Empty when nothing was expired.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use orderbook_rs::{Clock, OrderBook, StubClock};
+    /// use pricelevel::{Id, Side, TimeInForce, TimestampMs};
+    /// use std::sync::Arc;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // A logical clock starting at 0 so the small GTD deadline is admitted
+    /// // (wall-clock admission would treat it as already expired).
+    /// let book: OrderBook<()> =
+    ///     OrderBook::with_clock("TEST", Arc::new(StubClock::starting_at(0)) as Arc<dyn Clock>);
+    /// let gtd = Id::new_uuid();
+    /// // A resting GTD order that expires at t = 1_000 ms.
+    /// book.add_limit_order(gtd, 100, 10, Side::Buy, TimeInForce::Gtd(1_000), None)?;
+    ///
+    /// // Nothing expired yet at t = 999.
+    /// assert!(book.evict_expired_orders(TimestampMs::new(999)).is_empty());
+    ///
+    /// // At the deadline the order is evicted and no longer rests.
+    /// let evicted = book.evict_expired_orders(TimestampMs::new(1_000));
+    /// assert_eq!(evicted.len(), 1);
+    /// assert_eq!(book.best_bid(), None);
+    ///
+    /// // Idempotent: a second sweep at the same instant evicts nothing.
+    /// assert!(book.evict_expired_orders(TimestampMs::new(1_000)).is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn evict_expired_orders(&self, now_ms: TimestampMs) -> Vec<Arc<OrderType<T>>> {
+        let now = now_ms.as_u64();
+        trace!(
+            "Order book {}: Evicting expired orders as of {} ms",
+            self.symbol, now
+        );
+
+        // Phase 1: collect the IDs of every expired resting order in the fixed
+        // determinism-contract order (bids ascending, then asks ascending;
+        // within each level, ascending insertion sequence). `SkipMap::iter`
+        // yields ascending price keys, and `snapshot_by_seq_into` yields the
+        // exact order the matching engine consumes resting orders — the
+        // non-deterministic `iter_orders` view must NOT be used here or replay
+        // would diverge. One scratch buffer is reused across levels to avoid a
+        // per-level allocation. Expiry uses `tif_expired_at` — the same
+        // definition admission uses — so the boundary case (deadline == now)
+        // can never diverge.
+        let mut expired_ids: Vec<Id> = Vec::new();
+        let mut level_orders: Vec<Arc<OrderType<()>>> = Vec::new();
+        for entry in self.bids.iter() {
+            entry.value().snapshot_by_seq_into(&mut level_orders);
+            for order in &level_orders {
+                if self.tif_expired_at(order.time_in_force(), now) {
+                    expired_ids.push(order.id());
+                }
+            }
+        }
+        for entry in self.asks.iter() {
+            entry.value().snapshot_by_seq_into(&mut level_orders);
+            for order in &level_orders {
+                if self.tif_expired_at(order.time_in_force(), now) {
+                    expired_ids.push(order.id());
+                }
+            }
+        }
+
+        if expired_ids.is_empty() {
+            return Vec::new();
+        }
+
+        // Phase 2: cancel each expired order through the shared single-order
+        // path, preserving the collection order. This is what keeps the caches,
+        // trackers, and emitted events consistent and in the documented order.
+        let mut evicted = Vec::with_capacity(expired_ids.len());
+        for order_id in expired_ids {
+            if let Ok(Some(order)) =
+                self.cancel_order_with_reason(order_id, CancelReason::TimeInForceExpired)
+            {
+                evicted.push(order);
+            }
+        }
+
+        trace!(
+            symbol = %self.symbol,
+            now_ms = now,
+            evicted = evicted.len(),
+            "expired orders evicted"
+        );
+
+        evicted
     }
 
     /// Internal helper: cancel a batch of orders by their IDs with a reason.
@@ -769,5 +912,207 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
         let result = book.cancel_all_orders();
         assert!(result.is_empty());
+    }
+
+    // ---- evict_expired_orders --------------------------------------------
+
+    use crate::orderbook::clock::StubClock;
+
+    /// A book whose clock starts at logical `0`, so small `Gtd` deadlines are
+    /// admitted (not seen as already-expired by wall-clock admission) and the
+    /// caller-supplied eviction timestamp is what drives expiry.
+    fn expiring_book() -> OrderBook<()> {
+        OrderBook::with_clock("TEST", Arc::new(StubClock::starting_at(0)))
+    }
+
+    #[test]
+    fn test_evict_expired_empty_book_returns_empty() {
+        let book = expiring_book();
+        assert!(
+            book.evict_expired_orders(TimestampMs::new(10_000))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_evict_expired_gtd_removed_and_unmatchable() {
+        let book = expiring_book();
+        let gtd = Id::new_uuid();
+        book.add_limit_order(gtd, 100, 10, Side::Buy, TimeInForce::Gtd(1_000), None)
+            .expect("add gtd");
+
+        // Before the deadline: untouched.
+        assert!(book.evict_expired_orders(TimestampMs::new(999)).is_empty());
+        assert_eq!(book.best_bid(), Some(100));
+
+        // At the deadline (>=): evicted.
+        let evicted = book.evict_expired_orders(TimestampMs::new(1_000));
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].id(), gtd);
+        assert_eq!(book.best_bid(), None);
+        assert!(!book.order_locations.contains_key(&gtd));
+
+        // No longer matchable: a crossing sell finds no liquidity.
+        let taker = Id::new_uuid();
+        assert!(book.match_market_order(taker, 10, Side::Sell).is_err());
+    }
+
+    #[test]
+    fn test_evict_expired_leaves_gtc_and_unexpired_gtd_untouched() {
+        let book = expiring_book();
+        let gtc = Id::new_uuid();
+        let gtd_future = Id::new_uuid();
+        let gtd_past = Id::new_uuid();
+        book.add_limit_order(gtc, 100, 10, Side::Buy, TimeInForce::Gtc, None)
+            .expect("gtc");
+        book.add_limit_order(gtd_future, 99, 5, Side::Buy, TimeInForce::Gtd(5_000), None)
+            .expect("gtd future");
+        book.add_limit_order(gtd_past, 98, 5, Side::Buy, TimeInForce::Gtd(1_000), None)
+            .expect("gtd past");
+
+        let evicted = book.evict_expired_orders(TimestampMs::new(2_000));
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].id(), gtd_past);
+
+        assert!(book.order_locations.contains_key(&gtc));
+        assert!(book.order_locations.contains_key(&gtd_future));
+        assert!(!book.order_locations.contains_key(&gtd_past));
+    }
+
+    #[test]
+    fn test_evict_expired_boundary_matches_has_expired_semantics() {
+        // is_expired is `now >= deadline`; has_expired delegates to the same
+        // definition the sweep uses, so `deadline - 1` is not expired and
+        // `deadline` is. The sweep must honour that exact boundary.
+        let book = expiring_book();
+        let id = Id::new_uuid();
+        book.add_limit_order(id, 100, 10, Side::Sell, TimeInForce::Gtd(1_000), None)
+            .expect("add");
+
+        // 999 -> not expired.
+        assert!(book.evict_expired_orders(TimestampMs::new(999)).is_empty());
+        // Exactly at the deadline -> evicted.
+        let evicted = book.evict_expired_orders(TimestampMs::new(1_000));
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].id(), id);
+    }
+
+    #[test]
+    fn test_evict_expired_day_uses_market_close() {
+        let book = expiring_book();
+        book.set_market_close_timestamp(2_000);
+        let day = Id::new_uuid();
+        book.add_limit_order(day, 100, 10, Side::Buy, TimeInForce::Day, None)
+            .expect("day");
+
+        // Before close: untouched.
+        assert!(
+            book.evict_expired_orders(TimestampMs::new(1_999))
+                .is_empty()
+        );
+        // At/after close: evicted.
+        let evicted = book.evict_expired_orders(TimestampMs::new(2_000));
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].id(), day);
+    }
+
+    #[test]
+    fn test_evict_expired_deterministic_order_multiple_levels_sides() {
+        let book = expiring_book();
+
+        // Bids at two levels (ascending: 90 then 95), FIFO within each level.
+        let b95a = Id::new_uuid();
+        let b95b = Id::new_uuid();
+        let b90 = Id::new_uuid();
+        book.add_limit_order(b95a, 95, 1, Side::Buy, TimeInForce::Gtd(1_000), None)
+            .expect("b95a");
+        book.add_limit_order(b95b, 95, 1, Side::Buy, TimeInForce::Gtd(1_000), None)
+            .expect("b95b");
+        book.add_limit_order(b90, 90, 1, Side::Buy, TimeInForce::Gtd(1_000), None)
+            .expect("b90");
+
+        // Asks at two levels (ascending: 100 then 110).
+        let a100 = Id::new_uuid();
+        let a110 = Id::new_uuid();
+        book.add_limit_order(a100, 100, 1, Side::Sell, TimeInForce::Gtd(1_000), None)
+            .expect("a100");
+        book.add_limit_order(a110, 110, 1, Side::Sell, TimeInForce::Gtd(1_000), None)
+            .expect("a110");
+
+        let evicted = book.evict_expired_orders(TimestampMs::new(2_000));
+        let ids: Vec<Id> = evicted.iter().map(|o| o.id()).collect();
+
+        // Contract: bids ascending (90, then 95 FIFO), then asks ascending.
+        assert_eq!(ids, vec![b90, b95a, b95b, a100, a110]);
+    }
+
+    #[test]
+    fn test_evict_expired_second_sweep_is_idempotent() {
+        let book = expiring_book();
+        let id = Id::new_uuid();
+        book.add_limit_order(id, 100, 10, Side::Buy, TimeInForce::Gtd(1_000), None)
+            .expect("add");
+
+        let first = book.evict_expired_orders(TimestampMs::new(1_000));
+        assert_eq!(first.len(), 1);
+        let second = book.evict_expired_orders(TimestampMs::new(1_000));
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn test_evict_expired_fires_book_change_events() {
+        use crate::orderbook::book_change_event::PriceLevelChangedEvent;
+        use std::sync::Mutex;
+
+        let events: Arc<Mutex<Vec<PriceLevelChangedEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let mut book = expiring_book();
+        book.set_price_level_listener(Arc::new(move |ev: PriceLevelChangedEvent| {
+            if let Ok(mut v) = sink.lock() {
+                v.push(ev);
+            }
+        }));
+
+        let id = Id::new_uuid();
+        book.add_limit_order(id, 100, 10, Side::Buy, TimeInForce::Gtd(1_000), None)
+            .expect("add");
+
+        let evicted = book.evict_expired_orders(TimestampMs::new(1_000));
+        assert_eq!(evicted.len(), 1);
+
+        let recorded = events.lock().expect("lock");
+        // The cancel path emits a level-change event for the touched level.
+        assert!(
+            recorded
+                .iter()
+                .any(|ev| ev.side == Side::Buy && ev.price == 100 && ev.quantity == 0)
+        );
+    }
+
+    #[test]
+    fn test_evict_expired_records_time_in_force_expired_reason() {
+        use crate::orderbook::order_state::{OrderStateTracker, OrderStatus};
+
+        let mut book = expiring_book();
+        book.set_order_state_tracker(OrderStateTracker::new());
+
+        let id = Id::new_uuid();
+        book.add_limit_order(id, 100, 10, Side::Buy, TimeInForce::Gtd(1_000), None)
+            .expect("add");
+
+        let evicted = book.evict_expired_orders(TimestampMs::new(1_000));
+        assert_eq!(evicted.len(), 1);
+
+        let status = book
+            .order_state_tracker()
+            .and_then(|t| t.get(id))
+            .expect("status");
+        assert!(matches!(
+            status,
+            OrderStatus::Cancelled {
+                reason: CancelReason::TimeInForceExpired,
+                ..
+            }
+        ));
     }
 }

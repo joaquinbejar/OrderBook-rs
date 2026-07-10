@@ -1,6 +1,6 @@
 use crate::orderbook::book_change_event::PriceLevelChangedEvent;
 use crate::{OrderBook, OrderBookError};
-use pricelevel::{OrderType, PriceLevel, Side};
+use pricelevel::{OrderType, PriceLevel, Side, TimeInForce};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -8,7 +8,41 @@ impl<T> OrderBook<T>
 where
     T: Clone + Send + Sync + Default + 'static,
 {
-    /// Check if an order has expired.
+    /// The market-close timestamp (Unix milliseconds) used for `Day`-order
+    /// expiry, or `None` when no market close has been configured via
+    /// [`Self::set_market_close_timestamp`].
+    ///
+    /// Single source of the market-close input shared by [`Self::has_expired`]
+    /// and [`Self::tif_expired_at`] so admission and eviction agree on `Day`
+    /// boundary behaviour.
+    #[inline]
+    pub(super) fn market_close_for_expiry(&self) -> Option<u64> {
+        if self.has_market_close.load(Ordering::Relaxed) {
+            Some(self.market_close_timestamp.load(Ordering::Relaxed))
+        } else {
+            None
+        }
+    }
+
+    /// Whether a [`TimeInForce`] is expired at an explicit `now_ms`.
+    ///
+    /// This is the single definition of expiry in the book: both admission
+    /// (via [`Self::has_expired`]) and the eviction sweep
+    /// ([`Self::evict_expired_orders`](crate::OrderBook::evict_expired_orders))
+    /// route through it, so they cannot disagree on the boundary case
+    /// (`deadline == now_ms`, which counts as expired for `Gtd`, and
+    /// `now_ms == market_close` for `Day`).
+    ///
+    /// `now_ms` is **milliseconds since the Unix epoch** — the same unit as a
+    /// `Gtd` deadline and the market-close timestamp. A value expressed in
+    /// seconds would be treated as a moment in 1970.
+    #[inline]
+    #[must_use]
+    pub(super) fn tif_expired_at(&self, time_in_force: TimeInForce, now_ms: u64) -> bool {
+        time_in_force.is_expired(now_ms, self.market_close_for_expiry())
+    }
+
+    /// Check if an order has expired **as of the book's own clock**.
     ///
     /// The comparison unit is **milliseconds since the Unix epoch**: the
     /// current time comes from `self.clock().now_millis()`, and a `Gtd`
@@ -16,18 +50,15 @@ where
     /// see [`Self::set_market_close_timestamp`]) must be supplied in the same
     /// unit. A deadline expressed in seconds would be treated as a moment in
     /// 1970 and the order would read as instantly expired.
+    ///
+    /// The boundary predicate (`now >= deadline` for `Gtd`,
+    /// `now >= market_close` for `Day`) is defined once internally and shared
+    /// with the caller-supplied-timestamp eviction sweep
+    /// ([`Self::evict_expired_orders`](crate::OrderBook::evict_expired_orders)),
+    /// so admission and eviction never disagree.
     pub fn has_expired(&self, order: &OrderType<T>) -> bool {
-        let time_in_force = order.time_in_force();
         let current_time = self.clock().now_millis().as_u64();
-
-        // Only check market close timestamp if we have one set
-        let market_close = if self.has_market_close.load(Ordering::Relaxed) {
-            Some(self.market_close_timestamp.load(Ordering::Relaxed))
-        } else {
-            None
-        };
-
-        time_in_force.is_expired(current_time, market_close)
+        self.tif_expired_at(order.time_in_force(), current_time)
     }
 
     /// Check if there would be a price crossing
