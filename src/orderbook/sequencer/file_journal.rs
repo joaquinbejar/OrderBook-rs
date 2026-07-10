@@ -1448,4 +1448,42 @@ mod tests {
         let decoded = decoded.unwrap_or_else(|_| panic!("decode"));
         assert_eq!(decoded.sequence_num, 7);
     }
+
+    /// #189: an `EvictExpiredOrders` command survives a full `FileJournal`
+    /// append/read cycle (CRC-verified, memory-mapped), keeping `FileJournal`
+    /// in parity with `InMemoryJournal` for the appended variant. The
+    /// journaled `now_ms` decodes byte-identically.
+    #[test]
+    fn test_evict_expired_orders_command_file_journal_roundtrip() {
+        use pricelevel::TimestampMs;
+
+        let dir = tempfile::tempdir().unwrap_or_else(|_| panic!("tempdir"));
+        let journal = FileJournal::<()>::open(dir.path()).unwrap_or_else(|_| panic!("open"));
+
+        let event = SequencerEvent::<()> {
+            sequence_num: 0,
+            timestamp_ns: 0,
+            command: SequencerCommand::EvictExpiredOrders {
+                now_ms: TimestampMs::new(1_700_000_000_000),
+            },
+            result: SequencerResult::OrderCancelled {
+                order_id: Id::new_uuid(),
+            },
+        };
+        assert!(journal.append(&event).is_ok());
+        assert!(journal.verify_integrity().is_ok());
+
+        let decoded = journal
+            .read_from(0)
+            .unwrap_or_else(|_| panic!("read_from"))
+            .next()
+            .and_then(Result::ok)
+            .unwrap_or_else(|| panic!("decode"));
+        match decoded.event.command {
+            SequencerCommand::EvictExpiredOrders { now_ms } => {
+                assert_eq!(now_ms, TimestampMs::new(1_700_000_000_000));
+            }
+            other => panic!("expected EvictExpiredOrders, got {other:?}"),
+        }
+    }
 }

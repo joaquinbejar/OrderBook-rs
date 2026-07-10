@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-07-10
+
+### Breaking
+
+- **`SequencerCommand` and `SequencerResult` are now `#[non_exhaustive]`.**
+  Downstream code that matches them exhaustively must add a wildcard arm
+  (`_ => …`) and recompile. This is a one-time source break: future
+  command/result variants become source-compatible additions instead of
+  repeating it. Surfaced by adding `EvictExpiredOrders` below — on the
+  previously-exhaustive enum that addition would itself have broken
+  downstream matches silently inside the 0.9.x range (which is why this
+  release is 0.10.0 and not 0.9.3). Wire format is unaffected: bincode
+  variant indices and JSON encodings are unchanged, and existing journals
+  replay as-is.
+
+### Added
+
+- **Host-driven GTD / DAY expiry sweep (#189)** — new
+  `OrderBook::evict_expired_orders(now_ms)` removes every resting order whose
+  time-in-force has expired as of the caller-supplied timestamp. `now_ms` is a
+  `TimestampMs` (Unix milliseconds, the unit `clock().now_millis()` compares
+  against) passed in by the caller — the sweep never reads the book's own clock,
+  so a scheduler drives cadence and the sequencer can journal the exact cutoff.
+  The matching hot path is untouched: there is no lazy per-match expiry check, so
+  expiry is an explicit maintenance pass rather than an implicit per-submit cost.
+  Expiry uses the same boundary predicate as admission (`now >= deadline` for
+  `Gtd`, `now >= market_close` for `Day`), so an order admitted at an instant is
+  never simultaneously evictable at that instant. Returns the evicted orders as
+  `Vec<Arc<OrderType<T>>>`; a second sweep at the same `now_ms` is idempotent and
+  returns empty.
+- **Manager parity for the sweep (#189).** `BookManagerStd` and
+  `BookManagerTokio` gain `evict_expired_orders(symbol, now_ms)` (per-symbol
+  pass-through, `None` for an unknown symbol) and
+  `evict_expired_across_books(now_ms)` (all books, mirroring the
+  `cancel_*_across_books` idiom).
+- **`SequencerCommand::EvictExpiredOrders { now_ms }` (#189).** New command
+  variant (appended, so existing journals' bincode variant indices are
+  unchanged). Replay applies the journaled cutoff — never the replay clock — so
+  the sweep reproduces byte-identically and `snapshots_match` holds between a
+  live book and its replay. Old journals replay unchanged; new journals carrying
+  the variant fail on older binaries, consistent with the `MarketOrderByAmount`
+  precedent. No `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump required — the version
+  gates the snapshot package, not the journal command enum.
+- **`TimestampMs` re-exported** at the crate root and via `prelude`, so the new
+  `now_ms` parameter can be constructed without importing from `pricelevel`
+  directly.
+
+### Documentation
+
+- **Deterministic eviction order documented (#189).** The rustdoc on
+  `evict_expired_orders` states the fixed, replay-stable order in which orders
+  are evicted and side-effect events emitted: bids first then asks; within a
+  side, ascending price (the `SkipMap`'s natural key order, no sort); within a
+  level, ascending insertion sequence (the exact order the matching engine
+  consumes resting orders, not the non-deterministic `iter_orders` view). Each
+  order is removed through the same single-order cancel path as `cancel_order`,
+  tagged `CancelReason::TimeInForceExpired`, so the price-level cache, depth
+  statistics, `order_locations` / `user_orders` indices, risk state,
+  special-order tracker, and order-state tracker all stay consistent.
+- Runnable example `examples/src/bin/gtd_expiry_sweep.rs`
+  (`cargo run -p examples --bin gtd_expiry_sweep`) seeds GTD orders on a
+  `StubClock` book, sweeps at explicit timestamps, and logs the evicted orders
+  via `tracing`.
+
 ## [0.9.2] — 2026-07-10
 
 ### Added

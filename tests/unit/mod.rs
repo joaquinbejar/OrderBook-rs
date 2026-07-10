@@ -3,6 +3,7 @@ mod book_manager_cross_cancel_tests;
 mod clock_determinism_tests;
 mod common;
 mod engine_seq_monotonic_tests;
+mod evict_expired_tests;
 #[cfg(feature = "journal")]
 mod filejournal_edge_case_tests;
 mod implied_volatility_tests;

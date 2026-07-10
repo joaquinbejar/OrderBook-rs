@@ -32,6 +32,63 @@
 //! - **Research**: Platform for studying market microstructure and order flow
 //! - **Educational**: Reference implementation for understanding modern exchange architecture
 //!
+//! ## What's New in Version 0.10.0
+//!
+//! ### v0.10.0 — host-driven GTD / DAY expiry sweep (#189)
+//!
+//! - **New `OrderBook::evict_expired_orders(now_ms)`** — a host-driven sweep
+//!   that removes every resting order whose time-in-force has expired as of the
+//!   caller-supplied timestamp. `now_ms` is [`TimestampMs`] (Unix milliseconds,
+//!   the same unit `clock().now_millis()` compares against) and is passed in by
+//!   the caller — the sweep never reads the book's own clock — so a scheduler
+//!   drives cadence and the sequencer can journal the exact cutoff. The matching
+//!   hot path is untouched: there is no lazy per-match expiry check, so expiry is
+//!   an explicit maintenance pass, not an implicit cost on every submit. The
+//!   honest consequence: an expired-but-unswept `Gtd` / `Day` order remains
+//!   resting and matchable — it can still trade until the host calls the sweep;
+//!   the no-post-expiry-trade guarantee holds only after the sweep runs. Expiry
+//!   uses the single boundary predicate that admission uses (`now >= deadline`
+//!   for `Gtd`, `now >= market_close` for `Day`), so an order admitted at a given
+//!   instant is never simultaneously evictable at that instant. Returns the
+//!   evicted orders as `Vec<Arc<OrderType<T>>>`; a second sweep at the same
+//!   `now_ms` is idempotent and returns empty.
+//! - **Deterministic eviction order.** Evicted orders — and the
+//!   `Cancelled { reason: TimeInForceExpired }` state transitions and
+//!   `PriceLevelChangedEvent`s emitted as a side effect — follow one fixed,
+//!   replay-stable order: bids first then asks; within a side, price levels in
+//!   ascending price (the `SkipMap`'s natural key order, no sort); within a
+//!   level, ascending insertion sequence (the exact order the matching engine
+//!   consumes resting orders — not the non-deterministic `iter_orders` view).
+//!   Each order is removed through the same single-order cancel path as
+//!   `cancel_order`, so the price-level cache, depth statistics,
+//!   `order_locations` / `user_orders` indices, risk state, special-order
+//!   tracker, and order-state tracker all stay consistent.
+//! - **Manager parity.** `BookManagerStd` and `BookManagerTokio` gain
+//!   `evict_expired_orders(symbol, now_ms)` (per-symbol pass-through, `None` for
+//!   an unknown symbol) and `evict_expired_across_books(now_ms)` (all books,
+//!   mirroring the `cancel_*_across_books` idiom).
+//! - **Journaled as a sequencer command.** New
+//!   `SequencerCommand::EvictExpiredOrders { now_ms }` variant (appended, so
+//!   existing journals' bincode variant indices are unchanged). Replay applies
+//!   the journaled cutoff — never the replay clock — so the sweep reproduces
+//!   byte-identically; `snapshots_match` holds between a live book and its
+//!   replay. Old journals replay unchanged; new journals carrying the variant
+//!   fail on older binaries, consistent with the `MarketOrderByAmount`
+//!   precedent. No `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump required (the version
+//!   gates the snapshot package, not the journal command enum).
+//! - **Breaking (the reason this is 0.10.0):** `SequencerCommand` and
+//!   `SequencerResult` are now `#[non_exhaustive]`. Downstream code that
+//!   matches them exhaustively must add a wildcard arm (`_ => …`) once and
+//!   recompile; in exchange, future command/result additions are
+//!   source-compatible instead of repeating this break. Adding the
+//!   `EvictExpiredOrders` variant itself is what surfaced the hazard: on the
+//!   previously-exhaustive enum it would have silently broken downstream
+//!   matches inside the 0.9.x range.
+//! - **`TimestampMs` re-exported** at the crate root and via [`prelude`], so the
+//!   new `now_ms` parameter can be constructed without reaching into
+//!   `pricelevel` directly.
+//! - Runnable example: `cargo run -p examples --bin gtd_expiry_sweep`.
+//!
 //! ## What's New in Version 0.9.2
 //!
 //! ### v0.9.2 — constant-work per-price aggregates + attribution & unit docs (#185, #186, #187)
@@ -704,7 +761,7 @@ pub type LegacyOrderBook = OrderBook<()>;
 pub type DefaultOrderBook = OrderBook<()>;
 
 // Re-export pricelevel types with aliases
-pub use pricelevel::{Id, OrderType, Side, TimeInForce};
+pub use pricelevel::{Id, OrderType, Side, TimeInForce, TimestampMs};
 
 /// Legacy type alias for backward compatibility with code using `OrderId`.
 pub type OrderId = Id;

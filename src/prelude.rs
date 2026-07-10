@@ -43,7 +43,7 @@ pub use crate::orderbook::trade::{
 pub use crate::orderbook::book_change_event::{PriceLevelChangedEvent, PriceLevelChangedListener};
 
 // Order types and enums from pricelevel
-pub use pricelevel::{Id, OrderType, Side, TimeInForce};
+pub use pricelevel::{Id, OrderType, Side, TimeInForce, TimestampMs};
 
 // Legacy alias for backward compatibility
 pub use crate::OrderId;

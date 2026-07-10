@@ -13,7 +13,7 @@ use crate::orderbook::OrderBook;
 use crate::orderbook::error::ManagerError;
 use crate::orderbook::mass_cancel::MassCancelResult;
 use crate::orderbook::trade::{TradeEvent, TradeListener, TradeResult};
-use pricelevel::{Hash32, Side};
+use pricelevel::{Hash32, OrderType, Side, TimestampMs};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -217,6 +217,40 @@ where
         self.books
             .iter()
             .map(|(symbol, book)| (symbol.clone(), book.cancel_orders_by_side(side)))
+            .collect()
+    }
+
+    /// Evict expired resting orders from a single managed book.
+    ///
+    /// Pass-through to [`OrderBook::evict_expired_orders`]. `now_ms` is
+    /// caller-supplied Unix milliseconds (see that method for the boundary and
+    /// determinism contract). Returns `None` when `symbol` is not managed, or
+    /// `Some(evicted)` with the evicted orders in the book's documented
+    /// deterministic order (empty when nothing expired).
+    #[must_use]
+    pub fn evict_expired_orders(
+        &self,
+        symbol: &str,
+        now_ms: TimestampMs,
+    ) -> Option<Vec<Arc<OrderType<T>>>> {
+        self.books
+            .get(symbol)
+            .map(|book| book.evict_expired_orders(now_ms))
+    }
+
+    /// Evict expired resting orders across all managed books at `now_ms`.
+    ///
+    /// Returns a map from symbol to that book's evicted orders (in the book's
+    /// documented deterministic order). Books with nothing expired map to an
+    /// empty vector. `now_ms` is caller-supplied Unix milliseconds.
+    #[must_use]
+    pub fn evict_expired_across_books(
+        &self,
+        now_ms: TimestampMs,
+    ) -> HashMap<String, Vec<Arc<OrderType<T>>>> {
+        self.books
+            .iter()
+            .map(|(symbol, book)| (symbol.clone(), book.evict_expired_orders(now_ms)))
             .collect()
     }
 }
@@ -434,6 +468,40 @@ where
         self.books
             .iter()
             .map(|(symbol, book)| (symbol.clone(), book.cancel_orders_by_side(side)))
+            .collect()
+    }
+
+    /// Evict expired resting orders from a single managed book.
+    ///
+    /// Pass-through to [`OrderBook::evict_expired_orders`]. `now_ms` is
+    /// caller-supplied Unix milliseconds (see that method for the boundary and
+    /// determinism contract). Returns `None` when `symbol` is not managed, or
+    /// `Some(evicted)` with the evicted orders in the book's documented
+    /// deterministic order (empty when nothing expired).
+    #[must_use]
+    pub fn evict_expired_orders(
+        &self,
+        symbol: &str,
+        now_ms: TimestampMs,
+    ) -> Option<Vec<Arc<OrderType<T>>>> {
+        self.books
+            .get(symbol)
+            .map(|book| book.evict_expired_orders(now_ms))
+    }
+
+    /// Evict expired resting orders across all managed books at `now_ms`.
+    ///
+    /// Returns a map from symbol to that book's evicted orders (in the book's
+    /// documented deterministic order). Books with nothing expired map to an
+    /// empty vector. `now_ms` is caller-supplied Unix milliseconds.
+    #[must_use]
+    pub fn evict_expired_across_books(
+        &self,
+        now_ms: TimestampMs,
+    ) -> HashMap<String, Vec<Arc<OrderType<T>>>> {
+        self.books
+            .iter()
+            .map(|(symbol, book)| (symbol.clone(), book.evict_expired_orders(now_ms)))
             .collect()
     }
 }
