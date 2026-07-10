@@ -46,6 +46,28 @@ This order book engine is built with the following design principles:
 - **Research**: Platform for studying market microstructure and order flow
 - **Educational**: Reference implementation for understanding modern exchange architecture
 
+### What's New in Version 0.10.1
+
+#### v0.10.1 — replay-stable mass-cancel result ordering (#190)
+
+- **Deterministic `cancelled_order_ids` ordering.** `cancel_all_orders`,
+  `cancel_orders_by_side`, and `cancel_orders_by_price_range` now enumerate
+  cancelled orders through the same fixed traversal the eviction sweep uses:
+  bids first then asks; within a side, price levels in ascending price (the
+  `SkipMap`'s natural key order, no sort); within a level, ascending insertion
+  sequence (`PriceLevel::snapshot_by_seq_into`, the exact order the matching
+  engine consumes resting orders). Previously the ids were read from
+  order-unstable structures (`order_locations` / per-level `iter_orders`) whose
+  `DashMap` hasher is seeded per instance, so two processes replaying the same
+  command stream could journal divergent `SequencerResult::MassCancelled`
+  payloads. The cancelled **set** and **count** are unchanged — only the order
+  of `cancelled_order_ids` is now byte-identical across processes and replay.
+- **`cancel_orders_by_user` is unchanged** and was already replay-stable: it
+  drains the `user_orders` index in admission-history order. That determinism
+  contract is now documented alongside the others.
+- No wire-format or public-API change: no new fields, no event-shape change,
+  and no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+
 ### What's New in Version 0.10.0
 
 #### v0.10.0 — host-driven GTD / DAY expiry sweep (#189)

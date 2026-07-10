@@ -749,3 +749,134 @@ fn cancel_all_clears_book_completely() {
     assert_eq!(book.best_bid(), None);
     assert_eq!(book.best_ask(), None);
 }
+
+// ---------------------------------------------------------------------------
+// Cross-instance result determinism (Issue #190)
+//
+// The mass-cancel result order must be identical across independently
+// constructed books fed the same insertion sequence. Before the #190 fix,
+// `cancel_all_orders` collected ids from the `order_locations` DashMap, whose
+// hasher is seeded per instance, so two books with the same orders produced
+// different `cancelled_order_ids` orderings — and thus divergent journaled
+// `SequencerResult::MassCancelled` payloads. This is the regression guard.
+// ---------------------------------------------------------------------------
+
+/// A deterministic, interleaved admission plan: two price levels per side and
+/// two orders per level, admitted in an order that scrambles DashMap insertion
+/// relative to the price-then-insertion-sequence contract order. The `Id`s are
+/// generated once and shared, so every book built from the plan holds the
+/// identical order set.
+fn interleaved_plan() -> Vec<(Id, u128, Side)> {
+    vec![
+        (Id::new_uuid(), 100, Side::Buy),  // b100a
+        (Id::new_uuid(), 120, Side::Sell), // a120a
+        (Id::new_uuid(), 90, Side::Buy),   // b90a
+        (Id::new_uuid(), 110, Side::Sell), // a110a
+        (Id::new_uuid(), 100, Side::Buy),  // b100b
+        (Id::new_uuid(), 110, Side::Sell), // a110b
+        (Id::new_uuid(), 90, Side::Buy),   // b90b
+        (Id::new_uuid(), 120, Side::Sell), // a120b
+    ]
+}
+
+fn book_from_plan(plan: &[(Id, u128, Side)]) -> OrderBook<()> {
+    let book = new_book();
+    for &(id, price, side) in plan {
+        book.add_limit_order(id, price, 1, side, TimeInForce::Gtc, None)
+            .expect("add");
+    }
+    book
+}
+
+/// Build `instances` independent books from the same plan, run `op` on each,
+/// and return every result's id vector. Independent books seed independent
+/// DashMap hashers, so any hasher-order dependence surfaces as divergence.
+fn ids_across_instances<F>(plan: &[(Id, u128, Side)], instances: usize, op: F) -> Vec<Vec<Id>>
+where
+    F: Fn(&OrderBook<()>) -> MassCancelResult,
+{
+    (0..instances)
+        .map(|_| {
+            let book = book_from_plan(plan);
+            op(&book).cancelled_order_ids().to_vec()
+        })
+        .collect()
+}
+
+fn assert_all_identical(runs: &[Vec<Id>]) {
+    let first = runs.first().expect("at least one run");
+    for (i, run) in runs.iter().enumerate() {
+        assert_eq!(run, first, "instance {i} diverged from instance 0");
+    }
+}
+
+#[test]
+fn test_cancel_all_orders_cross_instance_returns_identical_ids() {
+    let plan = interleaved_plan();
+    let runs = ids_across_instances(&plan, 8, |book| book.cancel_all_orders());
+    assert_eq!(runs[0].len(), 8);
+    assert_all_identical(&runs);
+}
+
+#[test]
+fn test_cancel_orders_by_side_cross_instance_returns_identical_ids() {
+    let plan = interleaved_plan();
+    let buy_runs = ids_across_instances(&plan, 8, |book| book.cancel_orders_by_side(Side::Buy));
+    assert_eq!(buy_runs[0].len(), 4);
+    assert_all_identical(&buy_runs);
+
+    let sell_runs = ids_across_instances(&plan, 8, |book| book.cancel_orders_by_side(Side::Sell));
+    assert_eq!(sell_runs[0].len(), 4);
+    assert_all_identical(&sell_runs);
+}
+
+#[test]
+fn test_cancel_orders_by_price_range_cross_instance_returns_identical_ids() {
+    let plan = interleaved_plan();
+    let runs = ids_across_instances(&plan, 8, |book| {
+        book.cancel_orders_by_price_range(Side::Buy, 90, 100)
+    });
+    assert_eq!(runs[0].len(), 4);
+    assert_all_identical(&runs);
+}
+
+#[test]
+fn test_cancel_orders_by_user_cross_instance_returns_identical_ids() {
+    // cancel_orders_by_user was already deterministic (admission-history order);
+    // this pins that it stays stable across independent instances.
+    let user = uid(7);
+    let ids: Vec<Id> = (0..6).map(|_| Id::new_uuid()).collect();
+    let prices = [100u128, 120, 90, 110, 100, 90];
+    let sides = [
+        Side::Buy,
+        Side::Sell,
+        Side::Buy,
+        Side::Sell,
+        Side::Buy,
+        Side::Buy,
+    ];
+
+    let build = || {
+        let book = new_book();
+        for i in 0..ids.len() {
+            book.add_limit_order_with_user(
+                ids[i],
+                prices[i],
+                1,
+                sides[i],
+                TimeInForce::Gtc,
+                user,
+                None,
+            )
+            .expect("add");
+        }
+        book.cancel_orders_by_user(user)
+            .cancelled_order_ids()
+            .to_vec()
+    };
+
+    let runs: Vec<Vec<Id>> = (0..8).map(|_| build()).collect();
+    // Admission-history order: exactly the sequence the ids were added in.
+    assert_eq!(runs[0], ids);
+    assert_all_identical(&runs);
+}

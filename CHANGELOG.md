@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] — 2026-07-10
+
+### Changed
+
+- **Deterministic, replay-stable mass-cancel result ordering (#190).**
+  `OrderBook::cancel_all_orders`, `cancel_orders_by_side`, and
+  `cancel_orders_by_price_range` now enumerate the cancelled orders through the
+  same fixed traversal the eviction sweep uses — bids first then asks; within a
+  side, price levels in ascending price (the `SkipMap`'s natural key order); and
+  within a level, ascending insertion sequence via
+  `PriceLevel::snapshot_by_seq_into`. Previously these methods collected ids from
+  order-unstable structures (`order_locations` / per-level `iter_orders`), whose
+  `DashMap` hasher is seeded per instance, so two processes replaying the same
+  command stream could produce different `MassCancelResult::cancelled_order_ids`
+  orderings — and therefore divergent journaled `SequencerResult::MassCancelled`
+  payloads. The cancelled **set** and **count** are unchanged; only the order of
+  `cancelled_order_ids` is now deterministic across processes and replay.
+  `cancel_orders_by_user` was already replay-stable (it drains the `user_orders`
+  index in admission-history order) and is unchanged; its determinism contract is
+  now documented.
+- No wire-format or public-API change: no new fields, no event-shape change, and
+  no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+
 ## [0.10.0] — 2026-07-10
 
 ### Breaking

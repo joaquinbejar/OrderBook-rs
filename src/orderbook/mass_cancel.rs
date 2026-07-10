@@ -109,6 +109,25 @@ where
     ///
     /// A [`MassCancelResult`] with the count and IDs of all cancelled orders.
     ///
+    /// # Determinism
+    ///
+    /// [`MassCancelResult::cancelled_order_ids`] — and therefore the journaled
+    /// `SequencerResult::MassCancelled` payload — follows one fixed,
+    /// replay-stable order, identical to the
+    /// [`Self::evict_expired_orders`] contract:
+    ///
+    /// 1. **Bids first, then asks.**
+    /// 2. Within a side, price levels in **ascending price** order (the
+    ///    `SkipMap`'s natural key order — no sorting required).
+    /// 3. Within a price level, orders in **ascending insertion sequence** —
+    ///    the exact order the matching engine consumes resting orders
+    ///    (`PriceLevel::snapshot_by_seq_into`), i.e. oldest first.
+    ///
+    /// This traversal is independent of the `order_locations` / `user_orders`
+    /// `DashMap` iteration order (each instance seeds its own randomised
+    /// hasher), so the id sequence — and the `SequencerResult::MassCancelled`
+    /// event that carries it — is byte-identical across processes and replay.
+    ///
     /// # Examples
     ///
     /// ```
@@ -133,8 +152,28 @@ where
         self.cache.invalidate();
         trace!("Order book {}: Mass cancel ALL orders (bulk)", self.symbol);
 
-        // 1. Collect all order IDs before clearing
-        let cancelled_order_ids: Vec<Id> = self.order_locations.iter().map(|e| *e.key()).collect();
+        // 1. Collect all order IDs before clearing, in the fixed
+        // determinism-contract order (bids ascending price, then asks ascending
+        // price; within each level ascending insertion sequence). `SkipMap::iter`
+        // yields ascending price keys, and `snapshot_by_seq_into` yields the exact
+        // order the matching engine consumes resting orders — the `order_locations`
+        // `DashMap` iteration order must NOT be used here or replay would diverge
+        // across processes (its hasher is seeded per-instance). One scratch buffer
+        // is reused across levels to avoid a per-level allocation.
+        let mut cancelled_order_ids: Vec<Id> = Vec::new();
+        let mut level_orders: Vec<Arc<OrderType<()>>> = Vec::new();
+        for entry in self.bids.iter() {
+            entry.value().snapshot_by_seq_into(&mut level_orders);
+            for order in &level_orders {
+                cancelled_order_ids.push(order.id());
+            }
+        }
+        for entry in self.asks.iter() {
+            entry.value().snapshot_by_seq_into(&mut level_orders);
+            for order in &level_orders {
+                cancelled_order_ids.push(order.id());
+            }
+        }
         let cancelled_count = cancelled_order_ids.len();
 
         if cancelled_count == 0 {
@@ -225,6 +264,23 @@ where
     ///
     /// A [`MassCancelResult`] with the count and IDs of cancelled orders.
     ///
+    /// # Determinism
+    ///
+    /// [`MassCancelResult::cancelled_order_ids`] — and therefore the journaled
+    /// `SequencerResult::MassCancelled` payload — follows one fixed,
+    /// replay-stable order, matching the [`Self::evict_expired_orders`]
+    /// contract restricted to the requested side:
+    ///
+    /// 1. Price levels in **ascending price** order (the `SkipMap`'s natural
+    ///    key order — no sorting required).
+    /// 2. Within a price level, orders in **ascending insertion sequence** —
+    ///    the exact order the matching engine consumes resting orders
+    ///    (`PriceLevel::snapshot_by_seq_into`), i.e. oldest first.
+    ///
+    /// The traversal never observes the `order_locations` / `user_orders`
+    /// `DashMap` iteration order (seeded per instance), so the id sequence is
+    /// byte-identical across processes and replay.
+    ///
     /// # Examples
     ///
     /// ```
@@ -266,6 +322,24 @@ where
     /// # Returns
     ///
     /// A [`MassCancelResult`] with the count and IDs of cancelled orders.
+    ///
+    /// # Determinism
+    ///
+    /// [`MassCancelResult::cancelled_order_ids`] follows the user's
+    /// **admission-history order**: the `user_orders` index is a `Vec<Id>`
+    /// appended to (never reordered) as each of the user's orders is admitted
+    /// (`track_user_order`), and this method drains that `Vec` in place. Under a
+    /// serialized command stream — as replayed from the journal — that ordering
+    /// is fixed and byte-identical across processes, so the emitted
+    /// `SequencerResult::MassCancelled` payload is replay-stable without any
+    /// price-level traversal. This differs from the price-then-sequence order
+    /// used by [`Self::cancel_all_orders`] and [`Self::cancel_orders_by_side`],
+    /// but is equally deterministic.
+    ///
+    /// Caveat: the guarantee is scoped to *pure journal replay*. After a
+    /// snapshot restore (`restore_from_snapshot_package`) the `user_orders`
+    /// index is rebuilt by level iteration, so a by-user cancel issued after a
+    /// restore follows the rebuild order, not admission history.
     ///
     /// # Examples
     ///
@@ -324,6 +398,23 @@ where
     ///
     /// A [`MassCancelResult`] with the count and IDs of cancelled orders.
     ///
+    /// # Determinism
+    ///
+    /// [`MassCancelResult::cancelled_order_ids`] — and therefore the journaled
+    /// `SequencerResult::MassCancelled` payload — follows one fixed,
+    /// replay-stable order over the levels in `[min_price, max_price]`, matching
+    /// the [`Self::evict_expired_orders`] contract restricted to that range:
+    ///
+    /// 1. Price levels in **ascending price** order (the `SkipMap`'s ordered
+    ///    range iteration — no sorting required).
+    /// 2. Within a price level, orders in **ascending insertion sequence** —
+    ///    the exact order the matching engine consumes resting orders
+    ///    (`PriceLevel::snapshot_by_seq_into`), i.e. oldest first.
+    ///
+    /// The traversal never observes the `order_locations` / `user_orders`
+    /// `DashMap` iteration order (seeded per instance), so the id sequence is
+    /// byte-identical across processes and replay.
+    ///
     /// # Examples
     ///
     /// ```
@@ -362,11 +453,17 @@ where
             Side::Sell => &self.asks,
         };
 
+        // Collect in the determinism-contract order: ascending price (the
+        // `SkipMap`'s ordered range iteration), and within each level ascending
+        // insertion sequence via `snapshot_by_seq_into` — never the
+        // non-deterministic `iter_orders` view, which would make the journaled
+        // `MassCancelled` payload diverge across processes. One scratch buffer is
+        // reused across levels.
         let mut order_ids = Vec::new();
-
+        let mut level_orders: Vec<Arc<OrderType<()>>> = Vec::new();
         for entry in price_levels.range(min_price..=max_price) {
-            let level = entry.value();
-            for order in level.iter_orders() {
+            entry.value().snapshot_by_seq_into(&mut level_orders);
+            for order in &level_orders {
                 order_ids.push(order.id());
             }
         }
@@ -539,7 +636,16 @@ where
         MassCancelResult::new(count, cancelled_ids)
     }
 
-    /// Collect all order IDs on a given side by iterating price levels.
+    /// Collect all order IDs on a given side by iterating price levels in the
+    /// deterministic sweep order.
+    ///
+    /// Levels are visited in ascending price (the `SkipMap`'s natural key
+    /// order) and orders within a level in ascending insertion sequence via
+    /// `PriceLevel::snapshot_by_seq_into` — the exact order the matching engine
+    /// consumes resting orders. The non-deterministic `iter_orders` view is
+    /// deliberately avoided so the resulting id sequence (which lands in the
+    /// journaled `MassCancelled` payload) is replay-stable across processes. One
+    /// scratch buffer is reused across levels to avoid a per-level allocation.
     fn collect_order_ids_by_side(&self, side: Side) -> Vec<Id> {
         let price_levels = match side {
             Side::Buy => &self.bids,
@@ -547,9 +653,10 @@ where
         };
 
         let mut ids = Vec::new();
+        let mut level_orders: Vec<Arc<OrderType<()>>> = Vec::new();
         for entry in price_levels.iter() {
-            let level = entry.value();
-            for order in level.iter_orders() {
+            entry.value().snapshot_by_seq_into(&mut level_orders);
+            for order in &level_orders {
                 ids.push(order.id());
             }
         }
@@ -912,6 +1019,116 @@ mod tests {
         let book: OrderBook<()> = OrderBook::new("TEST");
         let result = book.cancel_all_orders();
         assert!(result.is_empty());
+    }
+
+    // ---- deterministic result ordering (#190) ----------------------------
+
+    /// A book with two price levels per side and two orders per level, admitted
+    /// in an interleaved order so the `order_locations` / `user_orders` DashMap
+    /// insertion order is scrambled relative to the price-then-insertion-seq
+    /// contract order. Returns the ids labelled `<side><price><a|b>` where `a`
+    /// is the earlier admission at that level.
+    struct InterleavedFixture {
+        book: OrderBook<()>,
+        b90a: Id,
+        b90b: Id,
+        b100a: Id,
+        b100b: Id,
+        a110a: Id,
+        a110b: Id,
+        a120a: Id,
+        a120b: Id,
+    }
+
+    fn interleaved_fixture() -> InterleavedFixture {
+        let book: OrderBook<()> = OrderBook::new("TEST");
+        let b90a = Id::new_uuid();
+        let b90b = Id::new_uuid();
+        let b100a = Id::new_uuid();
+        let b100b = Id::new_uuid();
+        let a110a = Id::new_uuid();
+        let a110b = Id::new_uuid();
+        let a120a = Id::new_uuid();
+        let a120b = Id::new_uuid();
+
+        // Interleaved admission across sides and levels. The `a` order at each
+        // level is admitted before its `b` sibling, so ascending insertion
+        // sequence within a level is `a` then `b`.
+        book.add_limit_order(b100a, 100, 1, Side::Buy, TimeInForce::Gtc, None)
+            .expect("b100a");
+        book.add_limit_order(a120a, 120, 1, Side::Sell, TimeInForce::Gtc, None)
+            .expect("a120a");
+        book.add_limit_order(b90a, 90, 1, Side::Buy, TimeInForce::Gtc, None)
+            .expect("b90a");
+        book.add_limit_order(a110a, 110, 1, Side::Sell, TimeInForce::Gtc, None)
+            .expect("a110a");
+        book.add_limit_order(b100b, 100, 1, Side::Buy, TimeInForce::Gtc, None)
+            .expect("b100b");
+        book.add_limit_order(a110b, 110, 1, Side::Sell, TimeInForce::Gtc, None)
+            .expect("a110b");
+        book.add_limit_order(b90b, 90, 1, Side::Buy, TimeInForce::Gtc, None)
+            .expect("b90b");
+        book.add_limit_order(a120b, 120, 1, Side::Sell, TimeInForce::Gtc, None)
+            .expect("a120b");
+
+        InterleavedFixture {
+            book,
+            b90a,
+            b90b,
+            b100a,
+            b100b,
+            a110a,
+            a110b,
+            a120a,
+            a120b,
+        }
+    }
+
+    #[test]
+    fn test_cancel_orders_by_side_interleaved_returns_price_then_seq_order() {
+        let f = interleaved_fixture();
+
+        let buy = f.book.cancel_orders_by_side(Side::Buy);
+        // Ascending price (90 then 100), FIFO within each level.
+        assert_eq!(
+            buy.cancelled_order_ids(),
+            &[f.b90a, f.b90b, f.b100a, f.b100b]
+        );
+
+        let sell = f.book.cancel_orders_by_side(Side::Sell);
+        assert_eq!(
+            sell.cancelled_order_ids(),
+            &[f.a110a, f.a110b, f.a120a, f.a120b]
+        );
+    }
+
+    #[test]
+    fn test_cancel_orders_by_price_range_interleaved_returns_price_then_seq_order() {
+        let f = interleaved_fixture();
+
+        // Single level: FIFO within the 90 level only.
+        let single = f.book.cancel_orders_by_price_range(Side::Buy, 90, 90);
+        assert_eq!(single.cancelled_order_ids(), &[f.b90a, f.b90b]);
+
+        // Remaining bid level (100) via a wider range that spans it.
+        let rest = f.book.cancel_orders_by_price_range(Side::Buy, 90, 200);
+        assert_eq!(rest.cancelled_order_ids(), &[f.b100a, f.b100b]);
+    }
+
+    #[test]
+    fn test_cancel_all_orders_interleaved_returns_bids_then_asks_order() {
+        let f = interleaved_fixture();
+
+        let all = f.book.cancel_all_orders();
+        // Bids ascending (90, then 100), then asks ascending (110, then 120);
+        // FIFO within every level.
+        assert_eq!(
+            all.cancelled_order_ids(),
+            &[
+                f.b90a, f.b90b, f.b100a, f.b100b, f.a110a, f.a110b, f.a120a, f.a120b,
+            ]
+        );
+        assert_eq!(all.cancelled_count(), 8);
     }
 
     // ---- evict_expired_orders --------------------------------------------
