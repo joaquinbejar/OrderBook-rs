@@ -336,10 +336,19 @@ where
     /// used by [`Self::cancel_all_orders`] and [`Self::cancel_orders_by_side`],
     /// but is equally deterministic.
     ///
-    /// Caveat: the guarantee is scoped to *pure journal replay*. After a
-    /// snapshot restore (`restore_from_snapshot_package`) the `user_orders`
-    /// index is rebuilt by level iteration, so a by-user cancel issued after a
-    /// restore follows the rebuild order, not admission history.
+    /// After a snapshot restore (`restore_from_snapshot_package`) the
+    /// `user_orders` index is rebuilt from the resting-order layout rather than
+    /// replayed from admission events, so a by-user cancel issued post-restore
+    /// does **not** follow the original admission history. It is still fully
+    /// deterministic: the rebuild walks price levels in the same fixed
+    /// price-then-insertion-sequence order as [`Self::cancel_all_orders`] (bids
+    /// ascending price, then asks ascending price; within each level ascending
+    /// insertion sequence via `PriceLevel::snapshot_by_seq_into`), so the
+    /// per-user `Vec<Id>` — and therefore this method's
+    /// [`MassCancelResult::cancelled_order_ids`] — is byte-identical across every
+    /// restore of the same package (#192). The order simply reflects the resting
+    /// book at snapshot time, not the sequence in which the user's orders were
+    /// originally admitted.
     ///
     /// # Examples
     ///
