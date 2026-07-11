@@ -3019,6 +3019,16 @@ where
     }
 
     /// Restore the book state from a snapshot, without checksum validation.
+    ///
+    /// Rebuilds the resting bids / asks, the `order_locations` and
+    /// `user_orders` indices, and — under the `special_orders` feature — the
+    /// special-order tracker, so restored pegged / trailing-stop orders resume
+    /// re-pricing (#194). The tracker holds only order ids; the trailing-stop
+    /// watermark (`last_reference_price`) and the pegged / stop price are part
+    /// of the order data and survive the snapshot round-trip, so no watermark
+    /// state is lost or re-initialized. The rebuild uses the deterministic
+    /// price-then-insertion-sequence traversal so the restore stays
+    /// replay-stable (#190 / #192).
     pub fn restore_from_snapshot(&self, snapshot: OrderBookSnapshot) -> Result<(), OrderBookError> {
         if snapshot.symbol != self.symbol {
             return Err(OrderBookError::InvalidOperation {
@@ -3040,6 +3050,11 @@ where
         }
         self.order_locations.clear();
         self.user_orders.clear();
+        // The special-order tracker is a full replacement on restore: clear it
+        // here and rebuild it below from the restored resting orders, mirroring
+        // the `user_orders` / `order_locations` rebuild (#194).
+        #[cfg(feature = "special_orders")]
+        self.special_order_tracker.clear();
         self.has_traded.store(false, Ordering::Relaxed);
         self.last_trade_price.store(0);
         self.has_market_close.store(false, Ordering::Relaxed);
@@ -3061,18 +3076,21 @@ where
             self.asks.insert(price, arc_level);
         }
 
-        // Rebuild the `order_locations` and `user_orders` indices in one fixed,
-        // replay-stable order: bids ascending price then asks ascending price
-        // (the `SkipMap`'s natural key order), and within each level ascending
-        // insertion sequence via `PriceLevel::snapshot_by_seq_into` — never the
-        // `DashMap`-backed `iter_orders` view, whose per-instance-hashed order
-        // would leak into the `user_orders` `Vec<Id>` layout and make a
-        // subsequent `cancel_orders_by_user` diverge across restores of the same
-        // package (#192). This is NOT the original admission history — a snapshot
-        // cannot recover that — but it is deterministic. `order_locations` is a
-        // map, so its rebuild order does not leak; only `user_orders`, whose
-        // per-user `Vec` order is consumed by `cancel_orders_by_user`, needs the
-        // fixed traversal. One scratch buffer is reused across levels.
+        // Rebuild the `order_locations` and `user_orders` indices, and (under
+        // `special_orders`) re-register pegged / trailing-stop orders with the
+        // special-order tracker, in one fixed, replay-stable pass: bids
+        // ascending price then asks ascending price (the `SkipMap`'s natural key
+        // order), and within each level ascending insertion sequence via
+        // `PriceLevel::snapshot_by_seq_into` — never the `DashMap`-backed
+        // `iter_orders` view, whose per-instance-hashed order would leak into the
+        // `user_orders` `Vec<Id>` layout and make a subsequent
+        // `cancel_orders_by_user` diverge across restores of the same package
+        // (#192). This is NOT the original admission history — a snapshot cannot
+        // recover that — but it is deterministic. `order_locations` and the
+        // tracker's `DashSet`s are order-insensitive, so their rebuild order does
+        // not leak; only `user_orders`, whose per-user `Vec` order is consumed by
+        // `cancel_orders_by_user`, needs the fixed traversal. One scratch buffer
+        // is reused across levels.
         let mut level_orders: Vec<Arc<OrderType<()>>> = Vec::new();
         for item in self.bids.iter() {
             let price = *item.key();
@@ -3080,6 +3098,8 @@ where
             for order in &level_orders {
                 self.order_locations.insert(order.id(), (price, Side::Buy));
                 self.track_user_order(order.user_id(), order.id());
+                #[cfg(feature = "special_orders")]
+                self.reregister_special_order(order.as_ref());
             }
         }
 
@@ -3089,10 +3109,40 @@ where
             for order in &level_orders {
                 self.order_locations.insert(order.id(), (price, Side::Sell));
                 self.track_user_order(order.user_id(), order.id());
+                #[cfg(feature = "special_orders")]
+                self.reregister_special_order(order.as_ref());
             }
         }
 
         Ok(())
+    }
+
+    /// Re-register a restored resting order with the special-order tracker
+    /// when it is a pegged or trailing-stop order.
+    ///
+    /// Mirrors the admission-time registration in
+    /// [`add_order`](Self::add_order) so restored pegged / trailing-stop
+    /// orders resume re-pricing after a snapshot restore (#194). Called once
+    /// per restored resting order from the deterministic price-then-sequence
+    /// rebuild pass in [`restore_from_snapshot`](Self::restore_from_snapshot),
+    /// so any tracker mutation stays replay-stable.
+    ///
+    /// The tracker holds only order ids — the trailing-stop watermark
+    /// (`last_reference_price`) and the pegged / stop price live in the
+    /// order data itself and survive the snapshot round-trip, so nothing is
+    /// re-initialized here; re-registering the id fully restores re-pricing.
+    #[cfg(feature = "special_orders")]
+    #[inline]
+    fn reregister_special_order(&self, order: &OrderType<()>) {
+        match order {
+            OrderType::PeggedOrder { id, .. } => {
+                self.special_order_tracker.register_pegged_order(*id);
+            }
+            OrderType::TrailingStop { id, .. } => {
+                self.special_order_tracker.register_trailing_stop(*id);
+            }
+            _ => {}
+        }
     }
 
     /// Creates an enriched snapshot with pre-calculated metrics

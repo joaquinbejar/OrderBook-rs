@@ -32,6 +32,23 @@
 //! - **Research**: Platform for studying market microstructure and order flow
 //! - **Educational**: Reference implementation for understanding modern exchange architecture
 //!
+//! ## What's New in Version 0.10.3
+//!
+//! ### v0.10.3 — special-order tracker survives snapshot restore (#194)
+//!
+//! - **Restored pegged / trailing-stop orders re-price again.**
+//!   `restore_from_snapshot` rebuilt the resting book but left the
+//!   `special_order_tracker` (the `special_orders` feature) freshly-initialized,
+//!   so a restored pegged or trailing-stop order was never re-registered and
+//!   never re-priced after a snapshot restore. The shared rebuild pass now
+//!   re-registers every restored resting special order in the same deterministic
+//!   price-then-insertion-sequence walk that repopulates `order_locations` /
+//!   `user_orders`. The tracker holds only order ids — the trailing-stop
+//!   watermark (`last_reference_price`) and the pegged / stop price live in the
+//!   order data and survive the round-trip, so no re-pricing state is lost.
+//! - No wire-format or public-API change: no new fields, no event-shape change,
+//!   and no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+//!
 //! ## What's New in Version 0.10.2
 //!
 //! ### v0.10.2 — deterministic `user_orders` rebuild on snapshot restore (#192)
