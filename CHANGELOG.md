@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] — 2026-07-11
+
+### Fixed
+
+- **Special-order tracker now survives snapshot restore (#194).**
+  `OrderBook::restore_from_snapshot` (the shared rebuild path behind
+  `restore_from_snapshot_package` and the JSON entry points) rebuilt the resting
+  bids / asks, `order_locations`, and `user_orders`, but left the
+  `special_order_tracker` (`special_orders` feature) freshly-initialized. A
+  restored resting pegged or trailing-stop order was therefore never
+  re-registered with the tracker, so `reprice_pegged_orders` /
+  `reprice_trailing_stops` never visited it and the order stayed stuck at its
+  snapshotted price. The rebuild now re-registers every restored resting special
+  order in the same fixed price-then-insertion-sequence walk that repopulates
+  `order_locations` / `user_orders` (a single pass, no extra traversal), so
+  re-pricing resumes after restore. The tracker holds only order ids; the
+  trailing-stop watermark (`last_reference_price`) and the pegged / stop price
+  are part of the order data and survive the snapshot round-trip, so no
+  re-pricing state is lost or re-initialized. `restore_from_snapshot` clears the
+  tracker before the rebuild so a restore is a full replacement. Non-special
+  orders and books with no special orders are unaffected.
+- No wire-format or public-API change: no new fields, no event-shape change, and
+  no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+
 ## [0.10.2] — 2026-07-11
 
 ### Fixed
