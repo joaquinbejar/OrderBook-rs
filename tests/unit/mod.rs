@@ -28,6 +28,7 @@ mod replay_coverage_tests;
 mod replay_determinism;
 #[cfg(feature = "special_orders")]
 mod repricing_determinism_tests;
+mod restore_user_orders_determinism_tests;
 mod risk_layer_tests;
 mod sequencer_types_tests;
 mod snapshot_restore_tests;

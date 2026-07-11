@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] — 2026-07-11
+
+### Fixed
+
+- **Deterministic `user_orders` rebuild on snapshot restore (#192).**
+  `OrderBook::restore_from_snapshot_package` (and `restore_from_snapshot`)
+  rebuilt the `user_orders` index by walking each level's order-unstable
+  `iter_orders()` view, whose `DashMap` hasher is seeded per instance. As a
+  result the per-user `Vec<Id>` was rebuilt in a different order on each fresh
+  book, and a `cancel_orders_by_user` issued after the restore returned a
+  `MassCancelResult::cancelled_order_ids` sequence that diverged across restores
+  of the same package. The rebuild now walks price levels in the same fixed
+  price-then-insertion-sequence order the mass-cancel and eviction sweeps use
+  (bids ascending price, then asks ascending price; within each level ascending
+  insertion sequence via `PriceLevel::snapshot_by_seq_into`), so the restored
+  `user_orders` index — and therefore any subsequent by-user cancel — is
+  byte-identical across every restore of the same package. This order reflects
+  the resting book at snapshot time, not the original admission history (a
+  snapshot cannot recover that), but it is now fully deterministic. Pure journal
+  replay was unaffected and is unchanged. `order_locations` is a map, so its
+  rebuild order never leaked into emitted output.
+- No wire-format or public-API change: no new fields, no event-shape change, and
+  no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+
 ## [0.10.1] — 2026-07-10
 
 ### Changed

@@ -3061,11 +3061,23 @@ where
             self.asks.insert(price, arc_level);
         }
 
-        // Rebuild order location and user_orders maps
+        // Rebuild the `order_locations` and `user_orders` indices in one fixed,
+        // replay-stable order: bids ascending price then asks ascending price
+        // (the `SkipMap`'s natural key order), and within each level ascending
+        // insertion sequence via `PriceLevel::snapshot_by_seq_into` — never the
+        // `DashMap`-backed `iter_orders` view, whose per-instance-hashed order
+        // would leak into the `user_orders` `Vec<Id>` layout and make a
+        // subsequent `cancel_orders_by_user` diverge across restores of the same
+        // package (#192). This is NOT the original admission history — a snapshot
+        // cannot recover that — but it is deterministic. `order_locations` is a
+        // map, so its rebuild order does not leak; only `user_orders`, whose
+        // per-user `Vec` order is consumed by `cancel_orders_by_user`, needs the
+        // fixed traversal. One scratch buffer is reused across levels.
+        let mut level_orders: Vec<Arc<OrderType<()>>> = Vec::new();
         for item in self.bids.iter() {
             let price = *item.key();
-            let level = item.value();
-            for order in level.iter_orders() {
+            item.value().snapshot_by_seq_into(&mut level_orders);
+            for order in &level_orders {
                 self.order_locations.insert(order.id(), (price, Side::Buy));
                 self.track_user_order(order.user_id(), order.id());
             }
@@ -3073,8 +3085,8 @@ where
 
         for item in self.asks.iter() {
             let price = *item.key();
-            let level = item.value();
-            for order in level.iter_orders() {
+            item.value().snapshot_by_seq_into(&mut level_orders);
+            for order in &level_orders {
                 self.order_locations.insert(order.id(), (price, Side::Sell));
                 self.track_user_order(order.user_id(), order.id());
             }

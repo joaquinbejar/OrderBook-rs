@@ -32,6 +32,24 @@
 //! - **Research**: Platform for studying market microstructure and order flow
 //! - **Educational**: Reference implementation for understanding modern exchange architecture
 //!
+//! ## What's New in Version 0.10.2
+//!
+//! ### v0.10.2 — deterministic `user_orders` rebuild on snapshot restore (#192)
+//!
+//! - **`cancel_orders_by_user` is now byte-identical across restores.**
+//!   `restore_from_snapshot_package` rebuilt the `user_orders` index from each
+//!   level's order-unstable `iter_orders()` view, so the per-user `Vec<Id>` came
+//!   back in a different order on every fresh book (the `DashMap` hasher is seeded
+//!   per instance) and a post-restore `cancel_orders_by_user` diverged across
+//!   restores of the same package. The rebuild now walks price levels in the same
+//!   fixed price-then-insertion-sequence order the mass-cancel sweeps use
+//!   (`PriceLevel::snapshot_by_seq_into`), so the restored index — and any
+//!   subsequent by-user cancel — is deterministic across every restore. The order
+//!   reflects the resting book at snapshot time, not the original admission
+//!   history (a snapshot cannot recover that). Pure journal replay was unaffected.
+//! - No wire-format or public-API change: no new fields, no event-shape change,
+//!   and no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+//!
 //! ## What's New in Version 0.10.1
 //!
 //! ### v0.10.1 — replay-stable mass-cancel result ordering (#190)
