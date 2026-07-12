@@ -418,12 +418,12 @@ mod integration_tests {
 }
 
 #[test]
-fn test_max_exact_notional_admission_bound_makes_try_calculate_fee_infallible() {
+fn test_max_guaranteed_exact_notional_admission_bound_makes_try_calculate_fee_infallible() {
     // Admission-style contract: any notional at or below the venue-level
     // bound produces exact fees on BOTH legs; anything above it errors on
     // the binding leg. This is the enforcement pattern issue #197 asks for.
     let schedule = FeeSchedule::new(-2, 5);
-    let bound = schedule.max_exact_notional();
+    let bound = schedule.max_guaranteed_exact_notional();
 
     for notional in [0u128, 1, 10_000_000, bound / 2, bound] {
         assert!(notional <= bound);
