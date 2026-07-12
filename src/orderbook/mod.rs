@@ -71,7 +71,7 @@ pub mod sequencer;
 pub use book::OrderBook;
 pub use clock::{Clock, MonotonicClock, StubClock};
 pub use error::{ManagerError, OrderBookError};
-pub use fees::FeeSchedule;
+pub use fees::{FeeOverflow, FeeSchedule};
 pub use implied_volatility::{
     BlackScholes, IVConfig, IVError, IVParams, IVQuality, IVResult, OptionType, PriceSource,
     SolverConfig,
