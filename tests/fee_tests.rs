@@ -416,3 +416,33 @@ mod integration_tests {
         assert_eq!(tr.total_fees(), 21);
     }
 }
+
+#[test]
+fn test_max_exact_notional_admission_bound_makes_try_calculate_fee_infallible() {
+    // Admission-style contract: any notional at or below the venue-level
+    // bound produces exact fees on BOTH legs; anything above it errors on
+    // the binding leg. This is the enforcement pattern issue #197 asks for.
+    let schedule = FeeSchedule::new(-2, 5);
+    let bound = schedule.max_exact_notional();
+
+    for notional in [0u128, 1, 10_000_000, bound / 2, bound] {
+        assert!(notional <= bound);
+        let maker = schedule.try_calculate_fee(notional, true);
+        let taker = schedule.try_calculate_fee(notional, false);
+        assert!(maker.is_ok(), "maker leg must be exact at {notional}");
+        assert!(taker.is_ok(), "taker leg must be exact at {notional}");
+        // The exact values agree with the saturating path below the bound.
+        assert_eq!(maker, Ok(schedule.calculate_fee(notional, true)));
+        assert_eq!(taker, Ok(schedule.calculate_fee(notional, false)));
+    }
+
+    // Above the bound at least one leg (here the 5-bps taker leg, which set
+    // the minimum) must refuse to produce a clamped fee.
+    let above = bound + 1;
+    assert!(schedule.try_calculate_fee(above, false).is_err());
+    // The maker leg (|-2| bps) has a larger per-leg bound and is still exact.
+    assert!(schedule.try_calculate_fee(above, true).is_ok());
+    // Far above every per-leg bound, both legs err.
+    assert!(schedule.try_calculate_fee(u128::MAX, true).is_err());
+    assert!(schedule.try_calculate_fee(u128::MAX, false).is_err());
+}
