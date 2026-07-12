@@ -46,6 +46,29 @@ This order book engine is built with the following design principles:
 - **Research**: Platform for studying market microstructure and order flow
 - **Educational**: Reference implementation for understanding modern exchange architecture
 
+### What's New in Version 0.10.4
+
+#### v0.10.4 — exact-fee API: `try_calculate_fee` + published exact-input bound (#197)
+
+- **`FeeSchedule::try_calculate_fee(notional, is_maker) -> Result<i128, FeeOverflow>`.**
+  Fallible variant of `calculate_fee` with identical rounding
+  (truncation toward zero, sign applied after the unsigned-domain
+  magnitude) that returns the new `FeeOverflow` error instead of
+  saturating when `notional × |bps|` overflows `u128`. An `Ok` value is
+  always the mathematically exact fee, so journaled / replayable venues
+  can reject an order rather than record a clamped fee.
+- **Published exact-input bound.** `FeeSchedule::max_exact_notional_for_bps(bps)`
+  (`const fn`) returns the largest notional whose fee at that rate is
+  exact (`u128::MAX / |bps|`; `u128::MAX` for a zero rate), and
+  `FeeSchedule::max_exact_notional()` takes the minimum over the maker
+  and taker legs — a single venue-level admission bound that makes the
+  saturating branch of `calculate_fee` provably unreachable.
+- `calculate_fee` behavior is unchanged (bit-identical, including the
+  saturated clamp of magnitude `u128::MAX / 10_000`); its docs now state
+  the exactness condition. `FeeOverflow` is re-exported at the crate
+  root. No wire-format change, no
+  `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+
 ### What's New in Version 0.10.3
 
 #### v0.10.3 — special-order tracker survives snapshot restore (#194)

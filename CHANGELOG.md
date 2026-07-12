@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] — 2026-07-12
+
+### Added
+
+- **Exact-fee API: `FeeSchedule::try_calculate_fee` + published exact-input
+  bound (#197).** `calculate_fee` deliberately saturates when
+  `notional × |bps|` overflows `u128`, and consumers that must guarantee
+  exact integer fees (journaled, replayable venues) could not distinguish a
+  saturated fee from an exact one, nor validate inputs against a documented
+  bound. `try_calculate_fee(notional, is_maker) -> Result<i128, FeeOverflow>`
+  performs the identical computation (same truncation-toward-zero rounding,
+  sign applied after the unsigned-domain magnitude) but returns the new
+  `FeeOverflow` error — carrying the offending `notional`, the signed `bps`,
+  and the `max_exact_notional` for that rate — instead of clamping, so an
+  `Ok` is always mathematically exact. The bound itself is published as
+  `FeeSchedule::max_exact_notional_for_bps(bps)` (`const fn`,
+  `u128::MAX / |bps|`; `u128::MAX` for a zero rate) and
+  `FeeSchedule::max_exact_notional()` (minimum over the maker and taker
+  legs), so venues can enforce it at admission time and make the saturating
+  branch provably unreachable. `FeeOverflow` is re-exported at the crate
+  root alongside `FeeSchedule`.
+- `calculate_fee` behavior is unchanged (bit-identical, including the
+  saturated clamp of magnitude `u128::MAX / 10_000`, signed per `bps`); it
+  now delegates to `try_calculate_fee` and its docs state the exactness
+  condition. No wire-format or snapshot change, and no
+  `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+
 ## [0.10.3] — 2026-07-11
 
 ### Fixed
