@@ -46,6 +46,33 @@ This order book engine is built with the following design principles:
 - **Research**: Platform for studying market microstructure and order flow
 - **Educational**: Reference implementation for understanding modern exchange architecture
 
+### What's New in Version 0.10.5
+
+#### v0.10.5 — injectable trade-ID namespace (#199)
+
+- **`OrderBook::set_trade_id_namespace(&mut self, namespace: Uuid)`.**
+  Every constructor used to mint the trade-ID namespace internally with
+  `Uuid::new_v4()`, so trade IDs differed between a live run and its
+  replay even with an injected `Clock` and an identical command stream —
+  the namespace was the only entropy left in the trade-ID stream
+  (`pricelevel::UuidGenerator` is UUID v5 over namespace + counter).
+  The new setter, symmetric with `set_clock`, replaces the generator
+  (counter restarts at 0) and composes with every existing constructor.
+  Call it before any orders are submitted.
+- **`OrderBook::with_clock_and_namespace(symbol, clock, namespace)`.**
+  Convenience constructor for the fully deterministic setup (injected
+  clock + injected namespace): the same command stream then produces
+  byte-identical trade IDs across live/replay. A deterministic
+  namespace choice such as UUID v5 of the symbol under a venue root
+  gives every book a stable, distinct stream.
+- Default constructors are unchanged: without injection each book still
+  gets a fresh random namespace. No wire-format or snapshot change, no
+  `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump. Note the guarantee currently
+  applies to books you construct yourself; the sequencer's
+  `ReplayEngine` entry points still build their books with a random
+  namespace — wiring the seam into `ReplayBookConfig` is tracked in
+  issue #200.
+
 ### What's New in Version 0.10.4
 
 #### v0.10.4 — exact-fee API: `try_calculate_fee` + published guaranteed-exact bound (#197)
