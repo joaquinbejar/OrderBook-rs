@@ -1539,4 +1539,129 @@ mod test_book_specific {
         assert_eq!(book.total_quantity_at_price(99, Side::Buy), Some(20));
         assert_eq!(book.order_count_at_price(99, Side::Buy), Some(1));
     }
+
+    // --- injectable trade-ID namespace (#199) -------------------------------
+
+    /// Drives a fixed command stream (three seed-then-sweep rounds) and
+    /// returns the emitted trade IDs in order. Order IDs are random on
+    /// purpose — trade IDs must derive only from the book's namespace +
+    /// counter, never from the order IDs.
+    fn run_fixed_stream_trade_ids(book: &OrderBook<()>) -> Vec<String> {
+        let mut trade_ids = Vec::new();
+        for _ in 0..3 {
+            let resting = create_order_id();
+            book.add_limit_order(resting, 1000, 10, Side::Sell, TimeInForce::Gtc, None)
+                .expect("seed resting sell");
+            let taker = create_order_id();
+            let result = book
+                .match_market_order(taker, 10, Side::Buy)
+                .expect("market buy fills");
+            for tx in result.trades().as_vec() {
+                trade_ids.push(tx.trade_id().to_string());
+            }
+        }
+        trade_ids
+    }
+
+    fn deterministic_book(symbol: &str, namespace: uuid::Uuid) -> OrderBook<()> {
+        use crate::orderbook::clock::{Clock, StubClock};
+        use std::sync::Arc;
+        OrderBook::with_clock_and_namespace(
+            symbol,
+            Arc::new(StubClock::new()) as Arc<dyn Clock>,
+            namespace,
+        )
+    }
+
+    #[test]
+    fn test_with_clock_and_namespace_same_namespace_same_stream_identical_trade_ids() {
+        let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"VENUE/TEST");
+        let live = deterministic_book("TEST", namespace);
+        let replay = deterministic_book("TEST", namespace);
+
+        let live_ids = run_fixed_stream_trade_ids(&live);
+        let replay_ids = run_fixed_stream_trade_ids(&replay);
+
+        assert!(!live_ids.is_empty(), "stream must emit trades");
+        assert_eq!(
+            live_ids, replay_ids,
+            "same namespace + same command stream must yield identical trade IDs"
+        );
+    }
+
+    #[test]
+    fn test_with_clock_and_namespace_different_namespaces_diverging_trade_ids() {
+        let ns_a = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"VENUE/A");
+        let ns_b = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"VENUE/B");
+
+        let ids_a = run_fixed_stream_trade_ids(&deterministic_book("TEST", ns_a));
+        let ids_b = run_fixed_stream_trade_ids(&deterministic_book("TEST", ns_b));
+
+        assert_ne!(
+            ids_a, ids_b,
+            "different namespaces must yield different trade-ID streams"
+        );
+    }
+
+    #[test]
+    fn test_set_trade_id_namespace_equals_constructor_injection() {
+        use crate::orderbook::clock::{Clock, StubClock};
+        use std::sync::Arc;
+
+        let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"VENUE/TEST");
+        let constructed = deterministic_book("TEST", namespace);
+
+        let mut via_setter: OrderBook<()> =
+            OrderBook::with_clock("TEST", Arc::new(StubClock::new()) as Arc<dyn Clock>);
+        via_setter.set_trade_id_namespace(namespace);
+
+        assert_eq!(
+            run_fixed_stream_trade_ids(&constructed),
+            run_fixed_stream_trade_ids(&via_setter),
+            "with_clock_and_namespace must equal with_clock + set_trade_id_namespace"
+        );
+    }
+
+    #[test]
+    fn test_set_trade_id_namespace_after_trades_restarts_counter() {
+        let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"VENUE/TEST");
+
+        // Fresh book with the namespace: capture the first trade ID.
+        let fresh = deterministic_book("TEST", namespace);
+        let fresh_ids = run_fixed_stream_trade_ids(&fresh);
+        let Some(first_fresh_id) = fresh_ids.first() else {
+            panic!("fresh stream must emit trades");
+        };
+
+        // A book that already traded, then has the namespace injected:
+        // the generator counter restarts at 0, so its next trade ID is the
+        // namespace's first ID again — the documented reason the setter
+        // must be called before any orders are submitted.
+        let mut reused = deterministic_book("TEST", uuid::Uuid::NAMESPACE_DNS);
+        let _ = run_fixed_stream_trade_ids(&reused);
+        reused.set_trade_id_namespace(namespace);
+        let post_reset_ids = run_fixed_stream_trade_ids(&reused);
+
+        assert_eq!(
+            post_reset_ids.first(),
+            Some(first_fresh_id),
+            "re-injecting a namespace must restart the ID counter at 0"
+        );
+    }
+
+    #[test]
+    fn test_default_constructors_keep_random_distinct_namespaces() {
+        // OrderBook::new must keep minting a random namespace per book:
+        // two default books over the same stream diverge in trade IDs.
+        let book_a: OrderBook<()> = OrderBook::new("TEST");
+        let book_b: OrderBook<()> = OrderBook::new("TEST");
+
+        let ids_a = run_fixed_stream_trade_ids(&book_a);
+        let ids_b = run_fixed_stream_trade_ids(&book_b);
+
+        assert_ne!(
+            ids_a, ids_b,
+            "default construction must keep per-book random namespaces"
+        );
+    }
 }

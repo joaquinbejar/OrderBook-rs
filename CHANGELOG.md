@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] — 2026-07-13
+
+### Added
+
+- **Injectable trade-ID namespace (#199).** Every `OrderBook` constructor
+  minted its trade/transaction-ID namespace internally with
+  `Uuid::new_v4()`, so trade IDs differed between a live run and its replay
+  even when the command stream, the injected `Clock`, and the matching were
+  identical — the namespace was the only entropy left in the trade-ID
+  stream (`pricelevel::UuidGenerator` derives UUID v5 from namespace +
+  atomic counter). `OrderBook::set_trade_id_namespace(&mut self, namespace)`
+  is a pre-publication setter symmetric with `set_clock`: it replaces the
+  generator (the counter restarts at 0, so call it before any orders are
+  submitted) and composes with every existing constructor.
+  `OrderBook::with_clock_and_namespace(symbol, clock, namespace)` covers the
+  common deterministic-venue setup in one call; a deterministically chosen
+  namespace (e.g. UUID v5 of the symbol under a venue root) then yields
+  byte-identical trade IDs across live/replay. Default constructors are
+  unchanged (fresh random namespace per book). No wire-format or snapshot
+  change, and no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+
 ## [0.10.4] — 2026-07-12
 
 ### Added

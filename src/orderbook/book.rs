@@ -454,6 +454,34 @@ where
         }
     }
 
+    /// Create a new order book with a caller-provided [`Clock`] and
+    /// trade-ID namespace.
+    ///
+    /// Convenience constructor for the fully deterministic setup: the
+    /// injected clock pins timestamps and the injected namespace pins the
+    /// trade-ID stream (see [`Self::set_trade_id_namespace`]), so a live
+    /// run and its replay over the same command stream produce
+    /// byte-identical trades.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use orderbook_rs::OrderBook;
+    /// use orderbook_rs::prelude::{Clock, StubClock};
+    /// use uuid::Uuid;
+    ///
+    /// let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"VENUE/AAPL");
+    /// let clock = Arc::new(StubClock::new()) as Arc<dyn Clock>;
+    /// let book: OrderBook<()> = OrderBook::with_clock_and_namespace("AAPL", clock, namespace);
+    /// assert_eq!(book.symbol(), "AAPL");
+    /// ```
+    pub fn with_clock_and_namespace(symbol: &str, clock: Arc<dyn Clock>, namespace: Uuid) -> Self {
+        let mut book = Self::with_clock(symbol, clock);
+        book.set_trade_id_namespace(namespace);
+        book
+    }
+
     /// Replace the clock used by this book.
     ///
     /// This takes `&mut self` and is intended for cold configuration
@@ -461,6 +489,28 @@ where
     /// construction via [`Self::with_clock`].
     pub fn set_clock(&mut self, clock: Arc<dyn Clock>) {
         self.clock = clock;
+    }
+
+    /// Replace the trade/transaction-ID namespace used by this book.
+    ///
+    /// Trade IDs are UUID v5 values derived from this namespace plus an
+    /// atomic counter ([`pricelevel::UuidGenerator`]), so the namespace is
+    /// the only entropy in the trade-ID stream: with an injected namespace
+    /// (and an injected [`Clock`]) the same command stream produces
+    /// byte-identical trade IDs across a live run and its replay. A
+    /// deterministic choice such as UUID v5 of the symbol under a venue
+    /// root namespace gives every book a stable, distinct stream.
+    ///
+    /// Call this **before any orders are submitted**: replacing the
+    /// generator restarts its counter at 0, so a book that has already
+    /// traded would re-issue the earliest IDs of the new namespace
+    /// (duplicate trade IDs from a consumer's perspective). Like
+    /// [`Self::set_clock`], this takes `&mut self` and is intended for
+    /// cold configuration paths right after construction; it composes
+    /// with every constructor without multiplying variants — or use
+    /// [`Self::with_clock_and_namespace`] directly.
+    pub fn set_trade_id_namespace(&mut self, namespace: Uuid) {
+        self.transaction_id_generator = UuidGenerator::new(namespace);
     }
 
     /// Access the currently-installed clock.
