@@ -428,3 +428,169 @@ fn full_config_injection_preserves_lot_size_parity() {
         "full config injection must preserve lot_size parity"
     );
 }
+
+// ─── #200: trade-ID namespace through ReplayBookConfig ───────────────────────
+
+/// Sweeps a fresh crossing pair through `book` and returns the emitted trade
+/// ID. Trade IDs are UUID v5 of (namespace, counter), so equal probe IDs on
+/// two books prove equal namespace AND equal counter position — which proves
+/// every trade ID the two books emitted before the probe was also identical.
+fn probe_next_trade_id(book: &OrderBook<()>) -> String {
+    let resting = Id::new_uuid();
+    book.add_limit_order(resting, 1_000, 10, Side::Buy, TimeInForce::Gtc, None)
+        .expect("probe resting bid");
+    let taker = Id::new_uuid();
+    let result = book
+        .match_market_order(taker, 10, Side::Sell)
+        .expect("probe market sell");
+    let trades = result.trades();
+    let tx = trades.as_vec().first().cloned().expect("probe trade");
+    tx.trade_id().to_string()
+}
+
+/// #200 end-to-end contract: a journal produced by a live book built with
+/// `with_clock_and_namespace` replays — via `replay_from_with_clock_and_config`
+/// with the same namespace — into a book whose structure matches
+/// (`snapshots_match`) and whose trade-ID stream is byte-identical to the live
+/// one (probe equality).
+#[test]
+fn test_replay_with_namespace_config_reproduces_live_trade_ids() {
+    let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"VENUE/TEST");
+    let journal: InMemoryJournal<()> = InMemoryJournal::new();
+
+    // Live book: injected clock + injected namespace (#199).
+    let live = OrderBook::<()>::with_clock_and_namespace("TEST", stub_clock(), namespace);
+
+    // Two resting asks, then a market buy sweeping across both levels —
+    // two transactions, so the trade-ID counter advances past 0.
+    let mut seq = 0u64;
+    for price in [100u128, 101] {
+        let id = Id::new_uuid();
+        live.add_limit_order(id, price, 10, Side::Sell, TimeInForce::Gtc, None)
+            .expect("live maker");
+        assert!(
+            journal
+                .append(&make_add_event(
+                    seq,
+                    id,
+                    price,
+                    10,
+                    Side::Sell,
+                    Hash32::zero()
+                ))
+                .is_ok()
+        );
+        seq += 1;
+    }
+    let taker_id = Id::new_uuid();
+    let live_result = live
+        .submit_market_order(taker_id, 20, Side::Buy)
+        .expect("live taker");
+    let live_trades = live_result.trades();
+    assert_eq!(live_trades.as_vec().len(), 2, "live sweep trades twice");
+    let ev = SequencerEvent::<()> {
+        sequence_num: seq,
+        timestamp_ns: 0,
+        command: SequencerCommand::MarketOrder {
+            id: taker_id,
+            quantity: 20,
+            side: Side::Buy,
+        },
+        result: SequencerResult::TradeExecuted {
+            trade_result: TradeResult::new(
+                "TEST".to_string(),
+                MatchResult::new(taker_id, Quantity::new(0)),
+            ),
+        },
+    };
+    assert!(journal.append(&ev).is_ok());
+
+    // Replay with the live namespace carried in the config.
+    let config = ReplayBookConfig::default().with_trade_id_namespace(namespace);
+    let (replayed, last_seq) = ReplayEngine::<()>::replay_from_with_clock_and_config(
+        &journal,
+        0,
+        "TEST",
+        stub_clock(),
+        &config,
+    )
+    .expect("namespace-config replay");
+    assert_eq!(last_seq, seq);
+
+    // Structure matches...
+    let live_snap = live.create_snapshot(usize::MAX);
+    let replayed_snap = replayed.create_snapshot(usize::MAX);
+    assert!(
+        snapshots_match(&live_snap, &replayed_snap),
+        "replayed structure must match live"
+    );
+
+    // ...and so does the trade-ID stream (see probe_next_trade_id).
+    assert_eq!(
+        probe_next_trade_id(&live),
+        probe_next_trade_id(&replayed),
+        "replayed trade-ID stream must be byte-identical to the live one"
+    );
+}
+
+/// #200: two replays of the same journal with the same namespace-carrying
+/// config land on identical trade-ID streams (repeated-replay identity).
+#[test]
+fn test_repeated_replay_with_namespace_config_is_identity() {
+    let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"VENUE/REPEAT");
+    let journal: InMemoryJournal<()> = InMemoryJournal::new();
+    let maker = Id::new_uuid();
+    assert!(
+        journal
+            .append(&make_add_event(
+                0,
+                maker,
+                100,
+                10,
+                Side::Sell,
+                Hash32::zero()
+            ))
+            .is_ok()
+    );
+    let taker = Id::new_uuid();
+    let ev = SequencerEvent::<()> {
+        sequence_num: 1,
+        timestamp_ns: 0,
+        command: SequencerCommand::MarketOrder {
+            id: taker,
+            quantity: 10,
+            side: Side::Buy,
+        },
+        result: SequencerResult::TradeExecuted {
+            trade_result: TradeResult::new(
+                "TEST".to_string(),
+                MatchResult::new(taker, Quantity::new(0)),
+            ),
+        },
+    };
+    assert!(journal.append(&ev).is_ok());
+
+    let config = ReplayBookConfig::default().with_trade_id_namespace(namespace);
+    let (first, _) = ReplayEngine::<()>::replay_from_with_clock_and_config(
+        &journal,
+        0,
+        "TEST",
+        stub_clock(),
+        &config,
+    )
+    .expect("first replay");
+    let (second, _) = ReplayEngine::<()>::replay_from_with_clock_and_config(
+        &journal,
+        0,
+        "TEST",
+        stub_clock(),
+        &config,
+    )
+    .expect("second replay");
+
+    assert_eq!(
+        probe_next_trade_id(&first),
+        probe_next_trade_id(&second),
+        "repeated replay with the same namespace config must be an identity"
+    );
+}
