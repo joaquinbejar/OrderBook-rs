@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thiserror::Error;
+use uuid::Uuid;
 
 /// Book configuration injected into a fresh [`OrderBook`] before replay so
 /// that a journal produced by a **non-default-config** book reconstructs to
@@ -40,6 +41,16 @@ use thiserror::Error;
 /// The configuration is supplied by the **caller** — replay does not read it
 /// from the journal, so the on-disk journal format is unchanged and
 /// `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` is not bumped.
+///
+/// Beyond the structural fields, the config can also carry the source book's
+/// **trade-ID namespace** (`trade_id_namespace`, see
+/// [`OrderBook::set_trade_id_namespace`]): with it, a **full** `*_with_config`
+/// replay (`from_sequence == 0`) under an injected [`Clock`] reproduces the
+/// live run's trade-ID stream byte-identically, not just its structure.
+/// Suffix replays with a namespace are rejected
+/// ([`ReplayError::NamespaceRequiresFullReplay`]) because the restarted ID
+/// counter would mint wrong or duplicate IDs. Without a namespace the fresh
+/// book keeps a random one and replayed trade IDs differ from the live ones.
 ///
 /// `Default` yields the all-defaults configuration, equivalent to the plain
 /// replay entry points.
@@ -69,14 +80,34 @@ pub struct ReplayBookConfig {
     /// Maximum order size the source book used, or `None` for no maximum.
     /// Applied via [`OrderBook::set_max_order_size`] only when `Some`.
     pub max_order_size: Option<u64>,
+
+    /// Trade-ID namespace the source book used, or `None` to keep the fresh
+    /// book's random namespace. Applied via
+    /// [`OrderBook::set_trade_id_namespace`] only when `Some`, before any
+    /// journal events are replayed (the fresh book has no orders, so the
+    /// generator's counter-restart contract is satisfied by construction).
+    /// Inject the live book's namespace (#199) to make the replayed trade-ID
+    /// stream byte-identical to the original.
+    ///
+    /// Because applying a namespace restarts the trade-ID counter at 0, a
+    /// namespace-carrying config is only valid for a **full replay**: the
+    /// `*_with_config` entry points reject `from_sequence != 0` with
+    /// [`ReplayError::NamespaceRequiresFullReplay`] rather than minting
+    /// wrong or duplicate IDs for a suffix. The journal must also cover the
+    /// trade-ID stream origin — a rotated segment whose earlier segments
+    /// already produced trades under this namespace reissues their IDs,
+    /// which the engine cannot detect.
+    pub trade_id_namespace: Option<Uuid>,
 }
 
 impl ReplayBookConfig {
-    /// Creates a [`ReplayBookConfig`] from its six fields.
+    /// Creates a [`ReplayBookConfig`] from its six structural fields.
     ///
     /// Equivalent to building the struct with public-field syntax; provided so
     /// callers can construct the carrier without naming every field at the call
-    /// site. Use [`ReplayBookConfig::default`] for the all-defaults case.
+    /// site. Use [`ReplayBookConfig::default`] for the all-defaults case. The
+    /// `trade_id_namespace` field defaults to `None` — chain
+    /// [`Self::with_trade_id_namespace`] to set it.
     ///
     /// # Arguments
     ///
@@ -102,7 +133,26 @@ impl ReplayBookConfig {
             lot_size,
             min_order_size,
             max_order_size,
+            trade_id_namespace: None,
         }
+    }
+
+    /// Returns this configuration with the trade-ID namespace set.
+    ///
+    /// Builder-style companion to [`Self::new`] (which leaves the namespace
+    /// at `None`): carry the live book's namespace (#199) so a **full**
+    /// `*_with_config` replay (`from_sequence == 0`) under an injected
+    /// [`Clock`] reproduces the live trade-ID stream byte-identically.
+    /// Suffix replays with a namespace are rejected — see
+    /// [`ReplayError::NamespaceRequiresFullReplay`].
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace` — trade-ID namespace the source book used
+    #[must_use = "with_trade_id_namespace returns the updated config; it does not mutate in place"]
+    pub fn with_trade_id_namespace(mut self, namespace: Uuid) -> Self {
+        self.trade_id_namespace = Some(namespace);
+        self
     }
 
     /// Applies this configuration to a freshly-constructed `book` in place,
@@ -113,7 +163,10 @@ impl ReplayBookConfig {
     /// its default, which is a no-op on a fresh book). `min_order_size` and
     /// `max_order_size` are applied only when `Some`, mirroring the existing
     /// `set_min_order_size` / `set_max_order_size` setters which take a bare
-    /// value rather than an `Option`.
+    /// value rather than an `Option`. `trade_id_namespace` is applied only
+    /// when `Some` — the book is fresh (no orders yet), so replacing the
+    /// generator here honors the counter-restart contract of
+    /// [`OrderBook::set_trade_id_namespace`].
     fn apply_to<T>(&self, book: &mut OrderBook<T>)
     where
         T: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + Default + 'static,
@@ -127,6 +180,9 @@ impl ReplayBookConfig {
         }
         if let Some(max) = self.max_order_size {
             book.set_max_order_size(max);
+        }
+        if let Some(namespace) = self.trade_id_namespace {
+            book.set_trade_id_namespace(namespace);
         }
     }
 }
@@ -177,6 +233,24 @@ pub enum ReplayError {
         source: OrderBookError,
     },
 
+    /// A trade-ID namespace was injected for a suffix replay.
+    ///
+    /// [`OrderBook::set_trade_id_namespace`] restarts the UUID v5 counter at
+    /// 0, so the byte-identical trade-ID guarantee only holds when replay
+    /// starts at the origin of the trade-ID stream. A namespace-carrying
+    /// [`ReplayBookConfig`] combined with a non-zero `from_sequence` would
+    /// mint IDs from counter 0 — wrong for the suffix and duplicates of IDs
+    /// already emitted live under that namespace — so the `*_with_config`
+    /// entry points reject the combination instead. Replay from sequence 0,
+    /// or drop the namespace from the config for suffix replays.
+    #[error(
+        "trade-ID namespace injection requires a full replay: from_sequence {from_sequence} != 0 would restart the ID counter and mint wrong or duplicate trade IDs"
+    )]
+    NamespaceRequiresFullReplay {
+        /// The non-zero starting sequence that was requested.
+        from_sequence: u64,
+    },
+
     /// The replayed state does not match the expected snapshot.
     #[error("snapshot mismatch: replayed state diverges from expected snapshot")]
     SnapshotMismatch,
@@ -218,7 +292,10 @@ where
     /// [`Self::replay_from_with_config`] (or
     /// [`Self::replay_from_with_clock_and_config`]) with the matching
     /// [`ReplayBookConfig`], or the reconstructed state will diverge from the
-    /// original (and `snapshots_match` will report a mismatch).
+    /// original (and `snapshots_match` will report a mismatch). Likewise,
+    /// the fresh book gets a random trade-ID namespace, so replayed trade
+    /// IDs differ from the live ones unless a namespace-carrying config is
+    /// used.
     ///
     /// # Arguments
     ///
@@ -308,7 +385,9 @@ where
     ///
     /// # Errors
     ///
-    /// Same as [`replay_from`](Self::replay_from).
+    /// Same as [`replay_from`](Self::replay_from), plus
+    /// [`ReplayError::NamespaceRequiresFullReplay`] when `config` carries a
+    /// `trade_id_namespace` and `from_sequence != 0`.
     #[must_use = "replay result carries the reconstructed book and the last applied sequence"]
     pub fn replay_from_with_config(
         journal: &impl Journal<T>,
@@ -327,6 +406,8 @@ where
                 last_sequence: last_seq,
             });
         }
+
+        Self::check_namespace_full_replay(from_sequence, config)?;
 
         let mut book = OrderBook::new(symbol);
         config.apply_to(&mut book);
@@ -351,7 +432,10 @@ where
     /// configuration at its defaults** and is only valid for a default-config
     /// source book. To recover a book that used tick / lot / STP / fees
     /// deterministically, use [`Self::replay_from_with_clock_and_config`] with
-    /// the matching [`ReplayBookConfig`].
+    /// the matching [`ReplayBookConfig`]. The fresh book also gets a random
+    /// trade-ID namespace: the injected clock makes timestamps byte-identical,
+    /// but replayed trade IDs differ from the live ones unless the config
+    /// path carries the live namespace.
     ///
     /// # Arguments
     ///
@@ -427,8 +511,13 @@ where
     /// reproduces engine-assigned timestamps and the [`ReplayBookConfig`]
     /// reproduces the structural configuration (fees, STP, tick / lot / min /
     /// max order size), so the reconstructed book passes `snapshots_match`
-    /// against the original. The configuration is supplied by the caller — it
-    /// is not read from the journal, so the journal format is unchanged.
+    /// against the original. When the config also carries the live book's
+    /// `trade_id_namespace` (#199), a **full** replay (`from_sequence == 0`)
+    /// reproduces the live trade-ID stream byte-identically as well; suffix
+    /// replays with a namespace are rejected
+    /// ([`ReplayError::NamespaceRequiresFullReplay`]). The configuration is
+    /// supplied by the caller — it is not read from the journal, so the
+    /// journal format is unchanged.
     ///
     /// # Arguments
     ///
@@ -440,7 +529,9 @@ where
     ///
     /// # Errors
     ///
-    /// Same as [`replay_from`](Self::replay_from).
+    /// Same as [`replay_from`](Self::replay_from), plus
+    /// [`ReplayError::NamespaceRequiresFullReplay`] when `config` carries a
+    /// `trade_id_namespace` and `from_sequence != 0`.
     #[must_use = "replay result carries the reconstructed book and the last applied sequence"]
     pub fn replay_from_with_clock_and_config(
         journal: &impl Journal<T>,
@@ -461,10 +552,32 @@ where
             });
         }
 
+        Self::check_namespace_full_replay(from_sequence, config)?;
+
         let mut book = OrderBook::with_clock(symbol, clock);
         config.apply_to(&mut book);
         let last_applied_seq = Self::replay_into(&book, journal, from_sequence, |_, _| {})?;
         Ok((book, last_applied_seq))
+    }
+
+    /// Rejects a namespace-carrying config on a suffix replay.
+    ///
+    /// Applying a namespace restarts the trade-ID counter at 0, so the
+    /// byte-identical guarantee only holds when replay starts at the origin
+    /// of the trade-ID stream. `from_sequence == 0` additionally forces the
+    /// journal itself to start at sequence 0 (gap detection rejects a
+    /// journal whose first event is later), so the shipped API cannot
+    /// silently mint wrong or duplicate IDs. See
+    /// [`ReplayError::NamespaceRequiresFullReplay`].
+    #[inline]
+    fn check_namespace_full_replay(
+        from_sequence: u64,
+        config: &ReplayBookConfig,
+    ) -> Result<(), ReplayError> {
+        if from_sequence != 0 && config.trade_id_namespace.is_some() {
+            return Err(ReplayError::NamespaceRequiresFullReplay { from_sequence });
+        }
+        Ok(())
     }
 
     /// Shared replay loop. Applies events from `journal` starting at
@@ -1211,5 +1324,215 @@ mod tests {
         // Sanity: the expired levels are gone, the survivors remain.
         assert_eq!(replayed_snap.bids.len(), 2, "99 and 98 bids survive");
         assert!(replayed_snap.asks.is_empty(), "the only ask expired");
+    }
+
+    // --- trade-ID namespace through replay (#200) ---------------------------
+
+    /// Seeds a resting sell then sweeps it with a market buy, returning the
+    /// emitted trade ID. Trade IDs are UUID v5 of (namespace, counter), so an
+    /// equal probe ID across two books proves both the namespace and the
+    /// counter position are equal — which in turn proves every earlier trade
+    /// ID the two books emitted was identical.
+    fn probe_next_trade_id(book: &OrderBook<()>) -> String {
+        let resting = Id::new_uuid();
+        book.add_limit_order(resting, 1_000, 10, Side::Buy, TimeInForce::Gtc, None)
+            .expect("probe resting bid");
+        let taker = Id::new_uuid();
+        let result = book
+            .match_market_order(taker, 10, Side::Sell)
+            .expect("probe market sell");
+        let trades = result.trades();
+        let tx = trades.as_vec().first().cloned().expect("probe trade");
+        tx.trade_id().to_string()
+    }
+
+    /// Journal with one resting sell and a market buy that trades against it,
+    /// so a replay advances the reconstructed book's trade-ID counter.
+    fn trading_journal(maker_id: Id, taker_id: Id) -> InMemoryJournal<()> {
+        let journal: InMemoryJournal<()> = InMemoryJournal::new();
+        assert!(
+            journal
+                .append(&make_add_event(0, maker_id, 100, 10, Side::Sell))
+                .is_ok()
+        );
+        let ev = SequencerEvent::<()> {
+            sequence_num: 1,
+            timestamp_ns: 0,
+            command: SequencerCommand::MarketOrder {
+                id: taker_id,
+                quantity: 10,
+                side: Side::Buy,
+            },
+            result: SequencerResult::TradeExecuted {
+                trade_result: TradeResult::new(
+                    "TEST".to_string(),
+                    MatchResult::new(taker_id, Quantity::new(0)),
+                ),
+            },
+        };
+        assert!(journal.append(&ev).is_ok());
+        journal
+    }
+
+    /// #200: `ReplayBookConfig::default` leaves the namespace unset and the
+    /// builder sets it without disturbing the structural fields.
+    #[test]
+    fn test_replay_book_config_trade_id_namespace_builder_and_default() {
+        assert_eq!(ReplayBookConfig::default().trade_id_namespace, None);
+
+        let ns = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"VENUE/TEST");
+        let fee = FeeSchedule::new(-2, 5);
+        let config = ReplayBookConfig::new(Some(fee), STPMode::None, Some(10), None, None, None)
+            .with_trade_id_namespace(ns);
+        assert_eq!(config.trade_id_namespace, Some(ns));
+        assert_eq!(config.fee_schedule, Some(fee));
+        assert_eq!(config.tick_size, Some(10));
+    }
+
+    /// #200: a namespace-carrying config makes the replayed trade-ID stream
+    /// byte-identical to a reference book that used the same namespace and
+    /// command stream (probe equality — see `probe_next_trade_id`).
+    #[test]
+    fn test_replay_with_config_namespace_reproduces_trade_id_stream() {
+        let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"VENUE/TEST");
+        let maker_id = Id::new_uuid();
+        let taker_id = Id::new_uuid();
+        let journal = trading_journal(maker_id, taker_id);
+
+        // Reference "live" book: same namespace, same command stream.
+        let reference = OrderBook::<()>::with_clock_and_namespace(
+            "TEST",
+            Arc::new(StubClock::new()) as Arc<dyn Clock>,
+            namespace,
+        );
+        reference
+            .add_limit_order(maker_id, 100, 10, Side::Sell, TimeInForce::Gtc, None)
+            .expect("reference maker");
+        let live_trades = reference
+            .submit_market_order(taker_id, 10, Side::Buy)
+            .expect("reference taker");
+        assert!(
+            !live_trades.trades().as_vec().is_empty(),
+            "reference stream must trade"
+        );
+
+        let config = ReplayBookConfig::default().with_trade_id_namespace(namespace);
+        let clock: Arc<dyn Clock> = Arc::new(StubClock::new());
+        let (replayed, _) = ReplayEngine::<()>::replay_from_with_clock_and_config(
+            &journal, 0, "TEST", clock, &config,
+        )
+        .expect("replay with namespace config");
+
+        assert_eq!(
+            probe_next_trade_id(&reference),
+            probe_next_trade_id(&replayed),
+            "equal probe IDs prove namespace + counter position match, hence \
+             the whole replayed trade-ID stream matched the reference"
+        );
+    }
+
+    /// #200 review: a namespace-carrying config on a suffix replay
+    /// (`from_sequence != 0`) must be rejected — applying the namespace
+    /// restarts the trade-ID counter at 0, so a suffix would mint wrong IDs
+    /// and duplicates of IDs already emitted live under that namespace.
+    #[test]
+    fn test_replay_with_namespace_config_rejects_suffix_replay() {
+        let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"VENUE/TEST");
+        let journal = trading_journal(Id::new_uuid(), Id::new_uuid());
+        let config = ReplayBookConfig::default().with_trade_id_namespace(namespace);
+
+        // from_sequence = 1 is a valid suffix of the two-event journal, so
+        // the InvalidSequence pre-check passes and the namespace guard must
+        // be the one that fires — on both config entry points.
+        match ReplayEngine::<()>::replay_from_with_config(&journal, 1, "TEST", &config) {
+            Err(ReplayError::NamespaceRequiresFullReplay { from_sequence }) => {
+                assert_eq!(from_sequence, 1);
+            }
+            Err(other) => panic!("expected NamespaceRequiresFullReplay, got {other:?}"),
+            Ok(_) => panic!("suffix replay with a namespace must be rejected"),
+        }
+
+        let clock: Arc<dyn Clock> = Arc::new(StubClock::new());
+        match ReplayEngine::<()>::replay_from_with_clock_and_config(
+            &journal, 1, "TEST", clock, &config,
+        ) {
+            Err(ReplayError::NamespaceRequiresFullReplay { from_sequence }) => {
+                assert_eq!(from_sequence, 1);
+            }
+            Err(other) => panic!("expected NamespaceRequiresFullReplay, got {other:?}"),
+            Ok(_) => panic!("suffix replay with a namespace must be rejected"),
+        }
+    }
+
+    /// #200 review: the suffix-replay guard only bites when a namespace is
+    /// present — a namespace-free config still supports suffix replay, and
+    /// an out-of-range from_sequence keeps its InvalidSequence precedence
+    /// even with a namespace.
+    #[test]
+    fn test_replay_suffix_without_namespace_still_allowed() {
+        // Two independent adds so the seq-1 suffix is self-contained.
+        let journal: InMemoryJournal<()> = InMemoryJournal::new();
+        assert!(
+            journal
+                .append(&make_add_event(0, Id::new_uuid(), 100, 10, Side::Buy))
+                .is_ok()
+        );
+        assert!(
+            journal
+                .append(&make_add_event(1, Id::new_uuid(), 99, 10, Side::Buy))
+                .is_ok()
+        );
+
+        // Suffix replay with a namespace-free config: the pre-#200 behavior.
+        let result = ReplayEngine::<()>::replay_from_with_config(
+            &journal,
+            1,
+            "TEST",
+            &ReplayBookConfig::default(),
+        );
+        match result {
+            Ok((_, last_seq)) => assert_eq!(last_seq, 1),
+            Err(err) => panic!("namespace-free suffix replay must keep working, got {err:?}"),
+        }
+
+        // Out-of-range from_sequence: InvalidSequence fires before the
+        // namespace guard.
+        let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"VENUE/TEST");
+        let config = ReplayBookConfig::default().with_trade_id_namespace(namespace);
+        match ReplayEngine::<()>::replay_from_with_config(&journal, 5, "TEST", &config) {
+            Err(ReplayError::InvalidSequence { from_sequence, .. }) => {
+                assert_eq!(from_sequence, 5);
+            }
+            Err(other) => panic!("expected InvalidSequence, got {other:?}"),
+            Ok(_) => panic!("expected InvalidSequence, got Ok(_)"),
+        }
+    }
+
+    /// #200: without a namespace in the config, the fresh book keeps its
+    /// random namespace — two replays of the same journal diverge.
+    #[test]
+    fn test_replay_with_default_config_keeps_random_namespace() {
+        let journal = trading_journal(Id::new_uuid(), Id::new_uuid());
+
+        let (a, _) = ReplayEngine::<()>::replay_from_with_config(
+            &journal,
+            0,
+            "TEST",
+            &ReplayBookConfig::default(),
+        )
+        .expect("first default-config replay");
+        let (b, _) = ReplayEngine::<()>::replay_from_with_config(
+            &journal,
+            0,
+            "TEST",
+            &ReplayBookConfig::default(),
+        )
+        .expect("second default-config replay");
+
+        assert_ne!(
+            probe_next_trade_id(&a),
+            probe_next_trade_id(&b),
+            "default config must keep per-replay random namespaces"
+        );
     }
 }

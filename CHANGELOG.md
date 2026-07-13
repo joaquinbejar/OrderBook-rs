@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-07-13
+
+### Added
+
+- **Replay reproduces the trade-ID stream: `trade_id_namespace` on
+  `ReplayBookConfig` (#200).** v0.10.5 (#199) made the trade-ID namespace
+  injectable on `OrderBook`, but every `ReplayEngine::replay_from*` entry
+  point still constructed its book internally with a random
+  `Uuid::new_v4()` namespace, so trade IDs produced through the shipped
+  replay API remained non-reproducible against the live run and across
+  repeated replays of the same journal. `ReplayBookConfig` now carries
+  `trade_id_namespace: Option<Uuid>`, applied via
+  `OrderBook::set_trade_id_namespace` before any journal events are
+  replayed (the book is fresh, honoring the counter-restart contract), so
+  `replay_from_with_clock_and_config` with the live namespace and an
+  injected `Clock` reproduces the live trade-ID stream byte-identically.
+  `ReplayBookConfig::new` keeps its six structural parameters — the new
+  builder-style `with_trade_id_namespace(namespace)` sets the field. The
+  non-config entry points intentionally keep the random namespace
+  (documented) rather than growing more constructor variants.
+- **Suffix replays with a namespace are rejected.** Applying a namespace
+  restarts the trade-ID counter at 0, so a namespace-carrying config
+  combined with `from_sequence != 0` would mint wrong IDs for the suffix
+  and duplicates of IDs already emitted live under that namespace. The
+  `*_with_config` entry points return the new typed
+  `ReplayError::NamespaceRequiresFullReplay` instead; namespace-free
+  suffix replay keeps working. Residual caveat (documented on the field):
+  the journal must cover the trade-ID stream origin — the engine cannot
+  detect a rotated segment whose earlier segments already produced trades
+  under the same namespace.
+
+### Changed
+
+- **Breaking:** `ReplayBookConfig` gained a public field
+  (`trade_id_namespace`), so exhaustive struct literals no longer compile —
+  add `trade_id_namespace: None` or construct with `..Default::default()`.
+  `ReplayError` gained the `NamespaceRequiresFullReplay` variant, so
+  exhaustive matches need a new arm. Callers using
+  `ReplayBookConfig::new(...)` / `::default()` are unaffected. Hence the
+  0.11.0 (pre-1.0 breaking) version bump. No journal or snapshot format
+  change, and no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+
 ## [0.10.5] — 2026-07-13
 
 ### Added

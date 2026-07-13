@@ -32,6 +32,36 @@
 //! - **Research**: Platform for studying market microstructure and order flow
 //! - **Educational**: Reference implementation for understanding modern exchange architecture
 //!
+//! ## What's New in Version 0.11.0
+//!
+//! ### v0.11.0 — replay reproduces the trade-ID stream: namespace in `ReplayBookConfig` (#200)
+//!
+//! - **`ReplayBookConfig.trade_id_namespace: Option<Uuid>`.** v0.10.5 (#199)
+//!   made the trade-ID namespace injectable on `OrderBook`, but every
+//!   `ReplayEngine::replay_from*` entry point still built its book with a
+//!   random namespace, so trade IDs produced through the shipped replay API
+//!   were not reproducible. The config now carries the live book's
+//!   namespace and applies it via `OrderBook::set_trade_id_namespace`
+//!   before any journal events are replayed; a `*_with_config` replay under
+//!   an injected `Clock` then reproduces the live trade-ID stream
+//!   byte-identically. `ReplayBookConfig::new` keeps its six structural
+//!   parameters (namespace defaults to `None`) — chain the new
+//!   `with_trade_id_namespace(namespace)` builder to set it. Without a
+//!   namespace the fresh book keeps a random one, as before.
+//! - **Suffix replays with a namespace are rejected.** Applying a
+//!   namespace restarts the trade-ID counter at 0, so a namespace-carrying
+//!   config with `from_sequence != 0` would mint wrong or duplicate IDs;
+//!   the `*_with_config` entry points return the new typed
+//!   `ReplayError::NamespaceRequiresFullReplay` instead. Namespace-free
+//!   suffix replay keeps working.
+//! - **Breaking (semver-minor under 0.x):** `ReplayBookConfig` gained a
+//!   public field, so exhaustive struct literals no longer compile — add
+//!   `trade_id_namespace: None` or use `..Default::default()`; and
+//!   `ReplayError` gained the `NamespaceRequiresFullReplay` variant, so
+//!   exhaustive matches need a new arm.
+//!   `ReplayBookConfig::new(...)` callers are unaffected. No journal or
+//!   snapshot format change, no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+//!
 //! ## What's New in Version 0.10.5
 //!
 //! ### v0.10.5 — injectable trade-ID namespace (#199)
