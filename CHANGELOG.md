@@ -24,7 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   namespace (e.g. UUID v5 of the symbol under a venue root) then yields
   byte-identical trade IDs across live/replay. Default constructors are
   unchanged (fresh random namespace per book). No wire-format or snapshot
-  change, and no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+  change, and no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump. The guarantee
+  currently applies to books constructed by the caller; the sequencer's
+  `ReplayEngine` entry points still build their books with a random
+  namespace — wiring the seam into `ReplayBookConfig` is tracked in #200.
 
 ## [0.10.4] — 2026-07-12
 

@@ -53,7 +53,11 @@
 //!   gives every book a stable, distinct stream.
 //! - Default constructors are unchanged: without injection each book still
 //!   gets a fresh random namespace. No wire-format or snapshot change, no
-//!   `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
+//!   `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump. Note the guarantee currently
+//!   applies to books you construct yourself; the sequencer's
+//!   `ReplayEngine` entry points still build their books with a random
+//!   namespace — wiring the seam into `ReplayBookConfig` is tracked in
+//!   issue #200.
 //!
 //! ## What's New in Version 0.10.4
 //!
