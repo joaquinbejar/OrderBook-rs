@@ -44,10 +44,13 @@ use uuid::Uuid;
 ///
 /// Beyond the structural fields, the config can also carry the source book's
 /// **trade-ID namespace** (`trade_id_namespace`, see
-/// [`OrderBook::set_trade_id_namespace`]): with it, a `*_with_config` replay
-/// under an injected [`Clock`] reproduces the live run's trade-ID stream
-/// byte-identically, not just its structure. Without it the fresh book keeps
-/// a random namespace and replayed trade IDs differ from the live ones.
+/// [`OrderBook::set_trade_id_namespace`]): with it, a **full** `*_with_config`
+/// replay (`from_sequence == 0`) under an injected [`Clock`] reproduces the
+/// live run's trade-ID stream byte-identically, not just its structure.
+/// Suffix replays with a namespace are rejected
+/// ([`ReplayError::NamespaceRequiresFullReplay`]) because the restarted ID
+/// counter would mint wrong or duplicate IDs. Without a namespace the fresh
+/// book keeps a random one and replayed trade IDs differ from the live ones.
 ///
 /// `Default` yields the all-defaults configuration, equivalent to the plain
 /// replay entry points.
@@ -85,6 +88,15 @@ pub struct ReplayBookConfig {
     /// generator's counter-restart contract is satisfied by construction).
     /// Inject the live book's namespace (#199) to make the replayed trade-ID
     /// stream byte-identical to the original.
+    ///
+    /// Because applying a namespace restarts the trade-ID counter at 0, a
+    /// namespace-carrying config is only valid for a **full replay**: the
+    /// `*_with_config` entry points reject `from_sequence != 0` with
+    /// [`ReplayError::NamespaceRequiresFullReplay`] rather than minting
+    /// wrong or duplicate IDs for a suffix. The journal must also cover the
+    /// trade-ID stream origin — a rotated segment whose earlier segments
+    /// already produced trades under this namespace reissues their IDs,
+    /// which the engine cannot detect.
     pub trade_id_namespace: Option<Uuid>,
 }
 
@@ -128,9 +140,11 @@ impl ReplayBookConfig {
     /// Returns this configuration with the trade-ID namespace set.
     ///
     /// Builder-style companion to [`Self::new`] (which leaves the namespace
-    /// at `None`): carry the live book's namespace (#199) so a
-    /// `*_with_config` replay under an injected [`Clock`] reproduces the
-    /// live trade-ID stream byte-identically.
+    /// at `None`): carry the live book's namespace (#199) so a **full**
+    /// `*_with_config` replay (`from_sequence == 0`) under an injected
+    /// [`Clock`] reproduces the live trade-ID stream byte-identically.
+    /// Suffix replays with a namespace are rejected — see
+    /// [`ReplayError::NamespaceRequiresFullReplay`].
     ///
     /// # Arguments
     ///
@@ -217,6 +231,24 @@ pub enum ReplayError {
         /// The underlying error.
         #[source]
         source: OrderBookError,
+    },
+
+    /// A trade-ID namespace was injected for a suffix replay.
+    ///
+    /// [`OrderBook::set_trade_id_namespace`] restarts the UUID v5 counter at
+    /// 0, so the byte-identical trade-ID guarantee only holds when replay
+    /// starts at the origin of the trade-ID stream. A namespace-carrying
+    /// [`ReplayBookConfig`] combined with a non-zero `from_sequence` would
+    /// mint IDs from counter 0 — wrong for the suffix and duplicates of IDs
+    /// already emitted live under that namespace — so the `*_with_config`
+    /// entry points reject the combination instead. Replay from sequence 0,
+    /// or drop the namespace from the config for suffix replays.
+    #[error(
+        "trade-ID namespace injection requires a full replay: from_sequence {from_sequence} != 0 would restart the ID counter and mint wrong or duplicate trade IDs"
+    )]
+    NamespaceRequiresFullReplay {
+        /// The non-zero starting sequence that was requested.
+        from_sequence: u64,
     },
 
     /// The replayed state does not match the expected snapshot.
@@ -353,7 +385,9 @@ where
     ///
     /// # Errors
     ///
-    /// Same as [`replay_from`](Self::replay_from).
+    /// Same as [`replay_from`](Self::replay_from), plus
+    /// [`ReplayError::NamespaceRequiresFullReplay`] when `config` carries a
+    /// `trade_id_namespace` and `from_sequence != 0`.
     #[must_use = "replay result carries the reconstructed book and the last applied sequence"]
     pub fn replay_from_with_config(
         journal: &impl Journal<T>,
@@ -372,6 +406,8 @@ where
                 last_sequence: last_seq,
             });
         }
+
+        Self::check_namespace_full_replay(from_sequence, config)?;
 
         let mut book = OrderBook::new(symbol);
         config.apply_to(&mut book);
@@ -476,10 +512,12 @@ where
     /// reproduces the structural configuration (fees, STP, tick / lot / min /
     /// max order size), so the reconstructed book passes `snapshots_match`
     /// against the original. When the config also carries the live book's
-    /// `trade_id_namespace` (#199), the replay reproduces the live trade-ID
-    /// stream byte-identically as well. The configuration is supplied by the
-    /// caller — it is not read from the journal, so the journal format is
-    /// unchanged.
+    /// `trade_id_namespace` (#199), a **full** replay (`from_sequence == 0`)
+    /// reproduces the live trade-ID stream byte-identically as well; suffix
+    /// replays with a namespace are rejected
+    /// ([`ReplayError::NamespaceRequiresFullReplay`]). The configuration is
+    /// supplied by the caller — it is not read from the journal, so the
+    /// journal format is unchanged.
     ///
     /// # Arguments
     ///
@@ -491,7 +529,9 @@ where
     ///
     /// # Errors
     ///
-    /// Same as [`replay_from`](Self::replay_from).
+    /// Same as [`replay_from`](Self::replay_from), plus
+    /// [`ReplayError::NamespaceRequiresFullReplay`] when `config` carries a
+    /// `trade_id_namespace` and `from_sequence != 0`.
     #[must_use = "replay result carries the reconstructed book and the last applied sequence"]
     pub fn replay_from_with_clock_and_config(
         journal: &impl Journal<T>,
@@ -512,10 +552,32 @@ where
             });
         }
 
+        Self::check_namespace_full_replay(from_sequence, config)?;
+
         let mut book = OrderBook::with_clock(symbol, clock);
         config.apply_to(&mut book);
         let last_applied_seq = Self::replay_into(&book, journal, from_sequence, |_, _| {})?;
         Ok((book, last_applied_seq))
+    }
+
+    /// Rejects a namespace-carrying config on a suffix replay.
+    ///
+    /// Applying a namespace restarts the trade-ID counter at 0, so the
+    /// byte-identical guarantee only holds when replay starts at the origin
+    /// of the trade-ID stream. `from_sequence == 0` additionally forces the
+    /// journal itself to start at sequence 0 (gap detection rejects a
+    /// journal whose first event is later), so the shipped API cannot
+    /// silently mint wrong or duplicate IDs. See
+    /// [`ReplayError::NamespaceRequiresFullReplay`].
+    #[inline]
+    fn check_namespace_full_replay(
+        from_sequence: u64,
+        config: &ReplayBookConfig,
+    ) -> Result<(), ReplayError> {
+        if from_sequence != 0 && config.trade_id_namespace.is_some() {
+            return Err(ReplayError::NamespaceRequiresFullReplay { from_sequence });
+        }
+        Ok(())
     }
 
     /// Shared replay loop. Applies events from `journal` starting at
@@ -1367,6 +1429,83 @@ mod tests {
             "equal probe IDs prove namespace + counter position match, hence \
              the whole replayed trade-ID stream matched the reference"
         );
+    }
+
+    /// #200 review: a namespace-carrying config on a suffix replay
+    /// (`from_sequence != 0`) must be rejected — applying the namespace
+    /// restarts the trade-ID counter at 0, so a suffix would mint wrong IDs
+    /// and duplicates of IDs already emitted live under that namespace.
+    #[test]
+    fn test_replay_with_namespace_config_rejects_suffix_replay() {
+        let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"VENUE/TEST");
+        let journal = trading_journal(Id::new_uuid(), Id::new_uuid());
+        let config = ReplayBookConfig::default().with_trade_id_namespace(namespace);
+
+        // from_sequence = 1 is a valid suffix of the two-event journal, so
+        // the InvalidSequence pre-check passes and the namespace guard must
+        // be the one that fires — on both config entry points.
+        match ReplayEngine::<()>::replay_from_with_config(&journal, 1, "TEST", &config) {
+            Err(ReplayError::NamespaceRequiresFullReplay { from_sequence }) => {
+                assert_eq!(from_sequence, 1);
+            }
+            Err(other) => panic!("expected NamespaceRequiresFullReplay, got {other:?}"),
+            Ok(_) => panic!("suffix replay with a namespace must be rejected"),
+        }
+
+        let clock: Arc<dyn Clock> = Arc::new(StubClock::new());
+        match ReplayEngine::<()>::replay_from_with_clock_and_config(
+            &journal, 1, "TEST", clock, &config,
+        ) {
+            Err(ReplayError::NamespaceRequiresFullReplay { from_sequence }) => {
+                assert_eq!(from_sequence, 1);
+            }
+            Err(other) => panic!("expected NamespaceRequiresFullReplay, got {other:?}"),
+            Ok(_) => panic!("suffix replay with a namespace must be rejected"),
+        }
+    }
+
+    /// #200 review: the suffix-replay guard only bites when a namespace is
+    /// present — a namespace-free config still supports suffix replay, and
+    /// an out-of-range from_sequence keeps its InvalidSequence precedence
+    /// even with a namespace.
+    #[test]
+    fn test_replay_suffix_without_namespace_still_allowed() {
+        // Two independent adds so the seq-1 suffix is self-contained.
+        let journal: InMemoryJournal<()> = InMemoryJournal::new();
+        assert!(
+            journal
+                .append(&make_add_event(0, Id::new_uuid(), 100, 10, Side::Buy))
+                .is_ok()
+        );
+        assert!(
+            journal
+                .append(&make_add_event(1, Id::new_uuid(), 99, 10, Side::Buy))
+                .is_ok()
+        );
+
+        // Suffix replay with a namespace-free config: the pre-#200 behavior.
+        let result = ReplayEngine::<()>::replay_from_with_config(
+            &journal,
+            1,
+            "TEST",
+            &ReplayBookConfig::default(),
+        );
+        match result {
+            Ok((_, last_seq)) => assert_eq!(last_seq, 1),
+            Err(err) => panic!("namespace-free suffix replay must keep working, got {err:?}"),
+        }
+
+        // Out-of-range from_sequence: InvalidSequence fires before the
+        // namespace guard.
+        let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"VENUE/TEST");
+        let config = ReplayBookConfig::default().with_trade_id_namespace(namespace);
+        match ReplayEngine::<()>::replay_from_with_config(&journal, 5, "TEST", &config) {
+            Err(ReplayError::InvalidSequence { from_sequence, .. }) => {
+                assert_eq!(from_sequence, 5);
+            }
+            Err(other) => panic!("expected InvalidSequence, got {other:?}"),
+            Ok(_) => panic!("expected InvalidSequence, got Ok(_)"),
+        }
     }
 
     /// #200: without a namespace in the config, the fresh book keeps its

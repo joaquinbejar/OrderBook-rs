@@ -62,9 +62,17 @@ This order book engine is built with the following design principles:
   parameters (namespace defaults to `None`) — chain the new
   `with_trade_id_namespace(namespace)` builder to set it. Without a
   namespace the fresh book keeps a random one, as before.
+- **Suffix replays with a namespace are rejected.** Applying a
+  namespace restarts the trade-ID counter at 0, so a namespace-carrying
+  config with `from_sequence != 0` would mint wrong or duplicate IDs;
+  the `*_with_config` entry points return the new typed
+  `ReplayError::NamespaceRequiresFullReplay` instead. Namespace-free
+  suffix replay keeps working.
 - **Breaking (semver-minor under 0.x):** `ReplayBookConfig` gained a
   public field, so exhaustive struct literals no longer compile — add
-  `trade_id_namespace: None` or use `..Default::default()`.
+  `trade_id_namespace: None` or use `..Default::default()`; and
+  `ReplayError` gained the `NamespaceRequiresFullReplay` variant, so
+  exhaustive matches need a new arm.
   `ReplayBookConfig::new(...)` callers are unaffected. No journal or
   snapshot format change, no `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
 
