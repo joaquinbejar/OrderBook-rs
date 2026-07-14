@@ -21,6 +21,7 @@ mod operations_coverage_tests;
 mod operations_coverage_tests_extended;
 mod order_state_tests;
 mod private_coverage_tests;
+mod props_quantity_update_priority;
 mod reject_reason_tests;
 mod replay_config_tests;
 mod replay_coverage_tests;

@@ -122,6 +122,33 @@ where
 {
     /// Update an order's price and/or quantity
     ///
+    /// # Queue priority
+    ///
+    /// The update variants follow conventional exchange price-time-priority
+    /// rules. This is a public contract — external conformance tooling
+    /// depends on it (see issue #203):
+    ///
+    /// - [`OrderUpdate::UpdateQuantity`] with a **decreased or unchanged**
+    ///   total quantity (visible + hidden) updates the resting order in
+    ///   place at its existing insertion sequence: the maker keeps its
+    ///   queue position. Reducing size never forfeits time priority.
+    /// - [`OrderUpdate::UpdateQuantity`] with an **increased** total
+    ///   quantity demotes the order to the back of its price level's
+    ///   queue. Sizing up loses time priority. The demoted order keeps
+    ///   its original admission timestamp — only its insertion sequence
+    ///   is refreshed. **Known limitation:** the demotion does not yet
+    ///   survive a snapshot round-trip — level capture orders by
+    ///   `(timestamp, seq)` without persisting the sequence, and
+    ///   [`restore_from_snapshot`](OrderBook::restore_from_snapshot)
+    ///   re-enqueues in that order, so a restored book consumes the
+    ///   upsized order at its pre-demotion position (tracked in
+    ///   issue #205, fix upstream in `pricelevel`).
+    /// - [`OrderUpdate::UpdatePrice`], [`OrderUpdate::UpdatePriceAndQuantity`],
+    ///   and [`OrderUpdate::Replace`] are implemented as cancel-then-add:
+    ///   the order always re-enters at the back of its (possibly new)
+    ///   price level and loses time priority — for `Replace` and
+    ///   `UpdatePriceAndQuantity` even when the price is unchanged.
+    ///
     /// # Errors
     /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
     /// is engaged and the update is anything other than

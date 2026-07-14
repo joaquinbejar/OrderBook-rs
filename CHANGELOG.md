@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Queue-priority contract documented and property-tested (#203).** The
+  price-time-priority semantics of `OrderBook::update_order` — an in-place
+  quantity decrease keeps the maker's queue position, a quantity increase
+  demotes to the back of the level, and `UpdatePrice` /
+  `UpdatePriceAndQuantity` / `Replace` are cancel-then-add and always lose
+  time priority — were previously documented only inside the embedded
+  `pricelevel` engine. External conformance tooling (Tracebook) now consumes
+  this contract, so it is promoted to the public `update_order` docs and
+  locked in by four proptest invariants
+  (`tests/unit/props_quantity_update_priority.rs`) driven through the public
+  API: quantity decrease keeps the queue position, quantity increase demotes,
+  and same-price `Replace` / `UpdatePriceAndQuantity` always demote. The docs
+  also state a known limitation: the upsize demotion does not yet survive a
+  snapshot restore (#205, upstream fix in `pricelevel`). No behavior change.
+
 ## [0.11.0] — 2026-07-13
 
 ### Added
