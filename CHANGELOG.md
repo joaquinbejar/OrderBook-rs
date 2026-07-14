@@ -17,9 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   time priority — were previously documented only inside the embedded
   `pricelevel` engine. External conformance tooling (Tracebook) now consumes
   this contract, so it is promoted to the public `update_order` docs and
-  locked in by two proptest invariants
+  locked in by four proptest invariants
   (`tests/unit/props_quantity_update_priority.rs`) driven through the public
-  API. No behavior change.
+  API: quantity decrease keeps the queue position, quantity increase demotes,
+  and same-price `Replace` / `UpdatePriceAndQuantity` always demote. The docs
+  also state a known limitation: the upsize demotion does not yet survive a
+  snapshot restore (#205, upstream fix in `pricelevel`). No behavior change.
 
 ## [0.11.0] — 2026-07-13
 

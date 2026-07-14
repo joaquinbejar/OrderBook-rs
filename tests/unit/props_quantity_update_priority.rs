@@ -1,17 +1,20 @@
 //! Property tests for the queue-priority contract of
-//! `OrderBook::update_order(OrderUpdate::UpdateQuantity { .. })` (issue #203):
+//! `OrderBook::update_order` (issue #203):
 //!
-//! - A quantity **decrease** (or unchanged total) keeps the maker's queue
-//!   position — reducing size never forfeits time priority.
-//! - A quantity **increase** demotes the order to the back of its price
-//!   level's queue.
+//! - `UpdateQuantity` with a **decrease** (or unchanged total) keeps the
+//!   maker's queue position — reducing size never forfeits time priority.
+//! - `UpdateQuantity` with an **increase** demotes the order to the back of
+//!   its price level's queue.
+//! - `Replace` and `UpdatePriceAndQuantity` always demote to the back of the
+//!   queue, even at an unchanged price and regardless of the quantity
+//!   direction (cancel-then-add semantics).
 //!
-//! Both properties are asserted through the public API only: build a level of
-//! resting standard orders, resize one, then sweep the level with an
+//! All properties are asserted through the public API only: build a level of
+//! resting standard orders, update one, then sweep the level with an
 //! aggressive market order and check the maker-id sequence of the fills.
 
 use orderbook_rs::OrderBook;
-use pricelevel::{Hash32, Id, MatchResult, OrderUpdate, Quantity, Side, TimeInForce};
+use pricelevel::{Hash32, Id, MatchResult, OrderUpdate, Price, Quantity, Side, TimeInForce};
 use proptest::prelude::*;
 
 /// Price level shared by every resting order; the market order sweeps it.
@@ -48,6 +51,24 @@ fn book_with_ask_level(quantities: &[u64]) -> Result<OrderBook<()>, TestCaseErro
     Ok(book)
 }
 
+/// Applies `update` to the resting order at `position` and asserts it was
+/// applied to a live order.
+fn apply_update(
+    book: &OrderBook<()>,
+    position: usize,
+    update: OrderUpdate,
+) -> Result<(), TestCaseError> {
+    match book.update_order(update) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(TestCaseError::fail(format!(
+            "order at position {position} not found for update"
+        ))),
+        Err(error) => Err(TestCaseError::fail(format!(
+            "update at position {position} failed: {error}"
+        ))),
+    }
+}
+
 /// Resizes the resting order at `position` to `new_quantity` and asserts the
 /// update was applied to a live order.
 fn resize_order(
@@ -55,18 +76,14 @@ fn resize_order(
     position: usize,
     new_quantity: u64,
 ) -> Result<(), TestCaseError> {
-    match book.update_order(OrderUpdate::UpdateQuantity {
-        order_id: resting_id(position),
-        new_quantity: Quantity::new(new_quantity),
-    }) {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => Err(TestCaseError::fail(format!(
-            "order at position {position} not found for quantity update"
-        ))),
-        Err(error) => Err(TestCaseError::fail(format!(
-            "quantity update at position {position} failed: {error}"
-        ))),
-    }
+    apply_update(
+        book,
+        position,
+        OrderUpdate::UpdateQuantity {
+            order_id: resting_id(position),
+            new_quantity: Quantity::new(new_quantity),
+        },
+    )
 }
 
 /// Sweeps the ask level with a market buy of `quantity` units and returns the
@@ -83,6 +100,45 @@ fn sweep(book: &OrderBook<()>, quantity: u64) -> Result<MatchResult, TestCaseErr
             "market sweep of {quantity} units failed: {error}"
         ))),
     }
+}
+
+/// Sweeps every unit not belonging to the updated order at `position`
+/// (per the original `quantities`) plus one unit, and asserts the updated
+/// order fills last — after every other order, in insertion order. The
+/// final unit can only come from the updated order if the update demoted
+/// it behind every other resting order.
+fn assert_demoted_to_back(
+    book: &OrderBook<()>,
+    quantities: &[u64],
+    position: usize,
+) -> Result<(), TestCaseError> {
+    let others: u64 = quantities
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != position)
+        .map(|(_, quantity)| *quantity)
+        .sum();
+    let result = sweep(book, others + 1)?;
+
+    let trades = result.trades().as_vec();
+    prop_assert_eq!(
+        trades.len(),
+        quantities.len(),
+        "sweep must fill every other order fully and the updated order once"
+    );
+
+    let expected_makers: Vec<Id> = (0..quantities.len())
+        .filter(|index| *index != position)
+        .map(resting_id)
+        .chain(std::iter::once(resting_id(position)))
+        .collect();
+    let actual_makers: Vec<Id> = trades.iter().map(|trade| trade.maker_order_id()).collect();
+    prop_assert_eq!(
+        actual_makers,
+        expected_makers,
+        "demoted order must fill last, all others in insertion order"
+    );
+    Ok(())
 }
 
 proptest! {
@@ -151,35 +207,59 @@ proptest! {
 
         let book = book_with_ask_level(&quantities)?;
         resize_order(&book, position, new_quantity)?;
+        assert_demoted_to_back(&book, &quantities, position)?;
+    }
 
-        // Every unit not belonging to the resized order, plus one unit that
-        // must come from it — and can only be the final fill if the resize
-        // demoted it behind every other resting order.
-        let others: u64 = quantities
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != position)
-            .map(|(_, quantity)| *quantity)
-            .sum();
-        let result = sweep(&book, others + 1)?;
+    /// A same-price `Replace` must always demote the order to the back of
+    /// the queue, regardless of whether its quantity shrinks, grows, or is
+    /// unchanged — replace is cancel-then-add.
+    #[test]
+    fn test_replace_same_price_demotes_to_back_of_queue(
+        quantities in proptest::collection::vec(1u64..=50, 3..8),
+        position_index in any::<prop::sample::Index>(),
+        new_quantity in 1u64..=100,
+    ) {
+        // Pick a position that is not already last, so the demotion is
+        // observable in the fill sequence.
+        let position = position_index.index(quantities.len() - 1);
 
-        let trades = result.trades().as_vec();
-        prop_assert_eq!(
-            trades.len(),
-            quantities.len(),
-            "sweep must fill every other order fully and the resized order once"
-        );
+        let book = book_with_ask_level(&quantities)?;
+        apply_update(
+            &book,
+            position,
+            OrderUpdate::Replace {
+                order_id: resting_id(position),
+                price: Price::new(LEVEL_PRICE),
+                quantity: Quantity::new(new_quantity),
+                side: Side::Sell,
+            },
+        )?;
+        assert_demoted_to_back(&book, &quantities, position)?;
+    }
 
-        let expected_makers: Vec<Id> = (0..quantities.len())
-            .filter(|index| *index != position)
-            .map(resting_id)
-            .chain(std::iter::once(resting_id(position)))
-            .collect();
-        let actual_makers: Vec<Id> = trades.iter().map(|trade| trade.maker_order_id()).collect();
-        prop_assert_eq!(
-            actual_makers,
-            expected_makers,
-            "demoted order must fill last, all others in insertion order"
-        );
+    /// A same-price `UpdatePriceAndQuantity` must always demote the order to
+    /// the back of the queue, regardless of the quantity direction — it is
+    /// cancel-then-add even when the price does not change.
+    #[test]
+    fn test_update_price_and_quantity_same_price_demotes_to_back_of_queue(
+        quantities in proptest::collection::vec(1u64..=50, 3..8),
+        position_index in any::<prop::sample::Index>(),
+        new_quantity in 1u64..=100,
+    ) {
+        // Pick a position that is not already last, so the demotion is
+        // observable in the fill sequence.
+        let position = position_index.index(quantities.len() - 1);
+
+        let book = book_with_ask_level(&quantities)?;
+        apply_update(
+            &book,
+            position,
+            OrderUpdate::UpdatePriceAndQuantity {
+                order_id: resting_id(position),
+                new_price: Price::new(LEVEL_PRICE),
+                new_quantity: Quantity::new(new_quantity),
+            },
+        )?;
+        assert_demoted_to_back(&book, &quantities, position)?;
     }
 }
