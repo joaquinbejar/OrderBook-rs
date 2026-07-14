@@ -5,7 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] — 2026-07-14
+
+### Changed (breaking, semver-minor under 0.x)
+
+- **`pricelevel` 0.8.4 → 0.9.1.** Major upstream hardening release
+  (PriceLevel #111–#120): validated admission (duplicate id, counter
+  capacity, price/side topology), atomic PostOnly / fill-or-kill decisions,
+  torn-read-safe execution statistics, and level snapshots materialized in
+  queue-consumption order. 0.9.1 additionally fixes the `MatchResult`
+  bincode round-trip (PriceLevel#135, found by this bump: 0.9.0 serialized
+  a shape its own validated decoder rejected positionally, breaking the
+  `bincode` feature's trade-event round-trip). Ripple on the re-exported
+  surface:
+  `PriceLevel::add_order` returns `Result`, `PriceLevel::matchable_quantity`
+  takes the taker id (the dry run applies the sweep's self-match skip), and
+  `PriceLevelError` gained the `DuplicateOrderId` variant.
+- **`OrderBook::get_bt_bids` / `get_bt_asks` are now fallible**, returning
+  `Result<BTreeMap<u128, PriceLevel>, OrderBookError>` — rebuilding a
+  `PriceLevel` from a snapshot validates admission upstream (`TryFrom`
+  replaced the infallible `From`).
+
+### Fixed
+
+- **The upsize queue-priority demotion survives a snapshot round-trip
+  (#205).** Level snapshots now materialize orders in queue-consumption
+  order (pricelevel 0.9, PriceLevel#109), so
+  `restore_from_snapshot_package` rebuilds the exact queue and a
+  quantity-increased order keeps its back-of-queue position after restore.
+  Locked in by a proptest regression
+  (`tests/unit/props_quantity_update_priority.rs`). **Migration note:**
+  snapshots captured with pricelevel < 0.9 restore a demoted order at its
+  old `(timestamp, seq)` position — re-snapshot after upgrading to pin the
+  corrected order. No orderbook envelope change:
+  `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` stays 2; the embedded statistics
+  gained an optional `stats_degraded` field that legacy snapshots omit.
 
 ### Added
 

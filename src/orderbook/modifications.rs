@@ -136,13 +136,14 @@ where
     ///   quantity demotes the order to the back of its price level's
     ///   queue. Sizing up loses time priority. The demoted order keeps
     ///   its original admission timestamp — only its insertion sequence
-    ///   is refreshed. **Known limitation:** the demotion does not yet
-    ///   survive a snapshot round-trip — level capture orders by
-    ///   `(timestamp, seq)` without persisting the sequence, and
+    ///   is refreshed. The demotion survives a snapshot round-trip:
+    ///   since pricelevel 0.9 level snapshots materialize orders in
+    ///   queue-consumption order, so
     ///   [`restore_from_snapshot`](OrderBook::restore_from_snapshot)
-    ///   re-enqueues in that order, so a restored book consumes the
-    ///   upsized order at its pre-demotion position (tracked in
-    ///   issue #205, fix upstream in `pricelevel`).
+    ///   rebuilds the exact queue (#205). Snapshots captured with
+    ///   pricelevel < 0.9 restore a demoted order at its old
+    ///   `(timestamp, seq)` position — re-snapshot to pin the corrected
+    ///   order.
     /// - [`OrderUpdate::UpdatePrice`], [`OrderUpdate::UpdatePriceAndQuantity`],
     ///   and [`OrderUpdate::Replace`] are implemented as cancel-then-add:
     ///   the order always re-enters at the back of its (possibly new)
@@ -875,6 +876,7 @@ where
                 order.total_quantity(),
                 Some(order.price().as_u128()),
                 order.user_id(),
+                order.id(),
             );
             if potential_match < order.total_quantity() {
                 return Err(OrderBookError::InsufficientLiquidity {
@@ -969,7 +971,8 @@ where
             }
             // No same-user maker at this level: the taker consumes its full
             // matchable depth (the authoritative upstream dry run), then walks on.
-            remaining = remaining.saturating_sub(level.matchable_quantity(remaining));
+            remaining =
+                remaining.saturating_sub(level.matchable_quantity(remaining, new_order.id()));
         }
         Ok(())
     }
@@ -1273,9 +1276,13 @@ where
             let price_level = price_levels.get_or_insert(price, Arc::new(PriceLevel::new(price)));
             let level = price_level.value();
 
-            // Convert to unit type for PriceLevel compatibility
+            // Convert to unit type for PriceLevel compatibility. Admission
+            // into the level is validated upstream since pricelevel 0.9
+            // (duplicate id, counter capacity); a failure here is an
+            // invariant break — the book-level duplicate check already
+            // passed — so propagate it rather than resting a phantom order.
             let unit_order = self.convert_to_unit_type(&order);
-            let unit_order_arc = price_level.value().add_order(unit_order);
+            let unit_order_arc = price_level.value().add_order(unit_order)?;
             // notify price level changes
             if let Some(ref listener) = self.price_level_changed_listener {
                 let engine_seq = self.next_engine_seq();

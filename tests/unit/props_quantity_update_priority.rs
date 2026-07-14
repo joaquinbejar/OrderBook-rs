@@ -8,6 +8,8 @@
 //! - `Replace` and `UpdatePriceAndQuantity` always demote to the back of the
 //!   queue, even at an unchanged price and regardless of the quantity
 //!   direction (cancel-then-add semantics).
+//! - The upsize demotion survives a snapshot round-trip (issue #205,
+//!   pricelevel ≥ 0.9).
 //!
 //! All properties are asserted through the public API only: build a level of
 //! resting standard orders, update one, then sweep the level with an
@@ -208,6 +210,45 @@ proptest! {
         let book = book_with_ask_level(&quantities)?;
         resize_order(&book, position, new_quantity)?;
         assert_demoted_to_back(&book, &quantities, position)?;
+    }
+
+    /// The upsize demotion must survive a snapshot round-trip (issue #205,
+    /// fixed upstream in pricelevel 0.9 / PriceLevel#109): after resizing
+    /// up, capture a snapshot package, restore it into a fresh book, and
+    /// the sweep must still consume the demoted order last. Before the fix
+    /// the restored queue was rebuilt in `(timestamp, seq)` order and the
+    /// demoted order regained its pre-demotion position.
+    #[test]
+    fn test_update_quantity_increase_demotion_survives_snapshot_restore(
+        quantities in proptest::collection::vec(1u64..=50, 3..8),
+        position_index in any::<prop::sample::Index>(),
+        delta_index in any::<prop::sample::Index>(),
+    ) {
+        // Pick a position that is not already last, so the demotion is
+        // observable in the fill sequence.
+        let position = position_index.index(quantities.len() - 1);
+        let delta = 1 + delta_index.index(50) as u64;
+        let new_quantity = quantities[position] + delta;
+
+        let book = book_with_ask_level(&quantities)?;
+        resize_order(&book, position, new_quantity)?;
+
+        let package = match book.create_snapshot_package(quantities.len()) {
+            Ok(package) => package,
+            Err(error) => {
+                return Err(TestCaseError::fail(format!(
+                    "snapshot capture failed: {error}"
+                )));
+            }
+        };
+        let mut restored = OrderBook::<()>::new("PROPS");
+        if let Err(error) = restored.restore_from_snapshot_package(package) {
+            return Err(TestCaseError::fail(format!(
+                "snapshot restore failed: {error}"
+            )));
+        }
+
+        assert_demoted_to_back(&restored, &quantities, position)?;
     }
 
     /// A same-price `Replace` must always demote the order to the back of

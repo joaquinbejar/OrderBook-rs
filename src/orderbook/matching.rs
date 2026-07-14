@@ -904,6 +904,7 @@ where
         quantity: u64,
         price_limit: Option<u128>,
         taker_user_id: Hash32,
+        taker_id: Id,
     ) -> u64 {
         let price_levels = match side {
             Side::Buy => &self.asks,
@@ -966,7 +967,7 @@ where
                 match check_stp_at_level(&orders, taker_user_id, self.stp_mode) {
                     // No self-trade: the whole level is reachable — delegate to the
                     // upstream dry run.
-                    STPAction::NoConflict => (price_level.matchable_quantity(cap), false),
+                    STPAction::NoConflict => (price_level.matchable_quantity(cap, taker_id), false),
                     // Same-user makers are cancelled, not filled: only non-self
                     // resting depth is reachable; the walk continues. The upstream
                     // primitive cannot filter by user, so the non-self matchable
@@ -986,7 +987,7 @@ where
                     | STPAction::CancelBoth { safe_quantity, .. } => (safe_quantity, true),
                 }
             } else {
-                (price_level.matchable_quantity(cap), false)
+                (price_level.matchable_quantity(cap, taker_id), false)
             };
 
             matched = matched.saturating_add(cap.min(reachable));

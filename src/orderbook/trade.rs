@@ -279,21 +279,36 @@ mod tests {
     use super::*;
     use pricelevel::{Id, MatchResult, Price, Quantity, Trade};
 
+    /// Taker order id shared by every fixture trade: since pricelevel 0.9
+    /// `MatchResult::add_trade` validates that each trade's taker order id
+    /// matches the result's incoming order id, so the fixture threads one
+    /// id through both.
     fn make_match_result_with_trades(trades: Vec<Trade>) -> MatchResult {
-        let order_id = Id::new_uuid();
+        let taker_order_id = trades
+            .first()
+            .map(|t| t.taker_order_id())
+            .unwrap_or_else(Id::new_uuid);
         let total_qty: u64 = trades.iter().map(|t| t.quantity().as_u64()).sum();
         let initial_qty = if trades.is_empty() { 100 } else { total_qty };
-        let mut mr = MatchResult::new(order_id, Quantity::new(initial_qty));
+        let mut mr = MatchResult::new(taker_order_id, Quantity::new(initial_qty));
         for trade in trades {
-            let _ = mr.add_trade(trade);
+            assert!(
+                mr.add_trade(trade).is_ok(),
+                "fixture trade must satisfy the match-result invariants"
+            );
         }
         mr
     }
 
+    /// Taker order id for fixture trades — one shared id so
+    /// `make_match_result_with_trades` can satisfy the taker-identity
+    /// invariant.
+    const FIXTURE_TAKER: u64 = 424_242;
+
     fn make_trade(price: u128, quantity: u64) -> Trade {
         Trade::new(
             Id::new_uuid(),
-            Id::new_uuid(),
+            Id::from_u64(FIXTURE_TAKER),
             Id::new_uuid(),
             Price::new(price),
             Quantity::new(quantity),
