@@ -409,6 +409,9 @@ impl Clone for OrderBookError {
                             actual: actual.clone(),
                         }
                     }
+                    PriceLevelError::DuplicateOrderId(id) => {
+                        PriceLevelError::DuplicateOrderId(id.clone())
+                    }
                 };
                 OrderBookError::PriceLevelError(cloned_err)
             }

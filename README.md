@@ -46,6 +46,35 @@ This order book engine is built with the following design principles:
 - **Research**: Platform for studying market microstructure and order flow
 - **Educational**: Reference implementation for understanding modern exchange architecture
 
+### What's New in Version 0.12.0
+
+#### v0.12.0 — pricelevel 0.9 hardening bump; upsize demotion survives snapshot restore (#205)
+
+- **`pricelevel` 0.8.4 → 0.9.1.** Major upstream hardening release: level
+  admission validates before mutating (duplicate id, counter capacity,
+  price/side topology), PostOnly / fill-or-kill decisions are atomic with
+  the sweep, execution statistics are torn-read-safe, and level snapshots
+  materialize orders in queue-consumption order. 0.9.1 fixes the
+  `MatchResult` bincode round-trip (PriceLevel#135), keeping the
+  `bincode` feature's trade-event round-trip intact.
+- **The upsize queue-priority demotion now survives a snapshot
+  round-trip (#205).** Restoring a snapshot rebuilds each level's queue
+  exactly as matching would consume it, so an order demoted by a quantity
+  increase keeps its back-of-queue position after
+  `restore_from_snapshot_package`. Locked in by a proptest regression
+  (`tests/unit/props_quantity_update_priority.rs`). Snapshots captured
+  with pricelevel < 0.9 restore demoted orders at their old
+  `(timestamp, seq)` position — re-snapshot to pin the corrected order.
+- **Breaking (semver-minor under 0.x):** `get_bt_bids` / `get_bt_asks`
+  now return `Result<BTreeMap<u128, PriceLevel>, OrderBookError>`
+  (snapshot-to-level conversion is validating and fallible upstream), and
+  the re-exported pricelevel surface changed —
+  `PriceLevel::add_order` returns `Result`, `matchable_quantity` takes
+  the taker id, `PriceLevelError` gained `DuplicateOrderId`. No orderbook
+  envelope format change: `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` stays 2;
+  pricelevel statistics gained an optional `stats_degraded` field that
+  old snapshots simply omit.
+
 ### What's New in Version 0.11.0
 
 #### v0.11.0 — replay reproduces the trade-ID stream: namespace in `ReplayBookConfig` (#200)

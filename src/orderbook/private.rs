@@ -90,7 +90,7 @@ where
 
         // Convert OrderType<T> to OrderType<()> for compatibility with current PriceLevel API
         let unit_order = self.convert_to_unit_type(&*order);
-        let _added_order = price_level.add_order(unit_order);
+        let _added_order = price_level.add_order(unit_order)?;
 
         // notify price level changes
         if let Some(ref listener) = self.price_level_changed_listener {

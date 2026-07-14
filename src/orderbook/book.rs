@@ -3352,27 +3352,37 @@ where
     }
 
     /// Get a BTreeMap of bids with price as key and PriceLevel as value
-    pub fn get_bt_bids(&self) -> BTreeMap<u128, PriceLevel> {
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::PriceLevelError`] if rebuilding a level
+    /// from its snapshot fails validation (pricelevel 0.9 validates
+    /// snapshot admission instead of trusting it).
+    pub fn get_bt_bids(&self) -> Result<BTreeMap<u128, PriceLevel>, OrderBookError> {
         self.bids
             .iter()
             .map(|entry| {
                 let price = *entry.key();
                 let snapshot = entry.value().snapshot();
-                let price_level = PriceLevel::from(&snapshot);
-                (price, price_level)
+                let price_level = PriceLevel::try_from(&snapshot)?;
+                Ok((price, price_level))
             })
             .collect()
     }
 
     /// Get a BTreeMap of asks with price as key and PriceLevel as value
-    pub fn get_bt_asks(&self) -> BTreeMap<u128, PriceLevel> {
+    ///
+    /// # Errors
+    /// Returns [`OrderBookError::PriceLevelError`] if rebuilding a level
+    /// from its snapshot fails validation (pricelevel 0.9 validates
+    /// snapshot admission instead of trusting it).
+    pub fn get_bt_asks(&self) -> Result<BTreeMap<u128, PriceLevel>, OrderBookError> {
         self.asks
             .iter()
             .map(|entry| {
                 let price = *entry.key();
                 let snapshot = entry.value().snapshot();
-                let price_level = PriceLevel::from(&snapshot);
-                (price, price_level)
+                let price_level = PriceLevel::try_from(&snapshot)?;
+                Ok((price, price_level))
             })
             .collect()
     }
