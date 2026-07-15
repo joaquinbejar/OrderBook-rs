@@ -37,9 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`tests/unit/props_quantity_update_priority.rs`). **Migration note:**
   snapshots captured with pricelevel < 0.9 restore a demoted order at its
   old `(timestamp, seq)` position — re-snapshot after upgrading to pin the
-  corrected order. No orderbook envelope change:
-  `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` stays 2; the embedded statistics
-  gained an optional `stats_degraded` field that legacy snapshots omit.
+  corrected order.
+- **Snapshot package format bumped to v3 (#206).** The pricelevel 0.9
+  statistics schema can serialize a `stats_degraded` field that a
+  pricelevel 0.8 reader rejects with `unknown field`, so labelling such
+  payloads `version: 2` (as #205 initially shipped) mislabelled them as
+  0.11-compatible. Newly written packages are stamped `3`; reads accept
+  `2..=3` (`ORDERBOOK_SNAPSHOT_MIN_READ_VERSION`), so legacy v2 packages
+  with the 8-field statistics shape still restore; `1` and future versions
+  are rejected with the existing typed error, and the checksum is
+  validated for both supported versions. Covered by a legacy-v2 restore
+  fixture and a real-engine degraded-statistics (notional > `u64::MAX`)
+  round-trip.
 
 ### Added
 

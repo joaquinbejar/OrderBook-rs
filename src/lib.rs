@@ -56,10 +56,13 @@
 //!   (snapshot-to-level conversion is validating and fallible upstream), and
 //!   the re-exported pricelevel surface changed —
 //!   `PriceLevel::add_order` returns `Result`, `matchable_quantity` takes
-//!   the taker id, `PriceLevelError` gained `DuplicateOrderId`. No orderbook
-//!   envelope format change: `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` stays 2;
-//!   pricelevel statistics gained an optional `stats_degraded` field that
-//!   old snapshots simply omit.
+//!   the taker id, `PriceLevelError` gained `DuplicateOrderId`.
+//! - **Snapshot package format v3 (#206).** Pricelevel 0.9 statistics can
+//!   serialize a `stats_degraded` field that 0.8 readers reject, so newly
+//!   written packages are stamped `ORDERBOOK_SNAPSHOT_FORMAT_VERSION = 3`.
+//!   Reads accept `ORDERBOOK_SNAPSHOT_MIN_READ_VERSION (2)..=3` — legacy v2
+//!   packages still restore — while `1` and future versions stay rejected
+//!   with the existing typed error.
 //!
 //! ## What's New in Version 0.11.0
 //!
