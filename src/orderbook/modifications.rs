@@ -6,7 +6,7 @@ use crate::orderbook::order_state::{CancelReason, OrderStatus};
 use crate::orderbook::reject_reason::RejectReason;
 use crate::orderbook::trade::TradeResult;
 use either::Either;
-use pricelevel::{Id, OrderType, OrderUpdate, PriceLevel, Quantity, Side};
+use pricelevel::{Id, OrderType, OrderUpdate, PriceLevel, Quantity, Side, TakerKind};
 use std::sync::Arc;
 use tracing::trace;
 
@@ -274,6 +274,9 @@ where
         &self,
         update: OrderUpdate,
     ) -> Result<Option<Arc<OrderType<T>>>, OrderBookError> {
+        // #209: shared submit gate for the whole modify — its internal
+        // cancel-then-add sequences call the ungated inner variants.
+        let _gate = self.submit_gate_read();
         // Gate non-cancel variants on the kill switch. Cancel passes
         // through unchanged so operators can drain the book. The
         // existing order stays live — only the modification is
@@ -357,8 +360,21 @@ where
                     // updated order. `add_order` re-runs its own checks;
                     // post-cancel the account count is restored so its risk
                     // check passes — consistent with the pre-guard.
-                    self.cancel_order(order_id)?;
-                    let result = self.add_order(new_order)?;
+                    // Ungated inner variants: `update_order` already holds
+                    // the shared submit gate (#209); the public wrappers
+                    // would re-acquire it (std RwLock is not reentrant).
+                    // The re-add runs under the SHARED gate, so it must
+                    // never be a fill-or-kill (whose all-or-nothing window
+                    // requires the exclusive gate). Unreachable today — an
+                    // FOK never rests, so it can never be modified — but
+                    // enforced so a future TIF change cannot silently void
+                    // the #209 guarantee.
+                    debug_assert!(
+                        !new_order.is_fill_or_kill(),
+                        "a resting order can never carry FOK; the shared-gate re-add relies on it"
+                    );
+                    self.cancel_order_with_reason(order_id, CancelReason::UserRequested)?;
+                    let result = self.add_order_inner(new_order, false)?.0;
                     Ok(Some(result))
                 } else {
                     Ok(None) // Order not found
@@ -522,8 +538,21 @@ where
 
                     // Both checks passed: cancel the original and add the
                     // updated order.
-                    self.cancel_order(order_id)?;
-                    let result = self.add_order(new_order)?;
+                    // Ungated inner variants: `update_order` already holds
+                    // the shared submit gate (#209); the public wrappers
+                    // would re-acquire it (std RwLock is not reentrant).
+                    // The re-add runs under the SHARED gate, so it must
+                    // never be a fill-or-kill (whose all-or-nothing window
+                    // requires the exclusive gate). Unreachable today — an
+                    // FOK never rests, so it can never be modified — but
+                    // enforced so a future TIF change cannot silently void
+                    // the #209 guarantee.
+                    debug_assert!(
+                        !new_order.is_fill_or_kill(),
+                        "a resting order can never carry FOK; the shared-gate re-add relies on it"
+                    );
+                    self.cancel_order_with_reason(order_id, CancelReason::UserRequested)?;
+                    let result = self.add_order_inner(new_order, false)?.0;
                     Ok(Some(result))
                 } else {
                     Ok(None) // Order not found
@@ -708,8 +737,21 @@ where
 
                     // Both checks passed: cancel the original and add the
                     // new order.
-                    self.cancel_order(order_id)?;
-                    let result = self.add_order(new_order)?;
+                    // Ungated inner variants: `update_order` already holds
+                    // the shared submit gate (#209); the public wrappers
+                    // would re-acquire it (std RwLock is not reentrant).
+                    // The re-add runs under the SHARED gate, so it must
+                    // never be a fill-or-kill (whose all-or-nothing window
+                    // requires the exclusive gate). Unreachable today — an
+                    // FOK never rests, so it can never be modified — but
+                    // enforced so a future TIF change cannot silently void
+                    // the #209 guarantee.
+                    debug_assert!(
+                        !new_order.is_fill_or_kill(),
+                        "a resting order can never carry FOK; the shared-gate re-add relies on it"
+                    );
+                    self.cancel_order_with_reason(order_id, CancelReason::UserRequested)?;
+                    let result = self.add_order_inner(new_order, false)?.0;
                     Ok(Some(result))
                 } else {
                     Ok(None) // Original order not found
@@ -723,6 +765,9 @@ where
     /// Tracks the cancellation as `CancelReason::UserRequested` in the
     /// order state tracker (if configured).
     pub fn cancel_order(&self, order_id: Id) -> Result<Option<Arc<OrderType<T>>>, OrderBookError> {
+        // #209: shared gate — a concurrent FOK's exclusive window must not
+        // interleave with this cancel.
+        let _gate = self.submit_gate_read();
         self.cancel_order_with_reason(order_id, CancelReason::UserRequested)
     }
 
@@ -1233,6 +1278,9 @@ where
     /// validation, tick/lot validation, or matching work.
     #[inline]
     pub fn add_order(&self, order: OrderType<T>) -> Result<Arc<OrderType<T>>, OrderBookError> {
+        // #209: shared gate for ordinary submits, exclusive for FOK so its
+        // feasibility + sweep window excludes every concurrent mutation.
+        let _gate = self.acquire_submit_gate(order.is_fill_or_kill());
         self.add_order_inner(order, false).map(|(order, _)| order)
     }
 
@@ -1272,6 +1320,8 @@ where
         &self,
         order: OrderType<T>,
     ) -> Result<(Arc<OrderType<T>>, Option<TradeResult>), OrderBookError> {
+        // #209: same gating as `add_order`.
+        let _gate = self.acquire_submit_gate(order.is_fill_or_kill());
         self.add_order_inner(order, true)
     }
 
@@ -1416,17 +1466,56 @@ where
 
         self.cache.invalidate();
         // Attempt to match the order immediately (with STP user_id propagation).
-        // The outcome also carries whether STP cancelled the taker (#97).
+        // The outcome also carries whether STP cancelled the taker (#97) and
+        // whether a per-level post-only guard refused to trade (#209).
+        // Threading the taker's real kind gives post-only its structural
+        // never-trades guarantee under every interleaving — the
+        // `will_cross_market` precheck in `validate_order_shape` remains
+        // only a fast-path reject.
+        // Deliberately total over today's `TakerKind`: everything that is
+        // not post-only — including MarketToLimit, which is MEANT to take
+        // liquidity — sweeps as `Standard`. A future third `TakerKind`
+        // variant must be routed here explicitly.
+        let taker_kind = if order.is_post_only() {
+            TakerKind::PostOnly
+        } else {
+            TakerKind::Standard
+        };
         let MatchOutcome {
             result: match_result,
             taker_stp_cancelled,
+            taker_post_only_rejected,
         } = self.match_order_with_user_outcome(
             order.id(),
             order.side(),
             order.total_quantity(), // Use total quantity for matching
             Some(order.price().as_u128()),
             order.user_id(),
+            taker_kind,
         )?;
+
+        // #209: the sweep reached a crossable level with a post-only taker.
+        // pricelevel structurally refused to trade (zero fills), so reject
+        // exactly like the precheck would have — the race between precheck
+        // and sweep can no longer make a post-only order take liquidity.
+        if taker_post_only_rejected {
+            self.track_state(
+                order.id(),
+                OrderStatus::Rejected {
+                    reason: RejectReason::PostOnlyWouldCross,
+                },
+            );
+            crate::orderbook::metrics::record_reject(RejectReason::PostOnlyWouldCross);
+            return Err(OrderBookError::PriceCrossing {
+                price: order.price().as_u128(),
+                side: order.side(),
+                opposite_price: if order.side() == Side::Buy {
+                    self.best_ask().unwrap_or(0)
+                } else {
+                    self.best_bid().unwrap_or(0)
+                },
+            });
+        }
 
         // Emit trades BEFORE any early return below: the STP taker-cancel and
         // unfillable-IOC paths return `Err` after real (non-self) fills already

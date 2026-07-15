@@ -28,7 +28,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **pricelevel 0.9 mutation failures are atomic and observable (#211).**
+- **PostOnly and multi-level FOK decisions are atomic at the book boundary
+  (#209).** Both policies were checked before the sweep but every per-level
+  match ran as a standard GTC taker, leaving a check-then-act race: a
+  post-only order could take liquidity admitted between its precheck and
+  its sweep, and a multi-level fill-or-kill could partially execute when a
+  later level was cancelled after feasibility. PostOnly now threads
+  `TakerKind::PostOnly` into every per-level match — pricelevel's
+  structural guard makes trading impossible under any interleaving, with
+  the sweep-time refusal surfacing as the same `PriceCrossing` rejection
+  as the precheck. The crossability verdict is resolved BEFORE the STP
+  block (post-only precedence over STP, documented on the submit APIs):
+  a rejected post-only is a pure no-op that never cancels same-user
+  makers as a CancelMaker/CancelBoth side effect. Multi-level FOK
+  acquires a new book-level submit gate (`std::sync::RwLock`, write
+  side) across its feasibility check and sweep; every other mutating
+  entry point (add / update / cancel / mass cancel / evict / market
+  sweeps) takes the read side. **Stated limitation:** while an FOK holds
+  the gate the whole book serializes for that window, and FOK acquisition
+  latency grows with in-flight readers (platform locks are
+  writer-preferring, so FOK does not starve); trade / level listeners
+  fire under the gate and must never re-enter the book on the invoking
+  thread (contract documented on `TradeListener` /
+  `PriceLevelChangedListener`). The matching core itself stays lock-free;
+  HDR benches: add-only p50 958→1042ns (the read acquisition),
+  aggressive-walk and mixed p50/p99 unchanged. Pinned by
+  barrier-synchronized race regressions (contra-admission, later-level
+  cancel, same-user CancelMaker) plus deterministic all-or-nothing tests.
   Three gaps closed on the fallible-mutation integration: (1)
   `OrderUpdate::UpdateQuantity` silently converted every upstream
   `PriceLevelError` into `Ok(None)` and bypassed book-level validation — it

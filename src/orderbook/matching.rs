@@ -56,6 +56,11 @@ pub(crate) struct MatchOutcome {
     pub(crate) result: MatchResult,
     /// `true` when STP cancelled the taker, so any residual must not rest.
     pub(crate) taker_stp_cancelled: bool,
+    /// `true` when a per-level post-only guard refused to trade (#209):
+    /// the taker was submitted as [`TakerKind::PostOnly`] and reached a
+    /// crossable level, so the book must reject it (`PriceCrossing`) —
+    /// structurally zero trades were emitted.
+    pub(crate) taker_post_only_rejected: bool,
 }
 
 impl MatchOutcome {
@@ -65,6 +70,7 @@ impl MatchOutcome {
         Self {
             result,
             taker_stp_cancelled: false,
+            taker_post_only_rejected: false,
         }
     }
 }
@@ -223,7 +229,18 @@ where
         quantity: u64,
         limit_price: Option<u128>,
     ) -> Result<MatchResult, OrderBookError> {
-        self.match_order_with_user(order_id, side, quantity, limit_price, Hash32::zero())
+        // #209: shared submit gate; calls the ungated outcome variant so
+        // the non-reentrant gate is acquired exactly once.
+        let _gate = self.submit_gate_read();
+        self.match_order_with_user_outcome(
+            order_id,
+            side,
+            quantity,
+            limit_price,
+            Hash32::zero(),
+            TakerKind::Standard,
+        )
+        .map(|o| o.result)
     }
 
     /// Internal matching function with Self-Trade Prevention support.
@@ -250,8 +267,17 @@ where
         limit_price: Option<u128>,
         taker_user_id: Hash32,
     ) -> Result<MatchResult, OrderBookError> {
-        self.match_order_with_user_outcome(order_id, side, quantity, limit_price, taker_user_id)
-            .map(|o| o.result)
+        // #209: shared submit gate (see `match_order`).
+        let _gate = self.submit_gate_read();
+        self.match_order_with_user_outcome(
+            order_id,
+            side,
+            quantity,
+            limit_price,
+            taker_user_id,
+            TakerKind::Standard,
+        )
+        .map(|o| o.result)
     }
 
     /// Like [`Self::match_order_with_user`] but returns the full [`MatchOutcome`],
@@ -264,6 +290,7 @@ where
         quantity: u64,
         limit_price: Option<u128>,
         taker_user_id: Hash32,
+        taker_kind: TakerKind,
     ) -> Result<MatchOutcome, OrderBookError> {
         self.match_order_inner(
             order_id,
@@ -273,6 +300,7 @@ where
                 limit_price,
             },
             taker_user_id,
+            taker_kind,
         )
     }
 
@@ -302,6 +330,7 @@ where
             side,
             MatchMode::QuoteAmount { amount },
             taker_user_id,
+            TakerKind::Standard,
         )
         .map(|o| o.result)
     }
@@ -327,6 +356,7 @@ where
         side: Side,
         mode: MatchMode,
         taker_user_id: Hash32,
+        taker_kind: TakerKind,
     ) -> Result<MatchOutcome, OrderBookError> {
         self.cache.invalidate();
         let mut match_result =
@@ -377,6 +407,7 @@ where
 
         // Track whether STP cancelled the taker
         let mut stp_taker_cancelled = false;
+        let mut post_only_rejected = false;
 
         // Iterate through prices in optimal order (already sorted by SkipMap)
         // For buy orders: iterate asks in ascending order (best ask first)
@@ -408,6 +439,37 @@ where
 
             // Get price level value from the entry
             let price_level = entry.value();
+
+            // --- Post-only crossability verdict (#209) ---
+            // Resolved BEFORE the STP block: a post-only taker must be a
+            // pure no-op on rejection, and the CancelMaker / CancelBoth
+            // arms below cancel same-user makers as a side effect. The
+            // probe delegates to pricelevel's structural guard — for a
+            // `TakerKind::PostOnly` taker `match_order` is a guaranteed
+            // zero-mutation dry run: `Rejected` when the level holds
+            // matchable depth (self-id-skips and unmatchable resting
+            // orders excluded), `NotFilled` otherwise. Post-only
+            // therefore always resolves to either a clean walk-on or a
+            // clean `PriceCrossing` rejection — same policy as the
+            // `will_cross_market` precheck, makers untouched, STP never
+            // consulted (post-only precedence over STP is intentional
+            // and documented on `update_order` / `add_post_only_order`).
+            if taker_kind.is_post_only() {
+                let probe = price_level.match_order(
+                    qty_cap,
+                    order_id,
+                    TimeInForce::Gtc,
+                    taker_kind,
+                    taker_ts,
+                    &self.transaction_id_generator,
+                );
+                if probe.outcome().was_rejected() {
+                    post_only_rejected = true;
+                    break;
+                }
+                // No matchable depth at this crossing level; walk on.
+                continue;
+            }
 
             // --- STP pre-processing ---
             // When STP is active, check for self-trade conflicts before matching.
@@ -442,7 +504,7 @@ where
                                     match_qty,
                                     order_id,
                                     TimeInForce::Gtc,
-                                    TakerKind::Standard,
+                                    taker_kind,
                                     taker_ts,
                                     &self.transaction_id_generator,
                                 );
@@ -507,7 +569,7 @@ where
                                     match_qty,
                                     order_id,
                                     TimeInForce::Gtc,
-                                    TakerKind::Standard,
+                                    taker_kind,
                                     taker_ts,
                                     &self.transaction_id_generator,
                                 );
@@ -549,7 +611,7 @@ where
                 qty_cap,
                 order_id,
                 TimeInForce::Gtc,
-                TakerKind::Standard,
+                taker_kind,
                 taker_ts,
                 &self.transaction_id_generator,
             );
@@ -685,6 +747,7 @@ where
         Ok(MatchOutcome {
             result: match_result,
             taker_stp_cancelled: stp_taker_cancelled,
+            taker_post_only_rejected: post_only_rejected,
         })
     }
 

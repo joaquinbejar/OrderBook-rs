@@ -149,6 +149,9 @@ where
     /// # }
     /// ```
     pub fn cancel_all_orders(&self) -> MassCancelResult {
+        // #209: shared submit gate — the bulk walk must not interleave
+        // with a concurrent FOK's exclusive feasibility + sweep window.
+        let _gate = self.submit_gate_read();
         self.cache.invalidate();
         trace!("Order book {}: Mass cancel ALL orders (bulk)", self.symbol);
 
@@ -300,6 +303,9 @@ where
     /// # }
     /// ```
     pub fn cancel_orders_by_side(&self, side: Side) -> MassCancelResult {
+        // #209: shared submit gate — the bulk walk must not interleave
+        // with a concurrent FOK's exclusive feasibility + sweep window.
+        let _gate = self.submit_gate_read();
         trace!(
             "Order book {}: Mass cancel orders on side {}",
             self.symbol, side
@@ -374,6 +380,9 @@ where
     /// # }
     /// ```
     pub fn cancel_orders_by_user(&self, user_id: Hash32) -> MassCancelResult {
+        // #209: shared submit gate — the bulk walk must not interleave
+        // with a concurrent FOK's exclusive feasibility + sweep window.
+        let _gate = self.submit_gate_read();
         trace!(
             "Order book {}: Mass cancel orders for user {}",
             self.symbol, user_id
@@ -448,6 +457,8 @@ where
         min_price: u128,
         max_price: u128,
     ) -> MassCancelResult {
+        // #209: shared submit gate (see `cancel_all_orders`).
+        let _gate = self.submit_gate_read();
         trace!(
             "Order book {}: Mass cancel orders on side {} in price range [{}, {}]",
             self.symbol, side, min_price, max_price
@@ -561,6 +572,8 @@ where
     /// # }
     /// ```
     pub fn evict_expired_orders(&self, now_ms: TimestampMs) -> Vec<Arc<OrderType<T>>> {
+        // #209: shared submit gate (see `cancel_all_orders`).
+        let _gate = self.submit_gate_read();
         let now = now_ms.as_u64();
         trace!(
             "Order book {}: Evicting expired orders as of {} ms",

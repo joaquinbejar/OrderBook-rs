@@ -107,6 +107,20 @@ pub struct OrderBook<T = ()> {
     /// A cache for storing best bid/ask prices to avoid recalculation
     pub(super) cache: PriceLevelCache,
 
+    /// Book-level linearization gate for multi-level fill-or-kill (#209).
+    ///
+    /// Every mutating entry point takes the **read** side (uncontended:
+    /// one atomic RMW pair); a fill-or-kill submit takes the **write**
+    /// side across its feasibility check and sweep, so no concurrent
+    /// add / cancel / update can invalidate the all-or-nothing decision
+    /// between the two. This is deliberately `std::sync::RwLock` — the
+    /// contention case (FOK flow) is rare, and a skiplist / dashmap is
+    /// the wrong shape for an exclusion window (see CLAUDE.md). The
+    /// matching hot path itself stays lock-free; the gate wraps entry
+    /// points only and is never held across `.await` (the core is
+    /// synchronous).
+    pub(super) submit_gate: std::sync::RwLock<()>,
+
     /// listens to possible trades when an order is added
     pub trade_listener: Option<TradeListener>,
 
@@ -435,6 +449,7 @@ where
             risk_state: RiskState::new(),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
+            submit_gate: std::sync::RwLock::new(()),
             market_close_timestamp: AtomicU64::new(0),
             has_market_close: AtomicBool::new(false),
             cache: PriceLevelCache::new(),
@@ -723,6 +738,51 @@ where
             .check_limit_admission(account, price, quantity, reference)
     }
 
+    /// Acquire the shared (read) side of the submit gate (#209). Poisoning
+    /// can only occur if a panic unwound while a guard was held; the
+    /// protected data is `()` so recovery is always safe — log and
+    /// continue rather than propagating the poison.
+    pub(super) fn submit_gate_read(&self) -> std::sync::RwLockReadGuard<'_, ()> {
+        self.submit_gate.read().unwrap_or_else(|poisoned| {
+            tracing::error!("submit gate poisoned by a prior panic; recovering read guard");
+            poisoned.into_inner()
+        })
+    }
+
+    /// Acquire the exclusive (write) side of the submit gate for a
+    /// fill-or-kill submit (#209). See [`Self::submit_gate_read`] for the
+    /// poisoning policy.
+    pub(super) fn submit_gate_write(&self) -> std::sync::RwLockWriteGuard<'_, ()> {
+        self.submit_gate.write().unwrap_or_else(|poisoned| {
+            tracing::error!("submit gate poisoned by a prior panic; recovering write guard");
+            poisoned.into_inner()
+        })
+    }
+
+    /// Acquire the submit gate in the mode the submit needs: exclusive
+    /// for fill-or-kill (its multi-level all-or-nothing decision must not
+    /// interleave with any other mutation), shared for everything else.
+    ///
+    /// # Invariant: no nested acquisition
+    ///
+    /// `std::sync::RwLock` is not reentrant, and the platform
+    /// implementations are writer-preferring — a nested read acquisition
+    /// deadlocks whenever a writer is queued in between. Gate acquisition
+    /// therefore lives ONLY in the public mutating entry points, which
+    /// call ungated inner variants for any internal composition
+    /// (`add_order_inner`, `cancel_order_with_reason`,
+    /// `match_order_with_user_outcome`). The same rule extends to user
+    /// callbacks: see the re-entrancy contract on
+    /// [`TradeListener`](crate::orderbook::trade::TradeListener) and
+    /// [`PriceLevelChangedListener`](crate::orderbook::book_change_event::PriceLevelChangedListener).
+    pub(super) fn acquire_submit_gate(&self, exclusive: bool) -> SubmitGateGuard<'_> {
+        if exclusive {
+            SubmitGateGuard::Write(self.submit_gate_write())
+        } else {
+            SubmitGateGuard::Read(self.submit_gate_read())
+        }
+    }
+
     /// Apply the pre-trade risk gates to an in-place **modify** of a
     /// resting order (`UpdatePrice` / `UpdatePriceAndQuantity` /
     /// `Replace`).
@@ -808,6 +868,7 @@ where
             risk_state: RiskState::new(),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
+            submit_gate: std::sync::RwLock::new(()),
             market_close_timestamp: AtomicU64::new(0),
             has_market_close: AtomicBool::new(false),
             cache: PriceLevelCache::new(),
@@ -856,6 +917,7 @@ where
             risk_state: RiskState::new(),
             last_trade_price: AtomicCell::new(0),
             has_traded: AtomicBool::new(false),
+            submit_gate: std::sync::RwLock::new(()),
             market_close_timestamp: AtomicU64::new(0),
             has_market_close: AtomicBool::new(false),
             cache: PriceLevelCache::new(),
@@ -2805,6 +2867,8 @@ where
             "Order book {}: Matching notional market order {} for {} at side {:?}",
             self.symbol, order_id, amount, side
         );
+        // #209: shared submit gate — notional market sweeps mutate the book.
+        let _gate = self.submit_gate_read();
         let match_result =
             OrderBook::<T>::match_order_by_amount_with_user(self, order_id, side, amount, user_id)?;
 
@@ -4088,4 +4152,14 @@ struct PreparedSnapshotLevels {
     bids: Vec<(u128, Arc<PriceLevel>)>,
     /// `(price, level)` pairs for the ask side, ascending by price.
     asks: Vec<(u128, Arc<PriceLevel>)>,
+}
+
+/// Guard over the submit gate (#209) in either mode — held for the length
+/// of one mutating entry-point call. Only the drop timing matters, hence
+/// the unused-field allowances.
+pub(super) enum SubmitGateGuard<'a> {
+    /// Shared mode: every non-FOK mutating entry point.
+    Read(#[allow(dead_code)] std::sync::RwLockReadGuard<'a, ()>),
+    /// Exclusive mode: a fill-or-kill submit's feasibility + sweep window.
+    Write(#[allow(dead_code)] std::sync::RwLockWriteGuard<'a, ()>),
 }

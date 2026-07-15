@@ -1,3 +1,4 @@
+mod atomic_postonly_fok_tests;
 mod book_coverage_tests;
 mod book_manager_cross_cancel_tests;
 mod clock_determinism_tests;

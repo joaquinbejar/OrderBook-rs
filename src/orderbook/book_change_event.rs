@@ -43,6 +43,14 @@ pub struct PriceLevelChangedEvent {
 /// This type alias represents a function that will be called whenever
 /// a price level in the order book changes (e.g., order added, cancelled,
 /// matched, or updated).
+/// Callback invoked with every price-level change event.
+///
+/// # Re-entrancy contract (#209)
+///
+/// Fires while the book's submit gate is held. Like
+/// [`TradeListener`](crate::orderbook::trade::TradeListener), it must
+/// never call back into the same `OrderBook`'s mutating API on the
+/// invoking thread — hand the event off to a queue or channel instead.
 pub type PriceLevelChangedListener = Arc<dyn Fn(PriceLevelChangedEvent) + Send + Sync>;
 
 #[cfg(test)]
