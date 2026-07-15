@@ -17,6 +17,7 @@ mod matching_coverage_tests;
 mod matching_coverage_tests_extended;
 mod modifications_coverage_tests;
 mod modify_atomic_tests;
+mod mutation_failure_atomicity_tests;
 mod operations_coverage_tests;
 mod operations_coverage_tests_extended;
 mod order_state_tests;
