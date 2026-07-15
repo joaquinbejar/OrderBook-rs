@@ -221,6 +221,7 @@ impl From<&OrderBookError> for RejectReason {
             OrderBookError::InsufficientLiquidityNotional { .. } => Self::InsufficientLiquidity,
             OrderBookError::InvalidTickSize { .. } => Self::InvalidPrice,
             OrderBookError::InvalidLotSize { .. } => Self::InvalidQuantity,
+            OrderBookError::QuantityOverflow { .. } => Self::InvalidQuantity,
             OrderBookError::OrderSizeOutOfRange { .. } => Self::OrderSizeOutOfRange,
             OrderBookError::DuplicateOrderId { .. } => Self::DuplicateOrderId,
             OrderBookError::MissingUserId { .. } => Self::MissingUserId,

@@ -57,6 +57,13 @@
 //!   the re-exported pricelevel surface changed —
 //!   `PriceLevel::add_order` returns `Result`, `matchable_quantity` takes
 //!   the taker id, `PriceLevelError` gained `DuplicateOrderId`.
+//! - **Two-tranche quantity conservation (#210).** An aggressive iceberg's
+//!   residual rests with exactly the unmatched total distributed across
+//!   tranches (`visible = min(display, remainder)`, rest hidden) instead of
+//!   inflating the book, and a `visible + hidden` overflow is rejected at
+//!   admission with the new typed `OrderBookError::QuantityOverflow`
+//!   before any trade or mutation. Conservation
+//!   (`executed + resting == submitted`) is property-tested.
 //! - **`snapshots_match` compares full maker state and FIFO (#208).** The
 //!   replay oracle now checks every level's order vector in
 //!   queue-consumption order (ids, variants, users, quantities,

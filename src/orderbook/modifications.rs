@@ -17,14 +17,54 @@ pub trait OrderQuantity<T = ()> {
     fn quantity(&self) -> u64;
 
     /// Returns the total quantity of the order (e.g., visible + hidden).
+    ///
+    /// Saturates on `visible + hidden` overflow for the two-tranche kinds.
+    /// Every order admitted through `add_order` / the submit APIs / the
+    /// validate-first modify path has already passed
+    /// [`Self::checked_total_quantity`] validation (#210), so the
+    /// saturating arm is unreachable for those book-resident orders; use
+    /// the checked variant at admission boundaries. Snapshot restore
+    /// trusts its (checksummed) source and does not re-validate totals —
+    /// consistent with its existing saturating risk rebuild.
     fn total_quantity(&self) -> u64;
 
+    /// Returns the total quantity, or `None` when `visible + hidden`
+    /// overflows `u64` for a two-tranche order (Iceberg / Reserve). The
+    /// direct add path rejects such orders before the risk gate, and every
+    /// admission path rejects them before any match, listener, or map
+    /// mutation (#210).
+    #[must_use = "a None total means the order is unrepresentable and must be rejected"]
+    fn checked_total_quantity(&self) -> Option<u64>;
+
     /// Sets the new quantity for an order, handling the logic for different types.
-    /// For iceberg orders, it adjusts the visible and hidden parts correctly.
+    ///
+    /// This is the **user-facing quantity update** semantic: for iceberg
+    /// orders the value is applied to the visible tranche (matching
+    /// [`Self::quantity`], which returns the visible quantity), leaving
+    /// the hidden tranche unchanged. For adjusting an aggressive taker's
+    /// **total** remainder before resting, use
+    /// [`Self::set_total_remaining`] instead — applying a total to the
+    /// visible tranche manufactures liquidity (#210).
     fn set_quantity(&mut self, new_total_quantity: u64);
+
+    /// Distributes a **total** remaining quantity across the order's
+    /// tranches before resting an aggressive taker's residual (#210).
+    ///
+    /// - One-tranche kinds: the quantity becomes `remaining_total`.
+    /// - Iceberg: the submitted visible quantity acts as the display
+    ///   size — `visible = min(display, remaining_total)`,
+    ///   `hidden = remaining_total − visible`. A fill smaller than the
+    ///   visible tranche shrinks only the display; a fill past it
+    ///   consumes hidden; conservation always holds:
+    ///   `visible + hidden == remaining_total`.
+    /// - Reserve: reduction is drawn from the visible tranche first, then
+    ///   hidden, with the existing replenish-on-empty behaviour (same
+    ///   policy `set_quantity` already implemented for Reserve).
+    fn set_total_remaining(&mut self, remaining_total: u64);
 }
 
 impl<T> OrderQuantity<T> for OrderType<T> {
+    #[inline]
     fn quantity(&self) -> u64 {
         match self {
             OrderType::Standard { quantity, .. } => quantity.as_u64(),
@@ -41,6 +81,7 @@ impl<T> OrderQuantity<T> for OrderType<T> {
         }
     }
 
+    #[inline]
     fn total_quantity(&self) -> u64 {
         match self {
             OrderType::Standard { quantity, .. } => quantity.as_u64(),
@@ -65,6 +106,26 @@ impl<T> OrderQuantity<T> for OrderType<T> {
         }
     }
 
+    #[inline]
+    fn checked_total_quantity(&self) -> Option<u64> {
+        match self {
+            OrderType::IcebergOrder {
+                visible_quantity,
+                hidden_quantity,
+                ..
+            }
+            | OrderType::ReserveOrder {
+                visible_quantity,
+                hidden_quantity,
+                ..
+            } => visible_quantity
+                .as_u64()
+                .checked_add(hidden_quantity.as_u64()),
+            _ => Some(self.total_quantity()),
+        }
+    }
+
+    #[inline]
     fn set_quantity(&mut self, new_total_quantity: u64) {
         match self {
             OrderType::Standard { quantity, .. }
@@ -83,35 +144,73 @@ impl<T> OrderQuantity<T> for OrderType<T> {
                 *visible_quantity = Quantity::new(new_total_quantity);
                 // Hidden quantity remains unchanged
             }
-            OrderType::ReserveOrder {
+            OrderType::ReserveOrder { .. } => reduce_reserve_to_total(self, new_total_quantity),
+        }
+    }
+
+    #[inline]
+    fn set_total_remaining(&mut self, remaining_total: u64) {
+        match self {
+            OrderType::Standard { quantity, .. }
+            | OrderType::PostOnly { quantity, .. }
+            | OrderType::TrailingStop { quantity, .. }
+            | OrderType::PeggedOrder { quantity, .. }
+            | OrderType::MarketToLimit { quantity, .. } => {
+                *quantity = Quantity::new(remaining_total)
+            }
+
+            OrderType::IcebergOrder {
                 visible_quantity,
                 hidden_quantity,
-                replenish_amount,
                 ..
             } => {
-                let original_total = visible_quantity
-                    .as_u64()
-                    .saturating_add(hidden_quantity.as_u64());
-                let amount_to_reduce = original_total.saturating_sub(new_total_quantity);
-
-                let vis = visible_quantity.as_u64();
-                let filled_from_visible = amount_to_reduce.min(vis);
-                *visible_quantity = Quantity::new(vis.saturating_sub(filled_from_visible));
-
-                let remaining_to_reduce = amount_to_reduce - filled_from_visible;
-                *hidden_quantity =
-                    Quantity::new(hidden_quantity.as_u64().saturating_sub(remaining_to_reduce));
-
-                if visible_quantity.as_u64() == 0 && hidden_quantity.as_u64() > 0 {
-                    let refresh = replenish_amount
-                        .map(|q| q.get())
-                        .unwrap_or(0)
-                        .min(hidden_quantity.as_u64());
-                    *visible_quantity = Quantity::new(refresh);
-                    *hidden_quantity =
-                        Quantity::new(hidden_quantity.as_u64().saturating_sub(refresh));
-                }
+                // The submitted visible quantity is the display size. The
+                // residual rests with at most one display tranche visible
+                // and the rest hidden — conservation by construction:
+                // visible + hidden == remaining_total.
+                let display = visible_quantity.as_u64();
+                let visible = display.min(remaining_total);
+                *visible_quantity = Quantity::new(visible);
+                *hidden_quantity = Quantity::new(remaining_total - visible);
             }
+            OrderType::ReserveOrder { .. } => reduce_reserve_to_total(self, remaining_total),
+        }
+    }
+}
+
+/// Shared Reserve-order reduction: draw the reduction from the visible
+/// tranche first, then hidden, replenishing the visible tranche when it
+/// empties while hidden remains. Used by both the user-facing
+/// `set_quantity` and the residual `set_total_remaining` — Reserve
+/// already treats its input as a total.
+fn reduce_reserve_to_total<T>(order: &mut OrderType<T>, new_total_quantity: u64) {
+    if let OrderType::ReserveOrder {
+        visible_quantity,
+        hidden_quantity,
+        replenish_amount,
+        ..
+    } = order
+    {
+        let original_total = visible_quantity
+            .as_u64()
+            .saturating_add(hidden_quantity.as_u64());
+        let amount_to_reduce = original_total.saturating_sub(new_total_quantity);
+
+        let vis = visible_quantity.as_u64();
+        let filled_from_visible = amount_to_reduce.min(vis);
+        *visible_quantity = Quantity::new(vis.saturating_sub(filled_from_visible));
+
+        let remaining_to_reduce = amount_to_reduce - filled_from_visible;
+        *hidden_quantity =
+            Quantity::new(hidden_quantity.as_u64().saturating_sub(remaining_to_reduce));
+
+        if visible_quantity.as_u64() == 0 && hidden_quantity.as_u64() > 0 {
+            let refresh = replenish_amount
+                .map(|q| q.get())
+                .unwrap_or(0)
+                .min(hidden_quantity.as_u64());
+            *visible_quantity = Quantity::new(refresh);
+            *hidden_quantity = Quantity::new(hidden_quantity.as_u64().saturating_sub(refresh));
         }
     }
 }
@@ -771,6 +870,18 @@ where
     /// # Errors
     /// Returns the first failing check's typed [`OrderBookError`].
     pub(super) fn validate_order_shape(&self, order: &OrderType<T>) -> Result<(), OrderBookError> {
+        // Two-tranche total representability (#210): an Iceberg / Reserve
+        // whose visible + hidden overflows u64 cannot be tracked by any of
+        // the engine's quantity arithmetic — reject it before every other
+        // check so the saturating `total_quantity` below (and everywhere
+        // downstream) is provably unreachable for admitted orders.
+        if order.checked_total_quantity().is_none() {
+            return Err(OrderBookError::QuantityOverflow {
+                visible: order.visible_quantity().as_u64(),
+                hidden: order.hidden_quantity().as_u64(),
+            });
+        }
+
         // STP user_id enforcement: when STP is enabled, all orders must carry
         // a non-zero user_id so that self-trade checks can identify the owner.
         if self.stp_mode != crate::orderbook::stp::STPMode::None
@@ -997,6 +1108,14 @@ where
                     },
                 );
             }
+            OrderBookError::QuantityOverflow { .. } => {
+                self.track_state(
+                    order.id(),
+                    OrderStatus::Rejected {
+                        reason: RejectReason::InvalidQuantity,
+                    },
+                );
+            }
             OrderBookError::InvalidTickSize { .. } => {
                 self.track_state(
                     order.id(),
@@ -1110,6 +1229,20 @@ where
         want_result: bool,
     ) -> Result<(Arc<OrderType<T>>, Option<TradeResult>), OrderBookError> {
         self.check_kill_switch_or_reject(order.id())?;
+        // Representability gate (#210): an unrepresentable two-tranche
+        // total must be rejected before the risk gate below, which would
+        // otherwise evaluate the account's notional against the SATURATED
+        // `u64::MAX` total and reject with a misleading risk-family error.
+        // `validate_order_shape` re-checks this for the shared modify path;
+        // the duplicate check is a single jump-table match + checked_add.
+        if order.checked_total_quantity().is_none() {
+            let err = OrderBookError::QuantityOverflow {
+                visible: order.visible_quantity().as_u64(),
+                hidden: order.hidden_quantity().as_u64(),
+            };
+            self.record_shape_rejection(&order, &err);
+            return Err(err);
+        }
         // Pre-trade risk gate: per-account open-orders / notional /
         // price band. No-op when no `RiskConfig` is installed.
         // Documented order: kill_switch → risk → STP → fees → match.
@@ -1259,10 +1392,15 @@ where
                 });
             }
 
-            // Update the order with the remaining quantity
-            // For iceberg orders, only update if there was actual matching (remaining < total)
+            // Rest the taker's residual. `remaining_quantity` is the TOTAL
+            // unmatched quantity, so distribute it across the tranches with
+            // `set_total_remaining` (#210): for a partially-filled iceberg
+            // the submitted visible quantity acts as the display size and
+            // the rest stays hidden — assigning the total to the visible
+            // tranche (the old `set_quantity` semantics) manufactured
+            // liquidity by keeping the original hidden tranche on top.
             if match_result.remaining_quantity().as_u64() < order.total_quantity() {
-                order.set_quantity(match_result.remaining_quantity().as_u64()); // Now uses the trait method
+                order.set_total_remaining(match_result.remaining_quantity().as_u64());
             }
 
             let price = order.price().as_u128();

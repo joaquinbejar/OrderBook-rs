@@ -125,6 +125,20 @@ pub enum OrderBookError {
         order_id: pricelevel::Id,
     },
 
+    /// Order rejected because its two-tranche total (`visible + hidden`)
+    /// overflows `u64` and therefore cannot be represented by the engine's
+    /// quantity arithmetic (#210). On the direct `add_order` path this is
+    /// raised before the risk gate (which would otherwise evaluate the
+    /// saturated total), and always before any match, listener, or book
+    /// mutation. Maps to the stable wire code
+    /// `RejectReason::InvalidQuantity`.
+    QuantityOverflow {
+        /// Visible-tranche quantity of the rejected order.
+        visible: u64,
+        /// Hidden-tranche quantity of the rejected order.
+        hidden: u64,
+    },
+
     /// Order rejected because `user_id` is `Hash32::zero()` while
     /// Self-Trade Prevention is enabled. All orders must carry a non-zero
     /// `user_id` when STP mode is active.
@@ -291,6 +305,12 @@ impl fmt::Display for OrderBookError {
                 write!(
                     f,
                     "missing user_id: order {order_id} rejected because STP is enabled and user_id is zero"
+                )
+            }
+            OrderBookError::QuantityOverflow { visible, hidden } => {
+                write!(
+                    f,
+                    "quantity overflow: visible {visible} + hidden {hidden} exceeds u64"
                 )
             }
             OrderBookError::SelfTradePrevented {
@@ -487,6 +507,12 @@ impl Clone for OrderBookError {
             OrderBookError::MissingUserId { order_id } => OrderBookError::MissingUserId {
                 order_id: *order_id,
             },
+            OrderBookError::QuantityOverflow { visible, hidden } => {
+                OrderBookError::QuantityOverflow {
+                    visible: *visible,
+                    hidden: *hidden,
+                }
+            }
             OrderBookError::SelfTradePrevented {
                 mode,
                 taker_order_id,

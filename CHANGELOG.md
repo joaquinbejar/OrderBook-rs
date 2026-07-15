@@ -28,6 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two-tranche quantity conservation (#210).** An aggressive Iceberg /
+  Reserve partial fill assigned the **total** unmatched remainder to the
+  visible tranche while keeping the original hidden tranche — an iceberg
+  `20v/80h` filled by 10 rested `90v/80h`, manufacturing 80 units of
+  liquidity. The residual now rests via the new
+  `OrderQuantity::set_total_remaining` (visible = min(display size,
+  remainder), hidden = remainder − visible; Reserve keeps its
+  visible-first-with-replenish policy), so
+  `executed + resting == submitted` always holds (property-tested).
+  Additionally, a two-tranche total that overflows `u64` (previously
+  silently saturated) is rejected at admission with the new typed
+  `OrderBookError::QuantityOverflow` — on the direct add path before even
+  the risk gate (which would otherwise judge the saturated total), and
+  always before any trade, listener, or book mutation — mapping to the
+  wire code `RejectReason::InvalidQuantity`. `set_quantity` keeps its user-facing
+  visible-tranche semantics for icebergs and is now documented as such.
 - **`snapshots_match` is a full replay oracle (#208).** The replay equality
   check compared only per-level aggregates (price, visible/hidden quantity,
   order count), so two books with the same aggregates but reversed maker
