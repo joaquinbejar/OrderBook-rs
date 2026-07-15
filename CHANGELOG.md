@@ -28,6 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`snapshots_match` is a full replay oracle (#208).** The replay equality
+  check compared only per-level aggregates (price, visible/hidden quantity,
+  order count), so two books with the same aggregates but reversed maker
+  FIFO — or different maker ids, users, order variants, or time-in-force —
+  certified as equal while emitting different trades on the next sweep. It
+  now compares every level's complete order vector in queue-consumption
+  order (pricelevel ≥ 0.9 materializes it that way) via full `OrderType`
+  equality, plus the deterministic statistics counters including
+  `stats_degraded`. Intentionally excluded and documented:
+  `first_arrival_time` (pricelevel stamps it from raw `SystemTime::now()`,
+  outside the injectable clock), `last_execution_time` /
+  `sum_waiting_time` (live ingestion and replay consume different
+  clock-tick budgets by design, so these wall-time aggregates diverge even
+  under identically-seeded injected clocks), and the top-level capture
+  timestamp. Order admission timestamps participate — the journal carries
+  the admitted order verbatim and replay never re-stamps it. **Contract
+  note:** this tightens the public `snapshots_match` /
+  `ReplayEngine::verify` pass condition; aggregate-equal books with
+  different maker identity or FIFO no longer certify as equal.
 - **The upsize queue-priority demotion survives a snapshot round-trip
   (#205).** Level snapshots now materialize orders in queue-consumption
   order (pricelevel 0.9, PriceLevel#109), so

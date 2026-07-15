@@ -157,6 +157,12 @@ fn replay_book_config_default_is_all_defaults() {
 
 // ─── lot_size divergence / parity via MarketOrderByAmount rounding ──────────
 
+/// Fixed maker / taker ids shared by the journal and every ground-truth
+/// live book: since #208 `snapshots_match` compares full order identity,
+/// so the live book must rest the exact orders the journal carries.
+const LOT_ASK_ID: u64 = 11;
+const LOT_TAKER_ID: u64 = 9_999;
+
 /// Builds the shared journal: one resting ask wall, then a notional market buy
 /// that rounds differently under `lot_size`.
 ///
@@ -167,12 +173,11 @@ fn lot_size_journal() -> (InMemoryJournal<()>, u64) {
     let journal: InMemoryJournal<()> = InMemoryJournal::new();
     let mut seq = 0u64;
 
-    let ask_id = Id::new_uuid();
     assert!(
         journal
             .append(&make_add_event(
                 seq,
-                ask_id,
+                Id::from_u64(LOT_ASK_ID),
                 100,
                 10,
                 Side::Sell,
@@ -182,10 +187,14 @@ fn lot_size_journal() -> (InMemoryJournal<()>, u64) {
     );
     seq += 1;
 
-    let taker_id = Id::new_uuid();
     assert!(
         journal
-            .append(&make_market_by_amount_event(seq, taker_id, 700, Side::Buy))
+            .append(&make_market_by_amount_event(
+                seq,
+                Id::from_u64(LOT_TAKER_ID),
+                700,
+                Side::Buy
+            ))
             .is_ok()
     );
 
@@ -203,7 +212,7 @@ fn lot_size_replay_without_config_diverges() {
     let mut live = OrderBook::<()>::with_clock("TEST", stub_clock());
     live.set_lot_size(5);
     live.add_order(OrderType::Standard {
-        id: Id::new_uuid(),
+        id: Id::from_u64(LOT_ASK_ID),
         price: Price::new(100),
         quantity: Quantity::new(10),
         side: Side::Sell,
@@ -213,7 +222,7 @@ fn lot_size_replay_without_config_diverges() {
         extra_fields: (),
     })
     .expect("seed ask");
-    let _ = live.match_market_order_by_amount(Id::new_uuid(), 700, Side::Buy);
+    let _ = live.match_market_order_by_amount(Id::from_u64(LOT_TAKER_ID), 700, Side::Buy);
     let live_snap = live.create_snapshot(usize::MAX);
 
     // Replay WITHOUT config — fresh book has no lot_size, so it takes 7 (not 5).
@@ -240,7 +249,7 @@ fn lot_size_replay_with_config_matches() {
     let mut live = OrderBook::<()>::with_clock("TEST", stub_clock());
     live.set_lot_size(5);
     live.add_order(OrderType::Standard {
-        id: Id::new_uuid(),
+        id: Id::from_u64(LOT_ASK_ID),
         price: Price::new(100),
         quantity: Quantity::new(10),
         side: Side::Sell,
@@ -250,7 +259,7 @@ fn lot_size_replay_with_config_matches() {
         extra_fields: (),
     })
     .expect("seed ask");
-    let _ = live.match_market_order_by_amount(Id::new_uuid(), 700, Side::Buy);
+    let _ = live.match_market_order_by_amount(Id::from_u64(LOT_TAKER_ID), 700, Side::Buy);
     let live_snap = live.create_snapshot(usize::MAX);
 
     // Replay WITH the matching config.
@@ -290,7 +299,7 @@ fn stp_prevented_order_recorded_rejected_is_skipped_on_replay() {
     let journal: InMemoryJournal<()> = InMemoryJournal::new();
 
     // Resting ask from user U (succeeds even under STP — nothing to cross).
-    let ask_id = Id::new_uuid();
+    let ask_id = Id::from_u64(21);
     assert!(
         journal
             .append(&make_add_event(0, ask_id, 100, 10, Side::Sell, user))
@@ -299,7 +308,7 @@ fn stp_prevented_order_recorded_rejected_is_skipped_on_replay() {
 
     // Same-user crossing buy: under STP = CancelTaker this was prevented at
     // write time, so the sequencer recorded it as Rejected.
-    let buy_id = Id::new_uuid();
+    let buy_id = Id::from_u64(22);
     let rejected_buy = SequencerEvent::<()> {
         sequence_num: 1,
         timestamp_ns: 0,
@@ -324,7 +333,7 @@ fn stp_prevented_order_recorded_rejected_is_skipped_on_replay() {
     let mut live = OrderBook::<()>::with_clock("TEST", stub_clock());
     live.set_stp_mode(STPMode::CancelTaker);
     live.add_order(OrderType::Standard {
-        id: Id::new_uuid(),
+        id: ask_id,
         price: Price::new(100),
         quantity: Quantity::new(10),
         side: Side::Sell,
@@ -336,7 +345,7 @@ fn stp_prevented_order_recorded_rejected_is_skipped_on_replay() {
     .expect("seed ask");
     // The crossing buy is rejected by STP — tolerate the error, the ask rests.
     let _ = live.add_order(OrderType::Standard {
-        id: Id::new_uuid(),
+        id: buy_id,
         price: Price::new(100),
         quantity: Quantity::new(10),
         side: Side::Buy,
@@ -391,7 +400,7 @@ fn full_config_injection_preserves_lot_size_parity() {
     live.set_min_order_size(1);
     live.set_max_order_size(1_000);
     live.add_order(OrderType::Standard {
-        id: Id::new_uuid(),
+        id: Id::from_u64(LOT_ASK_ID),
         price: Price::new(100),
         quantity: Quantity::new(10),
         side: Side::Sell,
@@ -401,7 +410,7 @@ fn full_config_injection_preserves_lot_size_parity() {
         extra_fields: (),
     })
     .expect("seed ask");
-    let _ = live.match_market_order_by_amount(Id::new_uuid(), 700, Side::Buy);
+    let _ = live.match_market_order_by_amount(Id::from_u64(LOT_TAKER_ID), 700, Side::Buy);
     let live_snap = live.create_snapshot(usize::MAX);
 
     let config = ReplayBookConfig::new(
