@@ -35,4 +35,5 @@ mod sequencer_types_tests;
 mod snapshot_restore_tests;
 #[cfg(feature = "special_orders")]
 mod special_order_restore_tests;
+mod two_tranche_conservation_tests;
 mod validation_tests;
