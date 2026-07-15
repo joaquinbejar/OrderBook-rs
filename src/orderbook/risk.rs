@@ -30,7 +30,7 @@
 use crate::orderbook::error::OrderBookError;
 use crossbeam::atomic::AtomicCell;
 use dashmap::DashMap;
-use pricelevel::{Hash32, Id, PriceLevelSnapshot};
+use pricelevel::{Hash32, Id};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tracing::warn;
@@ -623,43 +623,6 @@ impl RiskState {
     pub(super) fn clear(&self) {
         self.orders.clear();
         self.counters.clear();
-    }
-
-    /// Rebuild the per-order map and per-account counters by walking
-    /// the supplied bid and ask snapshots.
-    ///
-    /// Called by `OrderBook::restore_from_snapshot_package` after the
-    /// snapshot's resting orders have been re-installed into the book.
-    /// Iteration is in input-vector order, which is deterministic and
-    /// does not affect outbound emissions.
-    pub(super) fn rebuild_from_snapshot(
-        &self,
-        bids: &[PriceLevelSnapshot],
-        asks: &[PriceLevelSnapshot],
-    ) {
-        self.clear();
-        for level in bids.iter().chain(asks.iter()) {
-            let price = level.price().as_u128();
-            for order in level.orders() {
-                let account = order.user_id();
-                let remaining_qty = order
-                    .visible_quantity()
-                    .as_u64()
-                    .saturating_add(order.hidden_quantity().as_u64());
-                self.orders.insert(
-                    order.id(),
-                    RiskEntry {
-                        account,
-                        price,
-                        remaining_qty,
-                    },
-                );
-                let counters = self.counters.entry(account).or_default();
-                counters.open_count.fetch_add(1, Ordering::Relaxed);
-                let notional_delta = (remaining_qty as u128).saturating_mul(price);
-                counters.resting_notional.fetch_add(notional_delta);
-            }
-        }
     }
 }
 

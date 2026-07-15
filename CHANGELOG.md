@@ -38,6 +38,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshots captured with pricelevel < 0.9 restore a demoted order at its
   old `(timestamp, seq)` position — re-snapshot after upgrading to pin the
   corrected order.
+- **Snapshot restoration is failure-atomic (#207).** `restore_from_snapshot`
+  used to clear the live book before converting each level through
+  pricelevel 0.9's fallible `PriceLevel::from_snapshot`, so an invalid later
+  level destroyed the original state and left a valid prefix of the
+  replacement installed; `restore_from_snapshot_package` additionally
+  installed risk configuration before that fallible work. Restore is now
+  two-phase: every fallible step (level validation, plus a new cross-level
+  duplicate-order-id check that reports `OrderBookError::DuplicateOrderId`)
+  runs against off-book structures, and the live book, indices, risk state,
+  and configuration are only touched after all of it succeeds — any error
+  leaves the pre-restore book byte-identical. The package path rebuilds risk
+  entries during the commit walk (same registration as live admission),
+  replacing the snapshot-based `rebuild_from_snapshot`. Two adjacent fixes
+  ride along: a snapshot carrying two same-side levels at one price is now
+  rejected (the install would keep one level while the index rebuild
+  registered both), and restoring a package without a risk config now also
+  purges any pre-restore risk entries — previously they survived `disable()`
+  and could resurrect stale counters on a later `set_risk_config`.
 - **Snapshot package format bumped to v3 (#206).** The pricelevel 0.9
   statistics schema can serialize a `stats_degraded` field that a
   pricelevel 0.8 reader rejects with `unknown field`, so labelling such
