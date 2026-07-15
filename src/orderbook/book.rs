@@ -2988,6 +2988,15 @@ where
     /// (`ReplayEngine::replay_from*`) starts a fresh book with
     /// `kill_switch_engaged = false`, and operators must engage it
     /// explicitly post-replay if needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrderBookError::ChecksumMismatch`] /
+    /// [`OrderBookError::InvalidOperation`] when package validation
+    /// fails, and every error [`restore_from_snapshot`](Self::restore_from_snapshot)
+    /// documents. All of them fire before any live state is mutated
+    /// (#207) — a failed package restore leaves the book, its
+    /// configuration, and its risk state untouched.
     pub fn restore_from_snapshot_package(
         &mut self,
         package: OrderBookSnapshotPackage,
@@ -3005,28 +3014,33 @@ where
         let market_close_timestamp = package.market_close_timestamp;
         let has_market_close = package.has_market_close;
 
-        // Take ownership of the validated snapshot. We hold it locally
-        // so that the per-account risk counters can be rebuilt from
-        // `snapshot.bids` / `snapshot.asks` before
-        // `restore_from_snapshot` consumes the snapshot's level vectors.
+        // Take ownership of the validated snapshot.
         let snapshot = package.into_snapshot()?;
 
+        // Fallible phase (#207): symbol guard + level conversion + the
+        // cross-level duplicate-id check all run before ANY live state —
+        // book, indices, risk, config — is touched, so an invalid package
+        // leaves the complete pre-restore state intact.
+        self.ensure_snapshot_symbol(&snapshot)?;
+        let prepared = Self::prepare_snapshot_levels(snapshot)?;
+
+        // ---- Point of no return: everything below is infallible. ----
+
         // Preserve the persisted risk-installation state exactly:
-        // install + rebuild only when a config was snapshotted,
-        // otherwise explicitly disable risk so a `risk_config()` call
-        // post-restore returns `None` rather than `Some(empty)`. The
-        // rebuild walks the snapshot's resting orders before
-        // `restore_from_snapshot` consumes the snapshot so we avoid
-        // cloning all level snapshots.
+        // install only when a config was snapshotted, otherwise
+        // explicitly disable risk so a `risk_config()` call post-restore
+        // returns `None` rather than `Some(empty)`. Entries and counters
+        // are cleared here and rebuilt during the commit walk below
+        // (`rebuild_risk = true`), which registers every restored resting
+        // order exactly like the live admission path.
         if let Some(risk_config) = risk_config {
             self.risk_state.set_config(risk_config);
-            self.risk_state
-                .rebuild_from_snapshot(&snapshot.bids, &snapshot.asks);
         } else {
             self.risk_state.disable();
         }
+        self.risk_state.clear();
 
-        self.restore_from_snapshot(snapshot)?;
+        self.commit_restored_levels(&prepared, true);
 
         // Apply configuration that was captured in the package.
         self.fee_schedule = fee_schedule;
@@ -3063,6 +3077,13 @@ where
     ///
     /// This restores both order data and configuration fields.
     /// See [`restore_from_snapshot_package`](Self::restore_from_snapshot_package).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrderBookError::DeserializationError`] on malformed
+    /// JSON, plus every error
+    /// [`restore_from_snapshot_package`](Self::restore_from_snapshot_package)
+    /// documents — all raised before any live state is mutated (#207).
     pub fn restore_from_snapshot_json(&mut self, data: &str) -> Result<(), OrderBookError> {
         let package = OrderBookSnapshotPackage::from_json(data)?;
         self.restore_from_snapshot_package(package)
@@ -3079,7 +3100,37 @@ where
     /// state is lost or re-initialized. The rebuild uses the deterministic
     /// price-then-insertion-sequence traversal so the restore stays
     /// replay-stable (#190 / #192).
+    ///
+    /// # Failure atomicity
+    ///
+    /// The restore is two-phase (#207): every fallible step — level
+    /// conversion through pricelevel's validating
+    /// [`PriceLevel::from_snapshot`] and the cross-level duplicate-id
+    /// check — runs against off-book structures first, and the live book
+    /// is cleared and replaced only after all of them succeed. Any error
+    /// therefore leaves the pre-restore bids, asks, indices, and
+    /// operational state completely untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrderBookError::InvalidOperation`] when the snapshot's
+    /// symbol does not match this book or when one side carries two
+    /// levels at the same price (the install would keep only one while
+    /// the index rebuild registered both),
+    /// [`OrderBookError::PriceLevelError`] when a level snapshot fails
+    /// pricelevel's validation, and
+    /// [`OrderBookError::DuplicateOrderId`] when the same order id
+    /// appears in more than one level of the snapshot (installing it
+    /// would silently orphan one of the two in `order_locations`).
     pub fn restore_from_snapshot(&self, snapshot: OrderBookSnapshot) -> Result<(), OrderBookError> {
+        self.ensure_snapshot_symbol(&snapshot)?;
+        let prepared = Self::prepare_snapshot_levels(snapshot)?;
+        self.commit_restored_levels(&prepared, false);
+        Ok(())
+    }
+
+    /// Symbol guard shared by the snapshot restore entry points.
+    fn ensure_snapshot_symbol(&self, snapshot: &OrderBookSnapshot) -> Result<(), OrderBookError> {
         if snapshot.symbol != self.symbol {
             return Err(OrderBookError::InvalidOperation {
                 message: format!(
@@ -3088,7 +3139,94 @@ where
                 ),
             });
         }
+        Ok(())
+    }
 
+    /// Fallible phase of a snapshot restore (#207): converts every level
+    /// through pricelevel's validating [`PriceLevel::from_snapshot`] and
+    /// rejects order ids that appear in more than one level — all against
+    /// local structures, without touching the live book. Levels are
+    /// returned sorted ascending by price so the commit phase's index
+    /// rebuild keeps the deterministic price-then-insertion-sequence
+    /// traversal (#192).
+    fn prepare_snapshot_levels(
+        snapshot: OrderBookSnapshot,
+    ) -> Result<PreparedSnapshotLevels, OrderBookError> {
+        let convert = |levels: Vec<pricelevel::PriceLevelSnapshot>,
+                       side: &str|
+         -> Result<Vec<(u128, Arc<PriceLevel>)>, OrderBookError> {
+            let mut converted = Vec::with_capacity(levels.len());
+            for level_snapshot in levels {
+                let price = level_snapshot.price().as_u128();
+                let price_level = PriceLevel::from_snapshot(level_snapshot)
+                    .map_err(OrderBookError::PriceLevelError)?;
+                converted.push((price, Arc::new(price_level)));
+            }
+            converted.sort_by_key(|(price, _)| *price);
+            // Reject duplicate prices within a side: the SkipMap install
+            // would keep only the last level at that key while the index
+            // rebuild below would still register the discarded level's
+            // orders, leaving `order_locations` / `user_orders` pointing at
+            // orders the live book does not hold. The old SkipMap-sourced
+            // rebuild silently dropped one level; neither outcome is
+            // acceptable, so the snapshot is rejected up front.
+            if let Some(window) = converted.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+                return Err(OrderBookError::InvalidOperation {
+                    message: format!(
+                        "Snapshot contains two {side} levels at the same price {}",
+                        window[0].0
+                    ),
+                });
+            }
+            Ok(converted)
+        };
+
+        let bids = convert(snapshot.bids, "bid")?;
+        let asks = convert(snapshot.asks, "ask")?;
+
+        // Cross-level duplicate-id check. Per-level duplicates are already
+        // rejected by `PriceLevel::from_snapshot` (pricelevel 0.9); an id
+        // resting at two prices would silently orphan one of them in
+        // `order_locations`, so reject the snapshot before any mutation.
+        // A HashSet is safe here: only membership is consulted, no
+        // iteration order can leak into book state.
+        let mut seen: std::collections::HashSet<Id> = std::collections::HashSet::new();
+        let mut level_orders: Vec<Arc<OrderType<()>>> = Vec::new();
+        for (_, level) in bids.iter().chain(asks.iter()) {
+            level.snapshot_by_seq_into(&mut level_orders);
+            for order in &level_orders {
+                if !seen.insert(order.id()) {
+                    return Err(OrderBookError::DuplicateOrderId {
+                        order_id: order.id(),
+                    });
+                }
+            }
+        }
+
+        Ok(PreparedSnapshotLevels { bids, asks })
+    }
+
+    /// Infallible commit phase of a snapshot restore (#207): clears the
+    /// live book and installs the pre-validated levels, then rebuilds the
+    /// `order_locations` and `user_orders` indices, the special-order
+    /// tracker (under `special_orders`), and — when `rebuild_risk` is set
+    /// (the package-restore path) — the per-account risk entries via
+    /// [`RiskState::on_admission`]-equivalent registration.
+    ///
+    /// The index rebuild runs in one fixed, replay-stable pass: bids
+    /// ascending price then asks ascending price (the prepared vectors are
+    /// pre-sorted), and within each level ascending insertion sequence via
+    /// [`PriceLevel::snapshot_by_seq_into`] — never the `DashMap`-backed
+    /// `iter_orders` view, whose per-instance-hashed order would leak into
+    /// the `user_orders` `Vec<Id>` layout and make a subsequent
+    /// `cancel_orders_by_user` diverge across restores of the same package
+    /// (#192). This is NOT the original admission history — a snapshot
+    /// cannot recover that — but it is deterministic. `order_locations`,
+    /// the tracker's `DashSet`s, and the risk maps are order-insensitive,
+    /// so their rebuild order does not leak; only `user_orders`, whose
+    /// per-user `Vec` order is consumed by `cancel_orders_by_user`, needs
+    /// the fixed traversal. One scratch buffer is reused across levels.
+    fn commit_restored_levels(&self, prepared: &PreparedSnapshotLevels, rebuild_risk: bool) {
         self.cache.invalidate();
 
         // Clear all existing data
@@ -3110,61 +3248,42 @@ where
         self.has_market_close.store(false, Ordering::Relaxed);
         self.market_close_timestamp.store(0, Ordering::Relaxed);
 
-        for level_snapshot in snapshot.bids {
-            let price = level_snapshot.price().as_u128();
-            let price_level = PriceLevel::from_snapshot(level_snapshot)
-                .map_err(OrderBookError::PriceLevelError)?;
-            let arc_level = Arc::new(price_level);
-            self.bids.insert(price, arc_level);
+        for (price, level) in &prepared.bids {
+            self.bids.insert(*price, level.clone());
+        }
+        for (price, level) in &prepared.asks {
+            self.asks.insert(*price, level.clone());
         }
 
-        for level_snapshot in snapshot.asks {
-            let price = level_snapshot.price().as_u128();
-            let price_level = PriceLevel::from_snapshot(level_snapshot)
-                .map_err(OrderBookError::PriceLevelError)?;
-            let arc_level = Arc::new(price_level);
-            self.asks.insert(price, arc_level);
-        }
-
-        // Rebuild the `order_locations` and `user_orders` indices, and (under
-        // `special_orders`) re-register pegged / trailing-stop orders with the
-        // special-order tracker, in one fixed, replay-stable pass: bids
-        // ascending price then asks ascending price (the `SkipMap`'s natural key
-        // order), and within each level ascending insertion sequence via
-        // `PriceLevel::snapshot_by_seq_into` — never the `DashMap`-backed
-        // `iter_orders` view, whose per-instance-hashed order would leak into the
-        // `user_orders` `Vec<Id>` layout and make a subsequent
-        // `cancel_orders_by_user` diverge across restores of the same package
-        // (#192). This is NOT the original admission history — a snapshot cannot
-        // recover that — but it is deterministic. `order_locations` and the
-        // tracker's `DashSet`s are order-insensitive, so their rebuild order does
-        // not leak; only `user_orders`, whose per-user `Vec` order is consumed by
-        // `cancel_orders_by_user`, needs the fixed traversal. One scratch buffer
-        // is reused across levels.
         let mut level_orders: Vec<Arc<OrderType<()>>> = Vec::new();
-        for item in self.bids.iter() {
-            let price = *item.key();
-            item.value().snapshot_by_seq_into(&mut level_orders);
-            for order in &level_orders {
-                self.order_locations.insert(order.id(), (price, Side::Buy));
-                self.track_user_order(order.user_id(), order.id());
-                #[cfg(feature = "special_orders")]
-                self.reregister_special_order(order.as_ref());
+        let mut rebuild_side = |levels: &[(u128, Arc<PriceLevel>)], side: Side| {
+            for (price, level) in levels {
+                level.snapshot_by_seq_into(&mut level_orders);
+                for order in &level_orders {
+                    self.order_locations.insert(order.id(), (*price, side));
+                    self.track_user_order(order.user_id(), order.id());
+                    #[cfg(feature = "special_orders")]
+                    self.reregister_special_order(order.as_ref());
+                    if rebuild_risk {
+                        // Same per-order registration the live admission
+                        // path uses; keeps the saturating remaining-qty
+                        // semantics of the previous snapshot-based rebuild.
+                        let remaining_qty = order
+                            .visible_quantity()
+                            .as_u64()
+                            .saturating_add(order.hidden_quantity().as_u64());
+                        self.risk_state.on_admission(
+                            order.id(),
+                            order.user_id(),
+                            *price,
+                            remaining_qty,
+                        );
+                    }
+                }
             }
-        }
-
-        for item in self.asks.iter() {
-            let price = *item.key();
-            item.value().snapshot_by_seq_into(&mut level_orders);
-            for order in &level_orders {
-                self.order_locations.insert(order.id(), (price, Side::Sell));
-                self.track_user_order(order.user_id(), order.id());
-                #[cfg(feature = "special_orders")]
-                self.reregister_special_order(order.as_ref());
-            }
-        }
-
-        Ok(())
+        };
+        rebuild_side(&prepared.bids, Side::Buy);
+        rebuild_side(&prepared.asks, Side::Sell);
     }
 
     /// Re-register a restored resting order with the special-order tracker
@@ -3957,4 +4076,16 @@ where
     pub fn trailing_stop_ids(&self) -> Vec<Id> {
         self.special_order_tracker.trailing_stop_ids()
     }
+}
+
+/// Off-book output of the fallible phase of a snapshot restore (#207):
+/// fully converted price levels, sorted ascending by price per side, ready
+/// for the infallible commit phase
+/// ([`OrderBook::commit_restored_levels`]). Holding these outside the book
+/// is what makes a failed restore leave the live book untouched.
+struct PreparedSnapshotLevels {
+    /// `(price, level)` pairs for the bid side, ascending by price.
+    bids: Vec<(u128, Arc<PriceLevel>)>,
+    /// `(price, level)` pairs for the ask side, ascending by price.
+    asks: Vec<(u128, Arc<PriceLevel>)>,
 }

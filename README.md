@@ -71,6 +71,12 @@ This order book engine is built with the following design principles:
   the re-exported pricelevel surface changed —
   `PriceLevel::add_order` returns `Result`, `matchable_quantity` takes
   the taker id, `PriceLevelError` gained `DuplicateOrderId`.
+- **Failure-atomic snapshot restore (#207).** `restore_from_snapshot` and
+  `restore_from_snapshot_package` validate every level (and reject
+  cross-level duplicate order ids with `DuplicateOrderId`) against
+  off-book structures before clearing the live book, so a failed restore
+  leaves the pre-restore state — orders, indices, config, risk,
+  kill-switch, engine sequence — completely untouched.
 - **Snapshot package format v3 (#206).** Pricelevel 0.9 statistics can
   serialize a `stats_degraded` field that 0.8 readers reject, so newly
   written packages are stamped `ORDERBOOK_SNAPSHOT_FORMAT_VERSION = 3`.
