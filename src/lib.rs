@@ -57,6 +57,16 @@
 //!   the re-exported pricelevel surface changed —
 //!   `PriceLevel::add_order` returns `Result`, `matchable_quantity` takes
 //!   the taker id, `PriceLevelError` gained `DuplicateOrderId`.
+//! - **`snapshots_match` compares full maker state and FIFO (#208).** The
+//!   replay oracle now checks every level's order vector in
+//!   queue-consumption order (ids, variants, users, quantities,
+//!   timestamps, TIF, type-specific fields) and the deterministic
+//!   statistics counters including `stats_degraded`; only the wall-time
+//!   statistics aggregates (`first_arrival_time`, `last_execution_time`,
+//!   `sum_waiting_time` — see the `snapshots_match` docs for why each is
+//!   inherently divergent) and the capture timestamp stay excluded.
+//!   Contract tightening: aggregate-equal books with reversed FIFO or
+//!   different maker identity no longer certify as replay-equal.
 //! - **Failure-atomic snapshot restore (#207).** `restore_from_snapshot` and
 //!   `restore_from_snapshot_package` validate every level (and reject
 //!   cross-level duplicate order ids with `DuplicateOrderId`) against

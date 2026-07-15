@@ -739,63 +739,108 @@ where
 ///
 /// Two snapshots are considered equal when:
 /// - `symbol` is identical
-/// - The sorted bid price levels match (by price, **visible** quantity, **hidden**
-///   quantity, and **order count**)
-/// - The sorted ask price levels match (same four fields)
+/// - The sorted bid price levels match, and the sorted ask price levels
+///   match — where "match" means the **complete** per-level state (#208):
+///   price, visible quantity, hidden quantity, order count, the full order
+///   vector in queue-consumption order, and the deterministic execution
+///   statistics.
 ///
-/// This is the equality oracle for replay correctness, so it compares the full
-/// per-level state — not just visible quantity. Comparing visible quantity alone
-/// would be a subset check that misses divergences in hidden iceberg / reserve
-/// liquidity or in how the same visible depth is split across orders at a price
-/// (#102).
+/// This is the equality oracle for replay correctness. Aggregate-only
+/// comparison (price / quantities / order count, #102) was a subset check:
+/// two books with the same aggregates but reversed maker FIFO — or the same
+/// FIFO with different maker ids, users, order variants, quantities, or
+/// time-in-force — would emit different trades on the next sweep yet still
+/// compare equal. Since pricelevel 0.9 the snapshot's `orders()` vector is
+/// materialized in queue-consumption order, so element-wise [`OrderType`]
+/// equality pins maker identity and FIFO exactly.
 ///
-/// Timestamps are intentionally excluded from comparison because replayed
-/// books may be created at a different wall-clock time than the original.
+/// Order equality includes the admission timestamp: the journal carries the
+/// admitted order verbatim — timestamp baked in — and replay re-installs it
+/// without re-stamping, so a faithful replay reproduces order timestamps
+/// byte-identically (under any clock). Verifying against a book whose
+/// orders were constructed and clock-stamped independently of the journal
+/// will (correctly) report a mismatch.
+///
+/// Statistics comparison covers the deterministic counters — orders added /
+/// removed / executed, quantity executed, value executed, and the sticky
+/// `stats_degraded` flag. Intentionally excluded:
+/// - `first_arrival_time` — pricelevel derives it from a raw
+///   `SystemTime::now()` at level creation, outside the injectable `Clock`,
+///   so it can never match between two runs;
+/// - `last_execution_time` / `sum_waiting_time` — clock-derived, but live
+///   ingestion and replay consume different clock-tick budgets by design
+///   (the live submission API stamps each order with a fresh tick; replay
+///   reuses the journal's pre-stamped order), so these wall-time aggregates
+///   diverge even under identically-seeded injected clocks;
+/// - the top-level snapshot capture timestamp, as before.
+///
+/// Note this tightening is a contract change for external consumers: two
+/// independently built books with equal aggregates but different maker
+/// identity or FIFO used to compare equal (pre-#208) and no longer do —
+/// that laxity was the #102/#208 correctness gap, not a feature.
 #[must_use]
 pub fn snapshots_match(actual: &OrderBookSnapshot, expected: &OrderBookSnapshot) -> bool {
     if actual.symbol != expected.symbol {
         return false;
     }
 
-    // Compare bids sorted by price descending (highest bid first)
-    let mut actual_bids: Vec<_> = actual.bids.iter().collect();
-    let mut expected_bids: Vec<_> = expected.bids.iter().collect();
-    actual_bids.sort_by_key(|b| std::cmp::Reverse(b.price()));
-    expected_bids.sort_by_key(|b| std::cmp::Reverse(b.price()));
+    sides_match(&actual.bids, &expected.bids) && sides_match(&actual.asks, &expected.asks)
+}
 
-    if actual_bids.len() != expected_bids.len() {
+/// Compares one side's levels, sorted ascending by price. The sort
+/// direction is irrelevant for an equality check as long as both inputs use
+/// the same one.
+#[must_use]
+fn sides_match(
+    actual: &[pricelevel::PriceLevelSnapshot],
+    expected: &[pricelevel::PriceLevelSnapshot],
+) -> bool {
+    if actual.len() != expected.len() {
         return false;
     }
-    for (a, b) in actual_bids.iter().zip(expected_bids.iter()) {
-        if a.price() != b.price()
-            || a.visible_quantity() != b.visible_quantity()
-            || a.hidden_quantity() != b.hidden_quantity()
-            || a.order_count() != b.order_count()
-        {
-            return false;
-        }
-    }
+    let mut actual_sorted: Vec<_> = actual.iter().collect();
+    let mut expected_sorted: Vec<_> = expected.iter().collect();
+    actual_sorted.sort_by_key(|level| level.price());
+    expected_sorted.sort_by_key(|level| level.price());
 
-    // Compare asks sorted by price ascending (lowest ask first)
-    let mut actual_asks: Vec<_> = actual.asks.iter().collect();
-    let mut expected_asks: Vec<_> = expected.asks.iter().collect();
-    actual_asks.sort_by_key(|l| l.price());
-    expected_asks.sort_by_key(|l| l.price());
+    actual_sorted
+        .iter()
+        .zip(expected_sorted.iter())
+        .all(|(a, b)| levels_match(a, b))
+}
 
-    if actual_asks.len() != expected_asks.len() {
+/// Complete per-level equality (#208): aggregates, the full order vector in
+/// queue-consumption order, and the deterministic statistics counters.
+#[must_use]
+fn levels_match(a: &pricelevel::PriceLevelSnapshot, b: &pricelevel::PriceLevelSnapshot) -> bool {
+    if a.price() != b.price()
+        || a.visible_quantity() != b.visible_quantity()
+        || a.hidden_quantity() != b.hidden_quantity()
+        || a.order_count() != b.order_count()
+    {
         return false;
     }
-    for (a, b) in actual_asks.iter().zip(expected_asks.iter()) {
-        if a.price() != b.price()
-            || a.visible_quantity() != b.visible_quantity()
-            || a.hidden_quantity() != b.hidden_quantity()
-            || a.order_count() != b.order_count()
-        {
-            return false;
-        }
+
+    // Element-wise order comparison in queue-consumption order (pricelevel
+    // ≥ 0.9 materializes `orders()` that way). `OrderType`'s derived
+    // `PartialEq` covers id, variant, side, price, visible / hidden
+    // quantity, user, admission timestamp, time-in-force, and every
+    // type-specific field (peg reference, trailing offset, replenish
+    // config, ...).
+    if a.orders() != b.orders() {
+        return false;
     }
 
-    true
+    // Deterministic statistics only — see the `snapshots_match` doc for the
+    // intentionally excluded wall-clock-derived fields.
+    let stats_a = a.statistics();
+    let stats_b = b.statistics();
+    stats_a.orders_added() == stats_b.orders_added()
+        && stats_a.orders_removed() == stats_b.orders_removed()
+        && stats_a.orders_executed() == stats_b.orders_executed()
+        && stats_a.quantity_executed() == stats_b.quantity_executed()
+        && stats_a.value_executed() == stats_b.value_executed()
+        && stats_a.stats_degraded() == stats_b.stats_degraded()
 }
 
 #[cfg(test)]
@@ -879,6 +924,171 @@ mod tests {
         assert!(
             !snapshots_match(&base, &diff_count),
             "an order-count divergence must not be reported equal"
+        );
+    }
+
+    /// Builds a one-level snapshot from real pricelevel levels for the #208
+    /// oracle tests: `orders` are admitted in the given sequence, so the
+    /// snapshot's order vector reflects exactly that FIFO.
+    fn ask_level_snapshot(price: u128, orders: &[OrderType<()>]) -> pricelevel::PriceLevelSnapshot {
+        let level = pricelevel::PriceLevel::new(price);
+        for order in orders {
+            assert!(
+                level.add_order(*order).is_ok(),
+                "fixture order must be admitted"
+            );
+        }
+        level.snapshot()
+    }
+
+    fn fixture_order(id: u64, price: u128, quantity: u64, tif: TimeInForce) -> OrderType<()> {
+        OrderType::Standard {
+            id: Id::from_u64(id),
+            price: Price::new(price),
+            quantity: Quantity::new(quantity),
+            side: Side::Sell,
+            user_id: Hash32::zero(),
+            timestamp: TimestampMs::new(1_700_000_000_000),
+            time_in_force: tif,
+            extra_fields: (),
+        }
+    }
+
+    fn one_ask_snapshot(symbol: &str, level: pricelevel::PriceLevelSnapshot) -> OrderBookSnapshot {
+        OrderBookSnapshot {
+            symbol: symbol.to_string(),
+            timestamp: 0,
+            bids: Vec::new(),
+            asks: vec![level],
+        }
+    }
+
+    /// #208: equal aggregates with reversed maker FIFO must NOT compare
+    /// equal — and the two snapshots demonstrably produce different first
+    /// makers when restored and swept.
+    #[test]
+    fn test_snapshots_match_detects_reversed_fifo() {
+        let first = fixture_order(1, 100, 10, TimeInForce::Gtc);
+        let second = fixture_order(2, 100, 10, TimeInForce::Gtc);
+
+        let forward = one_ask_snapshot("FIFO", ask_level_snapshot(100, &[first, second]));
+        let reversed = one_ask_snapshot("FIFO", ask_level_snapshot(100, &[second, first]));
+
+        assert!(
+            snapshots_match(&forward, &forward.clone()),
+            "identical FIFO must match"
+        );
+        assert!(
+            !snapshots_match(&forward, &reversed),
+            "reversed maker FIFO with equal aggregates must not match"
+        );
+
+        // The divergence is real: restoring each snapshot and sweeping one
+        // unit consumes a different maker first.
+        let sweep_first_maker = |snapshot: OrderBookSnapshot| -> Id {
+            let book: OrderBook<()> = OrderBook::new("FIFO");
+            book.restore_from_snapshot(snapshot).expect("restore");
+            let result = book
+                .submit_market_order_with_user(Id::from_u64(9_999), 1, Side::Buy, Hash32::zero())
+                .expect("sweep");
+            let trades = result.trades().as_vec();
+            assert_eq!(trades.len(), 1, "one unit fills one maker");
+            trades[0].maker_order_id()
+        };
+        let forward_maker = sweep_first_maker(forward);
+        let reversed_maker = sweep_first_maker(reversed);
+        assert_ne!(
+            forward_maker, reversed_maker,
+            "the previously-accepted snapshots produce different first makers"
+        );
+        assert_eq!(forward_maker, Id::from_u64(1));
+        assert_eq!(reversed_maker, Id::from_u64(2));
+    }
+
+    /// #208: same aggregates, different order identity / fields — maker id,
+    /// time-in-force — must not compare equal.
+    #[test]
+    fn test_snapshots_match_detects_order_identity_divergence() {
+        let base = one_ask_snapshot(
+            "IDENT",
+            ask_level_snapshot(100, &[fixture_order(1, 100, 10, TimeInForce::Gtc)]),
+        );
+
+        let different_id = one_ask_snapshot(
+            "IDENT",
+            ask_level_snapshot(100, &[fixture_order(2, 100, 10, TimeInForce::Gtc)]),
+        );
+        assert!(
+            !snapshots_match(&base, &different_id),
+            "different maker id with equal aggregates must not match"
+        );
+
+        let different_tif = one_ask_snapshot(
+            "IDENT",
+            ask_level_snapshot(100, &[fixture_order(1, 100, 10, TimeInForce::Day)]),
+        );
+        assert!(
+            !snapshots_match(&base, &different_tif),
+            "different time-in-force with equal aggregates must not match"
+        );
+    }
+
+    /// #208: a `stats_degraded` divergence is a replay-relevant signal (an
+    /// under-counted statistics stream) and must not compare equal; the
+    /// wall-clock statistics aggregates stay excluded.
+    #[test]
+    fn test_snapshots_match_compares_deterministic_statistics() {
+        fn lvl_with_stats(degraded: bool, first_arrival: u64) -> pricelevel::PriceLevelSnapshot {
+            serde_json::from_value(serde_json::json!({
+                "price": 100,
+                "visible_quantity": 10,
+                "hidden_quantity": 0,
+                "order_count": 0,
+                "orders": [],
+                "statistics": {
+                    "orders_added": 1,
+                    "orders_removed": 0,
+                    "orders_executed": 0,
+                    "quantity_executed": 0,
+                    "value_executed": 0,
+                    "last_execution_time": 0,
+                    "first_arrival_time": first_arrival,
+                    "sum_waiting_time": 0,
+                    "stats_degraded": degraded
+                }
+            }))
+            .expect("valid snapshot JSON")
+        }
+
+        let clean = OrderBookSnapshot {
+            symbol: "STATS".to_string(),
+            timestamp: 0,
+            bids: vec![lvl_with_stats(false, 1_000)],
+            asks: Vec::new(),
+        };
+        let degraded = OrderBookSnapshot {
+            symbol: "STATS".to_string(),
+            timestamp: 7,
+            bids: vec![lvl_with_stats(true, 1_000)],
+            asks: Vec::new(),
+        };
+        assert!(
+            !snapshots_match(&clean, &degraded),
+            "a stats_degraded divergence must not be reported equal"
+        );
+
+        // Wall-clock-derived statistics and the top-level capture timestamp
+        // remain excluded: same deterministic state, different arrival time
+        // and snapshot timestamp still match.
+        let different_clock = OrderBookSnapshot {
+            symbol: "STATS".to_string(),
+            timestamp: 42,
+            bids: vec![lvl_with_stats(false, 2_000)],
+            asks: Vec::new(),
+        };
+        assert!(
+            snapshots_match(&clean, &different_clock),
+            "wall-clock-derived fields must stay excluded from the oracle"
         );
     }
 
@@ -999,9 +1209,13 @@ mod tests {
         let journal: InMemoryJournal<()> = InMemoryJournal::new();
         let mut seq = 0u64;
 
-        // Three asks at 100, 101, 102 — each size 10.
-        for price in [100u128, 101, 102] {
-            let ev = make_add_event(seq, Id::new_uuid(), price, 10, Side::Sell);
+        // Three asks at 100, 101, 102 — each size 10. The ids are shared
+        // with the live book below: since #208 `snapshots_match` compares
+        // full order identity and FIFO, the ground-truth book must be
+        // seeded with the exact orders the journal carries.
+        let maker_ids = [Id::from_u64(1), Id::from_u64(2), Id::from_u64(3)];
+        for (maker_id, price) in maker_ids.iter().zip([100u128, 101, 102]) {
+            let ev = make_add_event(seq, *maker_id, price, 10, Side::Sell);
             assert!(journal.append(&ev).is_ok());
             seq += 1;
         }
@@ -1037,10 +1251,10 @@ mod tests {
         // Drive the live book through the same sequence so we have a
         // ground-truth snapshot.
         let live_book: crate::OrderBook<()> = crate::OrderBook::new("TEST");
-        for price in [100u128, 101, 102] {
+        for (maker_id, price) in maker_ids.iter().zip([100u128, 101, 102]) {
             live_book
                 .add_order(OrderType::Standard {
-                    id: Id::new_uuid(),
+                    id: *maker_id,
                     price: Price::new(price),
                     quantity: Quantity::new(10),
                     side: Side::Sell,
@@ -1051,10 +1265,6 @@ mod tests {
                 })
                 .expect("seed ask");
         }
-        // Note: live_book seeds with fresh UUIDs, so `snapshots_match`
-        // compares the structural per-level fields (price, visible/hidden
-        // quantity, order count) rather than order ids. Use the same notional
-        // amount so the residual book state matches.
         let _ = live_book.match_market_order_by_amount(taker_id, 1_500, Side::Buy);
 
         // Replay journal into a fresh book.

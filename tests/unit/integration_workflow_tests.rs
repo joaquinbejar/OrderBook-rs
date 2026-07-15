@@ -133,13 +133,33 @@ fn journal_replay_reconstructs_identical_state() {
         ReplayEngine::<()>::replay_from(&journal, 0, "TEST").expect("replay should succeed");
     assert_eq!(last_seq, 4);
 
-    // Build the same state manually
+    // Build the same state manually — with the exact orders the journal
+    // carries (same ids AND same admission timestamps): since #208 the
+    // `snapshots_match` oracle compares full order identity, so a
+    // clock-stamped `add_limit_order` would legitimately diverge from the
+    // journal's fixed-timestamp orders.
     let manual_book = OrderBook::<()>::new("TEST");
-    let _ = manual_book.add_limit_order(ids[0], 100, 10, Side::Buy, TimeInForce::Gtc, None);
-    let _ = manual_book.add_limit_order(ids[1], 95, 20, Side::Buy, TimeInForce::Gtc, None);
-    let _ = manual_book.add_limit_order(ids[2], 110, 15, Side::Sell, TimeInForce::Gtc, None);
-    let _ = manual_book.add_limit_order(ids[3], 115, 25, Side::Sell, TimeInForce::Gtc, None);
-    let _ = manual_book.add_limit_order(ids[4], 90, 5, Side::Buy, TimeInForce::Gtc, None);
+    let specs = [
+        (ids[0], 100u128, 10u64, Side::Buy),
+        (ids[1], 95, 20, Side::Buy),
+        (ids[2], 110, 15, Side::Sell),
+        (ids[3], 115, 25, Side::Sell),
+        (ids[4], 90, 5, Side::Buy),
+    ];
+    for (id, price, qty, side) in specs {
+        manual_book
+            .add_order(pricelevel::OrderType::Standard {
+                id,
+                price: Price::new(price),
+                quantity: Quantity::new(qty),
+                side,
+                time_in_force: TimeInForce::Gtc,
+                user_id: Hash32::zero(),
+                timestamp: TimestampMs::new(0),
+                extra_fields: (),
+            })
+            .expect("manual add");
+    }
 
     let snap_replayed = replayed_book.create_snapshot(usize::MAX);
     let snap_manual = manual_book.create_snapshot(usize::MAX);
