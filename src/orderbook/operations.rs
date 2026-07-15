@@ -308,6 +308,18 @@ where
 
     /// Add a post-only order to the book with an explicit `user_id`.
     ///
+    /// # Crossing policy (#209)
+    ///
+    /// A post-only order that would take liquidity is **rejected**
+    /// (`PriceCrossing`), never re-priced/slid, and the rejection is a
+    /// pure no-op on the book. The guarantee is structural: beyond the
+    /// fast-path precheck, every per-level match runs with
+    /// `TakerKind::PostOnly`, so the order cannot trade under any
+    /// interleaving. Post-only takes precedence over STP — the
+    /// crossability verdict is resolved before the STP block, so a
+    /// rejected post-only never cancels same-user makers as a
+    /// CancelMaker / CancelBoth side effect.
+    ///
     /// # Arguments
     /// * `id` — Unique order identifier.
     /// * `price` — Limit price.
@@ -319,7 +331,9 @@ where
     ///
     /// # Errors
     /// Returns [`OrderBookError::MissingUserId`] when STP is enabled and
-    /// `user_id` is `Hash32::zero()`.
+    /// `user_id` is `Hash32::zero()`, and
+    /// [`OrderBookError::PriceCrossing`] when the order would take
+    /// liquidity.
     #[allow(clippy::too_many_arguments)]
     pub fn add_post_only_order_with_user(
         &self,

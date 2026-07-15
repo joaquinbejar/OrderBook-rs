@@ -57,6 +57,14 @@
 //!   the re-exported pricelevel surface changed —
 //!   `PriceLevel::add_order` returns `Result`, `matchable_quantity` takes
 //!   the taker id, `PriceLevelError` gained `DuplicateOrderId`.
+//! - **Atomic PostOnly / multi-level FOK (#209).** PostOnly submits thread
+//!   `TakerKind::PostOnly` into every per-level match, making it
+//!   structurally impossible for a post-only order to take liquidity under
+//!   any interleaving; fill-or-kill submits hold a new book-level submit
+//!   gate exclusively across feasibility + sweep, so multi-level
+//!   all-or-nothing can no longer partially execute against concurrent
+//!   cancels. Other mutating entry points take the gate's uncontended read
+//!   side; the matching core stays lock-free.
 //! - **Atomic, observable mutation failures (#211).** `UpdateQuantity` is
 //!   validate-first (projected tick / lot / min-max / representability /
 //!   risk before touching the level), propagates upstream

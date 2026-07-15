@@ -147,6 +147,18 @@ fn compute_quote_notional(match_result: &MatchResult) -> u128 {
 }
 
 /// Trade listener specification using Arc for shared ownership
+/// Callback invoked with every emitted [`TradeResult`].
+///
+/// # Re-entrancy contract (#209)
+///
+/// The listener may fire while the book's submit gate is held (the
+/// trade-emitting entry points hold it across the sweep — exclusively for
+/// a fill-or-kill submit). A listener must therefore **never call back
+/// into the same `OrderBook`'s mutating API** (add / submit / cancel /
+/// update / mass cancel / market sweeps) on the invoking thread: the gate
+/// is not reentrant and the nested acquisition can deadlock. Hand the
+/// event off to a queue or channel instead and mutate from another
+/// context.
 pub type TradeListener = Arc<dyn Fn(&TradeResult) + Send + Sync>;
 
 /// A trade event that includes additional metadata for processing
