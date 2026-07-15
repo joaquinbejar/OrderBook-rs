@@ -51,8 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fire under the gate and must never re-enter the book on the invoking
   thread (contract documented on `TradeListener` /
   `PriceLevelChangedListener`). The matching core itself stays lock-free;
-  HDR benches: add-only p50 958→1042ns (the read acquisition),
-  aggressive-walk and mixed p50/p99 unchanged. Pinned by
+  a clean back-to-back HDR bisection shows the gate's uncontended read
+  acquisition is not measurable on any scenario (add-only p50 917 = 917;
+  see `BENCH.md`'s 0.11.0 → 0.12.0 delta section). Pinned by
   barrier-synchronized race regressions (contra-admission, later-level
   cancel, same-user CancelMaker) plus deterministic all-or-nothing tests.
   Three gaps closed on the fallible-mutation integration: (1)

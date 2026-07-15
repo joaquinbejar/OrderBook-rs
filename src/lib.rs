@@ -64,7 +64,11 @@
 //!   gate exclusively across feasibility + sweep, so multi-level
 //!   all-or-nothing can no longer partially execute against concurrent
 //!   cancels. Other mutating entry points take the gate's uncontended read
-//!   side; the matching core stays lock-free.
+//!   side; the matching core stays lock-free. Full 0.11.0 → 0.12.0 HDR
+//!   tail-latency comparison in `BENCH.md`: every scenario's median is
+//!   unchanged by this release's book-level work; the one median shift
+//!   (`stp_sweep`, from the pricelevel 0.9 hardening) is documented there
+//!   with its bisection.
 //! - **Atomic, observable mutation failures (#211).** `UpdateQuantity` is
 //!   validate-first (projected tick / lot / min-max / representability /
 //!   risk before touching the level), propagates upstream

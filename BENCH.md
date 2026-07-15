@@ -27,25 +27,26 @@ static A: CountingAllocator<System> = CountingAllocator::new(System);
 workload as `mixed_70_20_10_hdr` but reports `allocs_per_op` and
 `bytes_alloc/op` over the measurement window (200 000 warmup +
 1 000 000 measured). A reference run on the M4 Max host (orderbook-rs
-0.9.0, `pricelevel` 0.8.3):
+0.12.0, `pricelevel` 0.9.1):
 
 | counter        | value         |
 |----------------|---------------|
-| allocs         | 18 809 336    |
-| deallocs       | 18 698 998    |
-| bytes_alloc    | 6 180 736 806 |
-| bytes_dealloc  | 6 152 807 510 |
-| **allocs/op**  | **18.81**     |
-| bytes_alloc/op | 6 181         |
+| allocs         | 18 234 168    |
+| deallocs       | 18 123 830    |
+| bytes_alloc    | 6 173 361 482 |
+| bytes_dealloc  | 6 145 419 658 |
+| **allocs/op**  | **18.23**     |
+| bytes_alloc/op | 6 173         |
 
 Both counters are balanced (allocs ≈ deallocs, no leak). `allocs/op` is
 the headline number for "what does the matching engine cost in alloc
 pressure on a realistic workload" — useful as a regression signal much
 more than as an absolute target; it is in the same ballpark as the
-0.7.0 reference (`~17.76`) and is workload-randomness-sensitive on this
-synthetic stream (repeat runs land in the `~15–19` range).
-`bytes_alloc/op` (`~6 KB`) is likewise close to the 0.7.0 reference
-(`~4 926`).
+0.7.0 (`~17.76`) and 0.9.0 (`~18.81`) references and is
+workload-randomness-sensitive on this synthetic stream (repeat runs
+land in the `~15–19` range). `bytes_alloc/op` (`~6 KB`) is likewise
+stable across 0.9.0 → 0.12.0 — the pricelevel 0.9 hardening and the
+0.12.0 atomicity work added no allocation pressure.
 
 > **Fixed in `pricelevel` 0.8.3 (PriceLevel#106).** Earlier `pricelevel`
 > 0.8.2 pre-sized each match `MatchResult` to the *whole* level depth, so
@@ -71,7 +72,7 @@ Per-run summaries land in `target/alloc-counters/<scenario>.md`.
 ## How to run
 
 ```bash
-make bench-hdr                 # all seven scenarios
+make bench-hdr                 # all eight scenarios
 cargo bench --bench mixed_70_20_10_hdr   # single scenario
 ```
 
@@ -94,8 +95,8 @@ plotters; the directory lives under `target/` and is gitignored.
 - **Warmup.** Long-running scenarios (`add_only`, `mixed_70_20_10`)
   discard 200 000 ops before the measurement window starts.
   Pre-loading scenarios (`cancel_only`, `aggressive_walk`,
-  `mass_cancel_burst`, `stp_sweep`) seed the book in a non-measured loop
-  instead.
+  `notional_walk`, `mass_cancel_burst`, `stp_sweep`) seed the book in a
+  non-measured loop instead.
 - **Workload determinism.** All scenarios drive a self-contained
   xorshift PRNG seeded with `0xA5A5_A5A5_A5A5_A5A5`. Reproducing a run
   with the same code produces the same op stream, modulo concurrent
@@ -121,12 +122,12 @@ plotters; the directory lives under `target/` and is gitignored.
 |---|---|
 | Host | Apple M4 Max, macOS (Darwin 25.5.0, `arm64`) |
 | Pinning | None |
-| Toolchain | `rustc 1.96.0` (stable) |
+| Toolchain | `rustc 1.97.0` (stable) |
 | Profile | `--release` (Cargo `bench` profile = `release` clone) |
 | `RUSTFLAGS` | unset |
 | Allocator | system allocator |
-| Date | 2026-06-25 |
-| Crate version | `0.9.0` |
+| Date | 2026-07-15 |
+| Crate version | `0.12.0` (`pricelevel` `0.9.1`) |
 
 ## Headline numbers
 
@@ -139,11 +140,11 @@ All values in nanoseconds. **Closed-loop service time** — see
 
 | Quantile | Latency (ns) |
 |---|---|
-| p50    | 959 |
-| p99    | 64 383 |
-| p99.9  | 99 711 |
-| p99.99 | 130 751 |
-| max    | 196 863 |
+| p50    | 917 |
+| p99    | 62 847 |
+| p99.9  | 97 727 |
+| p99.99 | 130 495 |
+| max    | 195 583 |
 
 **Where the tail comes from.** The book grows monotonically across the
 measurement window, so each insert must walk the `SkipMap` to the
@@ -159,10 +160,10 @@ working set outgrows L1.
 | Quantile | Latency (ns) |
 |---|---|
 | p50    | 41 |
-| p99    | 19 631 |
-| p99.9  | 24 751 |
-| p99.99 | 26 847 |
-| max    | 1 081 343 |
+| p99    | 19 007 |
+| p99.9  | 24 047 |
+| p99.99 | 27 055 |
+| max    | 834 559 |
 
 **Where the tail comes from.** `DashMap::remove` on the order index is
 a shard-local lock acquisition; the median is dominated by that
@@ -179,16 +180,37 @@ buys with qty `5..=20`.
 | Quantile | Latency (ns) |
 |---|---|
 | p50    | 42 |
-| p99    | 3 001 |
-| p99.9  | 6 167 |
-| p99.99 | 8 503 |
-| max    | 41 375 |
+| p99    | 3 335 |
+| p99.9  | 6 795 |
+| p99.99 | 8 839 |
+| max    | 18 671 |
 
 **Where the tail comes from.** The fill loop iterates per-order at
 each level until the requested quantity is consumed. Median is fast
 because most sweeps fill within a single level. Tail is driven by
 sweeps that span multiple levels and drop several `Arc<PriceLevel>`s
 at once.
+
+### `notional_walk` — quote-notional market orders sweep multi-level book
+
+50 levels × 100 resting orders pre-loaded, then 100 000 aggressive
+notional buys with budgets `500..2000` quote ticks
+(`match_market_order_by_amount` path) — same book shape as
+`aggressive_walk` for direct comparison of the two sweep entry points.
+
+| Quantile | Latency (ns) |
+|---|---|
+| p50    | 42 |
+| p99    | 2 543 |
+| p99.9  | 4 959 |
+| p99.99 | 6 919 |
+| max    | 18 463 |
+
+**Where the tail comes from.** Same fill loop as `aggressive_walk`
+plus one `u128` divide per level (budget → per-level qty cap) and one
+multiply per fill. Both medians sit at the same `~42 ns`, confirming
+the notional arithmetic is not the bottleneck; the tail tracks
+multi-level walks exactly like the base-qty sweep.
 
 ### `mixed_70_20_10` — 70 % submit, 20 % cancel, 10 % aggressive
 
@@ -197,10 +219,10 @@ at once.
 | Quantile | Latency (ns) |
 |---|---|
 | p50    | 833 |
-| p99    | 33 375 |
-| p99.9  | 53 215 |
-| p99.99 | 73 599 |
-| max    | 127 423 |
+| p99    | 31 679 |
+| p99.9  | 52 031 |
+| p99.99 | 72 063 |
+| max    | 128 511 |
 
 **Where the tail comes from.** Mix of all three previous tails. The
 median tracks `add_only` (because submits are 70 % of the workload).
@@ -215,10 +237,10 @@ Refills 3 resting asks every 5 ops; 200 000 IOC buy probes with qty
 | Quantile | Latency (ns) |
 |---|---|
 | p50    | 42 |
-| p99    | 4 251 |
-| p99.9  | 5 083 |
-| p99.99 | 5 459 |
-| max    | 38 527 |
+| p99    | 4 543 |
+| p99.9  | 5 667 |
+| p99.99 | 12 751 |
+| max    | 26 335 |
 
 **Where the tail comes from.** Most probes either fully fill the
 small resting depth or partial-fill and short-circuit. The p99 is
@@ -233,11 +255,11 @@ wall-clock guard rather than a per-op tail.
 
 | Quantile | Latency (ns) |
 |---|---|
-| p50    | 18 799 |
-| p99    | 26 751 |
-| p99.9  | 36 031 |
-| p99.99 | 36 031 |
-| max    | 36 031 |
+| p50    | 32 591 |
+| p99    | 42 271 |
+| p99.9  | 54 463 |
+| p99.99 | 54 463 |
+| max    | 54 463 |
 
 **Where the tail comes from.** Burst latency scales linearly with the
 book depth; on a tight host the median is ~19 µs to drain 10 000
@@ -254,17 +276,52 @@ the per-level STP scan + inline maker cancel (#107).
 
 | Quantile | Latency (ns) |
 |---|---|
-| p50    | 291 |
-| p99    | 3 917 |
-| p99.9  | 4 127 |
-| p99.99 | 5 167 |
-| max    | 45 087 |
+| p50    | 1 208 |
+| p99    | 4 835 |
+| p99.9  | 5 543 |
+| p99.99 | 9 503 |
+| max    | 21 551 |
 
 **Where the tail comes from.** Every measured op runs the per-level
 self-trade scan and cancels the same-user maker inline over the pooled
 snapshot buffer (#107, no per-level `Vec` allocation). The median is
-the scan + single cancel; the tail is the rare sweep that touches
-several levels plus allocator jitter re-seeding the taker order.
+the scan + single cancel + the validated re-seed of the taker order;
+the tail is the rare sweep that touches several levels.
+
+**Median shift in 0.12.0 (pricelevel 0.9).** The p50 moved from
+`~291 ns` (pricelevel 0.8.4) to `~1.2 µs`. Bisection against the
+pre-hardening baseline attributes the entire shift to the pricelevel
+0.9 upgrade — validated admission (duplicate-id / counter-capacity /
+topology checks on the re-seeded taker), the atomic
+cancel-vs-partial-fill index re-key, and the seqlock'd execution
+statistics all run on this scenario's per-op path. The 0.12.0
+book-level atomicity work (#206–#211 + the FOK submit gate) added
+nothing measurable on top — and tightened this scenario's tail
+(p99.9 `14.3 µs → 5.5 µs`, p99.99 `26.3 µs → 9.5 µs` vs the
+pre-stack midpoint). Correctness bought with median latency on the
+STP self-cross path; every other scenario's median is unchanged.
+
+## 0.11.0 → 0.12.0 delta
+
+The 0.12.0 release combines the pricelevel 0.9 hardening upgrade with
+the book-level atomicity work (#206–#211). A three-point bisection
+(0.11.0 / pricelevel 0.8.4 → post-upgrade midpoint → 0.12.0 final) on
+the same host and session attributes the differences:
+
+- **Medians unchanged** on `add_only` (917 = 917), `cancel_only`
+  (41 = 41), `aggressive_walk` / `notional_walk` / `thin_book_sweep`
+  (42 = 42). `mixed_70_20_10` p50 `792 → 833` (+41 ns) arrived with the
+  pricelevel upgrade, not with the atomicity work; the FOK submit gate's
+  uncontended read acquisition is not measurable on any scenario in a
+  clean back-to-back run.
+- **`stp_sweep` p50 `291 → 1 208`** — entirely from pricelevel 0.9's
+  hardening (see the scenario note above); the 0.12.0 stack tightened
+  its tail instead.
+- **Improvements:** `mass_cancel_burst` p50 `43.6 µs → 32.6 µs` on the
+  same session (−25 %), `add_only` p99 `−9 %`, `thin_book_sweep` p99
+  `−17 %`.
+- **Allocation profile flat:** `18.23 allocs/op`, `~6.2 KB/op` — within
+  the historical `15–19` band.
 
 ## Limitations
 
