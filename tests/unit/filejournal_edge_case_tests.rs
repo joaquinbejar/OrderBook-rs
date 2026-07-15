@@ -267,26 +267,30 @@ mod tests_filejournal_edge_cases {
 
         let reader_journal = Arc::clone(&journal);
         let reader = thread::spawn(move || {
-            let mut max_seen = 0u64;
-            // Poll multiple times to exercise concurrent reading
-            for _ in 0..20 {
+            let mut entries_seen = 0usize;
+            // Poll to exercise concurrent reading until at least one entry
+            // is observed (bounded, so a starved writer on a loaded CI
+            // runner cannot flake the test; the fixed 20×1ms loop used to
+            // time out under coverage instrumentation, and `max_seen > 0`
+            // also mis-fired when only sequence 0 had been written).
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while std::time::Instant::now() < deadline {
                 if let Ok(iter) = reader_journal.read_from(0) {
-                    for entry in iter.flatten() {
-                        if entry.event.sequence_num > max_seen {
-                            max_seen = entry.event.sequence_num;
-                        }
-                    }
+                    entries_seen = entries_seen.max(iter.flatten().count());
+                }
+                if entries_seen > 0 {
+                    break;
                 }
                 thread::sleep(std::time::Duration::from_millis(1));
             }
-            max_seen
+            entries_seen
         });
 
         writer.join().expect("writer thread panicked");
-        let max_seen = reader.join().expect("reader thread panicked");
+        let entries_seen = reader.join().expect("reader thread panicked");
 
         // Reader should have seen at least some entries
-        assert!(max_seen > 0, "reader should have seen entries");
+        assert!(entries_seen > 0, "reader should have seen entries");
 
         // After writer completes, all 100 entries must be readable
         let all_entries: Vec<_> = journal
