@@ -254,6 +254,22 @@ where
     /// is engaged and the update is anything other than
     /// [`OrderUpdate::Cancel`]. Cancels are explicitly allowed so that
     /// operators can drain resting orders while new flow is halted.
+    ///
+    /// [`OrderUpdate::UpdateQuantity`] is validate-first (#211): the
+    /// projected post-update order must pass the shared shape validator
+    /// (tick / lot / min-max / two-tranche representability) and the
+    /// modify-aware risk check, and any upstream
+    /// [`PriceLevelError`](pricelevel::PriceLevelError) from applying the
+    /// update is propagated as [`OrderBookError::PriceLevelError`] — a
+    /// rejected update leaves the maker unchanged, and `Ok(None)` means
+    /// only that the requested order is absent.
+    ///
+    /// Because the shared validator runs on the projected order, two
+    /// previously-accepted shapes are now rejected on `UpdateQuantity`
+    /// like they already were on the #98 modify paths: an
+    /// expired-but-unevicted GTD / DAY maker (`InvalidOperation`, expiry
+    /// is evaluated against the book clock) and a resting post-only maker
+    /// whose price meanwhile crosses the market (`PriceCrossing`).
     pub fn update_order(
         &self,
         update: OrderUpdate,
@@ -370,25 +386,65 @@ where
                     // Get the price level and update it
                     if let Some(entry) = price_levels.get(&price) {
                         let price_level = entry.value();
+
+                        // Validate-first (#211, extending the #98 contract
+                        // to quantity updates): project the exact order
+                        // pricelevel will store (`with_reduced_quantity` —
+                        // the same rewrite `UpdateQuantity` applies
+                        // upstream) and run the shared shape validator
+                        // plus the modify-aware risk check BEFORE mutating
+                        // the level. A rejected update leaves the maker
+                        // untouched. The source order is read off the
+                        // level entry already in hand — no `Arc` churn, no
+                        // second `order_locations` / level lookup.
+                        let Some(current_unit) = price_level
+                            .iter_orders()
+                            .find(|resting| resting.id() == order_id)
+                        else {
+                            return Ok(None); // Order not found
+                        };
+                        let current = self.convert_from_unit_type(current_unit.as_ref());
+                        let projected = current.with_reduced_quantity(new_quantity.as_u64());
+                        self.validate_order_shape(&projected)?;
+                        self.check_risk_modify_admission(
+                            order_id,
+                            projected.user_id(),
+                            price,
+                            projected.total_quantity(),
+                        )?;
+
                         let update = OrderUpdate::UpdateQuantity {
                             order_id,
                             new_quantity,
                         };
 
-                        if let Ok(updated_order) = price_level.update_order(update)
-                            && let Some(order) = updated_order
-                        {
-                            // notify price level changes
-                            if let Some(ref listener) = self.price_level_changed_listener {
-                                let engine_seq = self.next_engine_seq();
-                                listener(PriceLevelChangedEvent {
-                                    side,
-                                    price: price_level.price(),
-                                    quantity: price_level.visible_quantity(),
-                                    engine_seq,
-                                })
+                        // Propagate upstream validation / counter errors
+                        // (#211): `Ok(None)` is reserved for a genuinely
+                        // absent order, never an error swallowed silently.
+                        match price_level.update_order(update) {
+                            Ok(Some(order)) => {
+                                // Keep the per-account risk counters in
+                                // lockstep with the applied update.
+                                self.risk_state.on_quantity_update(
+                                    order_id,
+                                    OrderQuantity::<()>::total_quantity(order.as_ref()),
+                                );
+                                // notify price level changes
+                                if let Some(ref listener) = self.price_level_changed_listener {
+                                    let engine_seq = self.next_engine_seq();
+                                    listener(PriceLevelChangedEvent {
+                                        side,
+                                        price: price_level.price(),
+                                        quantity: price_level.visible_quantity(),
+                                        engine_seq,
+                                    })
+                                }
+                                result = Some(Arc::new(self.convert_from_unit_type(&order)));
                             }
-                            result = Some(Arc::new(self.convert_from_unit_type(&order)));
+                            Ok(None) => {}
+                            Err(err) => {
+                                return Err(OrderBookError::PriceLevelError(err));
+                            }
                         }
 
                         is_empty = price_level.order_count() == 0;
@@ -1302,6 +1358,62 @@ where
             return Err(err);
         }
 
+        // Residual-admission headroom pre-check (#211): a non-immediate
+        // taker may rest its residual at a same-side level whose checked
+        // aggregate counters cannot absorb it. pricelevel would reject
+        // that admission — but only AFTER the sweep has emitted
+        // irreversible trades. Reject up front instead. Gated on
+        // `will_cross_market` (one best-price cache read): a non-crossing
+        // add emits no trades, so its admission failure is already atomic
+        // via the cleanup path below — only a crossing taker needs the
+        // pre-trade guard, and it is about to pay for a full sweep anyway.
+        // The check is conservative (it uses the full submitted total; the
+        // actual residual is never larger) and best-effort under
+        // concurrency — the authoritative, validated admission below still
+        // guards the racy remainder, now with cleanup (#211).
+        if !order.is_immediate() && self.will_cross_market(order.price().as_u128(), order.side()) {
+            let same_side = match order.side() {
+                Side::Buy => &self.bids,
+                Side::Sell => &self.asks,
+            };
+            if let Some(entry) = same_side.get(&order.price().as_u128()) {
+                // A counter-inconsistency error from the level's checked
+                // aggregate is rejected with the same observable
+                // lifecycle/metric surface as the overflow branch below —
+                // both are pre-mutation, so the book is still pristine.
+                let level_total = match entry.value().total_quantity() {
+                    Ok(total) => total,
+                    Err(err) => {
+                        self.track_state(
+                            order.id(),
+                            OrderStatus::Rejected {
+                                reason: RejectReason::InvalidQuantity,
+                            },
+                        );
+                        crate::orderbook::metrics::record_reject(RejectReason::InvalidQuantity);
+                        return Err(OrderBookError::PriceLevelError(err));
+                    }
+                };
+                if level_total.checked_add(order.total_quantity()).is_none() {
+                    let err = OrderBookError::InvalidOperation {
+                        message: format!(
+                            "resting order {} would overflow the aggregate capacity of level {}",
+                            order.id(),
+                            order.price()
+                        ),
+                    };
+                    self.track_state(
+                        order.id(),
+                        OrderStatus::Rejected {
+                            reason: RejectReason::InvalidQuantity,
+                        },
+                    );
+                    crate::orderbook::metrics::record_reject(RejectReason::InvalidQuantity);
+                    return Err(err);
+                }
+            }
+        }
+
         self.cache.invalidate();
         // Attempt to match the order immediately (with STP user_id propagation).
         // The outcome also carries whether STP cancelled the taker (#97).
@@ -1416,11 +1528,31 @@ where
 
             // Convert to unit type for PriceLevel compatibility. Admission
             // into the level is validated upstream since pricelevel 0.9
-            // (duplicate id, counter capacity); a failure here is an
-            // invariant break — the book-level duplicate check already
-            // passed — so propagate it rather than resting a phantom order.
+            // (duplicate id, counter capacity). The pre-sweep headroom
+            // check above makes a failure here concurrent-only; if it
+            // still happens, remove the level when this call created it
+            // empty — `best_bid` / `best_ask`, the cache, and the depth
+            // gauges must never expose a phantom level — and surface the
+            // error loudly: the sweep's trades are already irreversible
+            // (#211).
             let unit_order = self.convert_to_unit_type(&order);
-            let unit_order_arc = price_level.value().add_order(unit_order)?;
+            let unit_order_arc = match price_level.value().add_order(unit_order) {
+                Ok(admitted) => admitted,
+                Err(err) => {
+                    if level.order_count() == 0 {
+                        price_levels.remove(&price);
+                    }
+                    self.cache.invalidate();
+                    self.record_depth_metric();
+                    tracing::error!(
+                        order_id = %order.id(),
+                        price,
+                        error = %err,
+                        "residual admission failed after irreversible trades; level cleaned up"
+                    );
+                    return Err(OrderBookError::PriceLevelError(err));
+                }
+            };
             // notify price level changes
             if let Some(ref listener) = self.price_level_changed_listener {
                 let engine_seq = self.next_engine_seq();

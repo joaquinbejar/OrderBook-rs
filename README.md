@@ -71,6 +71,13 @@ This order book engine is built with the following design principles:
   the re-exported pricelevel surface changed —
   `PriceLevel::add_order` returns `Result`, `matchable_quantity` takes
   the taker id, `PriceLevelError` gained `DuplicateOrderId`.
+- **Atomic, observable mutation failures (#211).** `UpdateQuantity` is
+  validate-first (projected tick / lot / min-max / representability /
+  risk before touching the level), propagates upstream
+  `PriceLevelError`s instead of returning `Ok(None)`, and updates risk
+  counters on success; a taker whose residual cannot rest is rejected
+  before the sweep trades; a failed racy admission cleans up any empty
+  level it created.
 - **Two-tranche quantity conservation (#210).** An aggressive iceberg's
   residual rests with exactly the unmatched total distributed across
   tranches (`visible = min(display, remainder)`, rest hidden) instead of

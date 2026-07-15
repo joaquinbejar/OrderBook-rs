@@ -28,6 +28,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **pricelevel 0.9 mutation failures are atomic and observable (#211).**
+  Three gaps closed on the fallible-mutation integration: (1)
+  `OrderUpdate::UpdateQuantity` silently converted every upstream
+  `PriceLevelError` into `Ok(None)` and bypassed book-level validation — it
+  is now validate-first (projected order checked against tick / lot /
+  min-max / two-tranche representability and the modify-aware risk gate
+  before the level is touched), propagates upstream errors as
+  `OrderBookError::PriceLevelError`, reserves `Ok(None)` for a genuinely
+  absent order, and keeps per-account risk counters in lockstep with the
+  applied update (new `on_quantity_update` hook). Routing through the
+  shared validator also means an expired-but-unevicted GTD/DAY maker and
+  a resting post-only maker whose price now crosses are rejected on
+  quantity update — previously both silently succeeded. (2) A non-immediate
+  taker whose residual could not be admitted into its same-side level
+  (checked aggregate at capacity) used to consume contra liquidity and
+  THEN fail — a headroom pre-check now rejects before the sweep emits any
+  trade (conservative: full submitted total; the concurrent-only remainder
+  is still guarded by pricelevel's validated admission). (3) If that racy
+  post-trade admission ever fails, a level created empty by the attempt is
+  removed — `best_bid` / `best_ask`, the cache, and depth gauges never see
+  a phantom level — and the failure is logged at ERROR.
 - **Two-tranche quantity conservation (#210).** An aggressive Iceberg /
   Reserve partial fill assigned the **total** unmatched remainder to the
   visible tranche while keeping the original hidden tranche — an iceberg

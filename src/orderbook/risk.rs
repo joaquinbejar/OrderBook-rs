@@ -560,6 +560,37 @@ impl RiskState {
         }
     }
 
+    /// Hook per in-place quantity update on a resting maker (#211):
+    /// adjusts the order's tracked remaining quantity and the account's
+    /// resting-notional counter by the signed delta at the entry's
+    /// admission price. No-op when no `RiskConfig` is installed or the
+    /// order is not tracked (e.g. admitted before the config was set).
+    pub(super) fn on_quantity_update(&self, order_id: Id, new_remaining: u64) {
+        if self.config.is_none() {
+            return;
+        }
+        let (account, entry_price, old_remaining) = {
+            let Some(mut entry) = self.orders.get_mut(&order_id) else {
+                return;
+            };
+            let account = entry.account;
+            let entry_price = entry.price;
+            let old_remaining = entry.remaining_qty;
+            entry.remaining_qty = new_remaining;
+            (account, entry_price, old_remaining)
+        };
+
+        if let Some(counters_ref) = self.counters.get(&account) {
+            if new_remaining >= old_remaining {
+                let delta = u128::from(new_remaining - old_remaining).saturating_mul(entry_price);
+                counters_ref.resting_notional.fetch_add(delta);
+            } else {
+                let delta = u128::from(old_remaining - new_remaining).saturating_mul(entry_price);
+                saturating_sub_u128(&counters_ref.resting_notional, delta);
+            }
+        }
+    }
+
     /// Atomically evict an account's [`RiskCounters`] once it has no
     /// resting orders and zero resting notional, so the per-account map
     /// tracks currently-active accounts instead of growing with every
