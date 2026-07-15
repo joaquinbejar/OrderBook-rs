@@ -140,12 +140,27 @@ impl OrderBookSnapshot {
 
 /// Format version used for checksum-enabled order book snapshots.
 ///
-/// Bumped to `2` to accompany the addition of [`OrderBookSnapshotPackage::engine_seq`],
-/// which persists the engine's outbound monotonic counter across snapshot/restore.
-/// `version: 1` payloads are rejected by [`OrderBookSnapshotPackage::validate`]
-/// with the existing `Unsupported snapshot version` error — the format break is
+/// Bumped to `3` for the pricelevel 0.9 statistics schema: embedded
+/// level statistics may now carry a `stats_degraded` field (serialized
+/// only when `true`), which a pricelevel 0.8 reader rejects with
+/// `unknown field`. Newly written packages are stamped `3` so an old
+/// reader fails fast on the version check instead of deep inside
+/// statistics deserialization (#206).
+///
+/// Reads accept [`ORDERBOOK_SNAPSHOT_MIN_READ_VERSION`]`..=`this:
+/// `version: 2` payloads (written by 0.11 / pricelevel 0.8) contain the
+/// legacy 8-field statistics shape, which pricelevel 0.9 still decodes.
+/// `version: 1` payloads (no `engine_seq`) remain rejected by
+/// [`OrderBookSnapshotPackage::validate`] with the existing
+/// `Unsupported snapshot version` error — that format break is
 /// intentional, with no special-case migration path.
-pub const ORDERBOOK_SNAPSHOT_FORMAT_VERSION: u32 = 2;
+pub const ORDERBOOK_SNAPSHOT_FORMAT_VERSION: u32 = 3;
+
+/// Oldest package format version [`OrderBookSnapshotPackage::validate`]
+/// still accepts on read. Version `2` packages predate the pricelevel
+/// 0.9 `stats_degraded` statistics field and restore cleanly — the field
+/// simply defaults to `false`.
+pub const ORDERBOOK_SNAPSHOT_MIN_READ_VERSION: u32 = 2;
 
 /// Wrapper that provides checksum validation for `OrderBookSnapshot` instances.
 ///
@@ -287,12 +302,25 @@ impl OrderBookSnapshotPackage {
     }
 
     /// Validates the checksum and version.
+    ///
+    /// Accepts package versions
+    /// [`ORDERBOOK_SNAPSHOT_MIN_READ_VERSION`]`..=`[`ORDERBOOK_SNAPSHOT_FORMAT_VERSION`]
+    /// — the current format plus the pre-pricelevel-0.9 legacy format —
+    /// and rejects anything older or newer with a typed error. The
+    /// checksum covers the snapshot payload only (not the version
+    /// field), and its algorithm is identical for every supported
+    /// version.
+    #[must_use = "an unchecked snapshot package must not be restored"]
     pub fn validate(&self) -> Result<(), OrderBookError> {
-        if self.version != ORDERBOOK_SNAPSHOT_FORMAT_VERSION {
+        if self.version < ORDERBOOK_SNAPSHOT_MIN_READ_VERSION
+            || self.version > ORDERBOOK_SNAPSHOT_FORMAT_VERSION
+        {
             return Err(OrderBookError::InvalidOperation {
                 message: format!(
-                    "Unsupported snapshot version: {} (expected {})",
-                    self.version, ORDERBOOK_SNAPSHOT_FORMAT_VERSION
+                    "Unsupported snapshot version: {} (supported {}..={})",
+                    self.version,
+                    ORDERBOOK_SNAPSHOT_MIN_READ_VERSION,
+                    ORDERBOOK_SNAPSHOT_FORMAT_VERSION
                 ),
             });
         }
@@ -309,6 +337,7 @@ impl OrderBookSnapshotPackage {
     }
 
     /// Consumes the package and returns the validated snapshot.
+    #[must_use = "the validated snapshot (or the validation error) must be handled"]
     pub fn into_snapshot(self) -> Result<OrderBookSnapshot, OrderBookError> {
         self.validate()?;
         Ok(self.snapshot)

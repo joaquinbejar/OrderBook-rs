@@ -96,7 +96,7 @@ pub use sequencer::{JournalError, SequencerCommand, SequencerEvent, SequencerRes
 pub use serialization::BincodeEventSerializer;
 pub use serialization::{EventSerializer, JsonEventSerializer, SerializationError};
 pub use snapshot::{
-    EnrichedSnapshot, MetricFlags, ORDERBOOK_SNAPSHOT_FORMAT_VERSION, OrderBookSnapshot,
-    OrderBookSnapshotPackage,
+    EnrichedSnapshot, MetricFlags, ORDERBOOK_SNAPSHOT_FORMAT_VERSION,
+    ORDERBOOK_SNAPSHOT_MIN_READ_VERSION, OrderBookSnapshot, OrderBookSnapshotPackage,
 };
 pub use statistics::{DepthStats, DistributionBin};

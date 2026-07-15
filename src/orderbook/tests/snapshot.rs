@@ -708,8 +708,8 @@ mod test_snapshot_engine_seq {
 
     /// `version: 1` payloads — the legacy format that lacked `engine_seq`
     /// — must be rejected by `validate()` with the existing
-    /// `Unsupported snapshot version` error after the bump to v2. No
-    /// special-casing.
+    /// `Unsupported snapshot version` error. Unlike `version: 2` (which
+    /// stays readable after the v3 bump, #206), v1 has no migration path.
     #[test]
     fn test_snapshot_package_v1_payload_rejected_by_validate() {
         let payload = serde_json::json!({
@@ -753,8 +753,8 @@ mod test_snapshot_engine_seq {
                     "error message must mention version 1, got: {message}"
                 );
                 assert!(
-                    message.contains('2'),
-                    "error message must mention expected version 2, got: {message}"
+                    message.contains("2..=3"),
+                    "error message must state the supported range, got: {message}"
                 );
             }
             other => panic!("expected InvalidOperation, got {other:?}"),
@@ -851,6 +851,198 @@ mod test_snapshot_engine_seq {
             restored.market_close_timestamp.load(Ordering::Relaxed),
             1_700_000_000_000,
             "market_close_timestamp must survive the round trip"
+        );
+    }
+}
+
+#[cfg(test)]
+mod test_snapshot_format_v3 {
+    use crate::DefaultOrderBook;
+    use crate::orderbook::error::OrderBookError;
+    use crate::orderbook::{
+        ORDERBOOK_SNAPSHOT_FORMAT_VERSION, ORDERBOOK_SNAPSHOT_MIN_READ_VERSION,
+        OrderBookSnapshotPackage,
+    };
+    use pricelevel::{Hash32, Id, Side, TimeInForce};
+
+    /// New packages are stamped with the current (v3) format version, and a
+    /// non-degraded book's payload carries no `stats_degraded` key at all
+    /// (pricelevel serializes it only when `true`), which is exactly the
+    /// shape a legacy v2 payload has.
+    #[test]
+    fn test_new_package_is_v3_and_omits_stats_degraded_when_clean() {
+        let book = DefaultOrderBook::new("V3");
+        let added = book.add_limit_order_with_user(
+            Id::from_u64(1),
+            1_000,
+            10,
+            Side::Sell,
+            TimeInForce::Gtc,
+            Hash32::zero(),
+            None,
+        );
+        assert!(added.is_ok(), "resting order must be admitted");
+
+        let package = book.create_snapshot_package(10).expect("build package");
+        assert_eq!(
+            package.version, ORDERBOOK_SNAPSHOT_FORMAT_VERSION,
+            "new packages carry the current format version"
+        );
+        assert_eq!(ORDERBOOK_SNAPSHOT_FORMAT_VERSION, 3, "current version is 3");
+
+        let json = package.to_json().expect("serialize package");
+        assert!(
+            !json.contains("stats_degraded"),
+            "clean statistics must omit the stats_degraded key: {json}"
+        );
+    }
+
+    /// A genuine pricelevel-0.8.4 `version: 2` package must validate and
+    /// restore under 0.9. The fixture below was produced by pricelevel
+    /// 0.8.4 itself (`PriceLevel::add_order` + `snapshot()`, one resting
+    /// standard buy of 25 @ 2000): 8-field statistics shape, no
+    /// `stats_degraded` key, and a checksum computed over 0.8.4's
+    /// serialization bytes. `validate()` recomputes the checksum by
+    /// re-serializing the deserialized snapshot with pricelevel 0.9, so
+    /// this test pins the guarantee the version range relies on: 0.9
+    /// re-serializes a clean legacy payload byte-identically.
+    #[test]
+    fn test_genuine_v2_fixture_from_pricelevel_08_validates_and_restores() {
+        let fixture = r#"{"checksum":"1ebecd15260955cc949817f9faa90cfb097effcdd758c5ba5233b7bd5b6f3322","engine_seq":5,"fee_schedule":null,"lot_size":null,"max_order_size":null,"min_order_size":null,"snapshot":{"asks":[],"bids":[{"hidden_quantity":0,"order_count":1,"orders":[{"Standard":{"extra_fields":null,"id":"00000000-0000-0007-0000-000000000000","price":2000,"quantity":25,"side":"BUY","time_in_force":"GTC","timestamp":1700000000000,"user_id":"0000000000000000000000000000000000000000000000000000000000000000"}}],"price":2000,"statistics":{"first_arrival_time":1784087691896,"last_execution_time":0,"orders_added":1,"orders_executed":0,"orders_removed":0,"quantity_executed":0,"sum_waiting_time":0,"value_executed":0},"visible_quantity":25}],"symbol":"V2FIX","timestamp":1700000000000},"stp_mode":"None","tick_size":null,"version":2}"#;
+
+        let package =
+            OrderBookSnapshotPackage::from_json(fixture).expect("0.8.4 payload must deserialize");
+        assert_eq!(package.version, 2, "fixture is a legacy v2 package");
+        assert_eq!(package.engine_seq, 5, "engine_seq decodes");
+        assert!(
+            package.validate().is_ok(),
+            "the 0.8.4-computed checksum must revalidate under pricelevel 0.9"
+        );
+
+        let mut restored = DefaultOrderBook::new("V2FIX");
+        restored
+            .restore_from_snapshot_package(package)
+            .expect("genuine v2 package must restore");
+        assert_eq!(
+            restored.best_bid(),
+            Some(2_000),
+            "restored book carries the 0.8.4 resting order"
+        );
+        assert_eq!(restored.engine_seq(), 5, "engine_seq restored verbatim");
+    }
+
+    /// A `version: 2`-labelled package with 0.9-produced content must also
+    /// stay readable (the version range check, independent of wire-shape
+    /// fidelity — the genuine 0.8.4 fixture above covers that). The
+    /// checksum covers the snapshot payload only, so relabelling keeps it
+    /// valid.
+    #[test]
+    fn test_v2_package_still_validates_and_restores() {
+        let book = DefaultOrderBook::new("V2C");
+        let added = book.add_limit_order_with_user(
+            Id::from_u64(7),
+            2_000,
+            25,
+            Side::Buy,
+            TimeInForce::Gtc,
+            Hash32::zero(),
+            None,
+        );
+        assert!(added.is_ok(), "resting order must be admitted");
+
+        let mut package = book.create_snapshot_package(10).expect("build package");
+        package.version = ORDERBOOK_SNAPSHOT_MIN_READ_VERSION;
+
+        // Full wire round-trip of the v2-labelled package.
+        let json = package.to_json().expect("serialize v2 package");
+        let parsed = OrderBookSnapshotPackage::from_json(&json).expect("parse v2 package");
+        assert_eq!(parsed.version, 2, "payload keeps the legacy version");
+        assert!(parsed.validate().is_ok(), "v2 packages must stay readable");
+
+        let mut restored = DefaultOrderBook::new("V2C");
+        restored
+            .restore_from_snapshot_package(parsed)
+            .expect("v2 package must restore");
+        assert_eq!(
+            restored.best_bid(),
+            Some(2_000),
+            "restored book carries the legacy package's resting order"
+        );
+    }
+
+    /// Versions newer than the current format must be rejected with the
+    /// same typed error as v1 — a reader must never guess at a future
+    /// schema.
+    #[test]
+    fn test_future_version_rejected_by_validate() {
+        let book = DefaultOrderBook::new("V4");
+        let mut package = book.create_snapshot_package(10).expect("build package");
+        package.version = ORDERBOOK_SNAPSHOT_FORMAT_VERSION + 1;
+
+        let err = package
+            .validate()
+            .expect_err("future versions must be rejected");
+        match err {
+            OrderBookError::InvalidOperation { message } => {
+                assert!(
+                    message.contains("Unsupported snapshot version"),
+                    "error must mention the unsupported version, got: {message}"
+                );
+            }
+            other => panic!("expected InvalidOperation, got {other:?}"),
+        }
+    }
+
+    /// The #206 repro: a fill whose notional overflows pricelevel's u64
+    /// statistics counter sets the sticky `stats_degraded` flag. The
+    /// resulting snapshot must serialize the flag, be stamped v3, and
+    /// round-trip — including the flag — through the checksummed package.
+    #[test]
+    fn test_degraded_statistics_round_trip_is_v3() {
+        let book = DefaultOrderBook::new("DEG");
+        // Price above u64::MAX: one executed unit already overflows the
+        // u64 value-executed counter, degrading the level statistics.
+        let price = u128::from(u64::MAX) + 1;
+        let added = book.add_limit_order_with_user(
+            Id::from_u64(1),
+            price,
+            2,
+            Side::Sell,
+            TimeInForce::Gtc,
+            Hash32::zero(),
+            None,
+        );
+        assert!(added.is_ok(), "resting order must be admitted");
+
+        let swept =
+            book.submit_market_order_with_user(Id::from_u64(9_999), 1, Side::Buy, Hash32::zero());
+        assert!(swept.is_ok(), "market sweep must execute one unit");
+
+        let json = book.snapshot_to_json(10).expect("serialize package");
+        assert!(
+            json.contains("\"stats_degraded\":true"),
+            "degraded flag must be serialized: {json}"
+        );
+
+        let package = OrderBookSnapshotPackage::from_json(&json).expect("parse package");
+        assert_eq!(package.version, 3, "degraded payload is stamped v3");
+        assert!(package.validate().is_ok(), "checksum must hold");
+
+        let mut restored = DefaultOrderBook::new("DEG");
+        restored
+            .restore_from_snapshot_package(package)
+            .expect("degraded package must restore");
+
+        // The sticky flag survives the round-trip: re-snapshotting the
+        // restored book still reports the degradation.
+        let resnapshot = restored.create_snapshot(10);
+        let level = resnapshot
+            .asks
+            .first()
+            .expect("restored book keeps the ask level");
+        assert!(
+            level.statistics().stats_degraded(),
+            "stats_degraded must survive restore"
         );
     }
 }
