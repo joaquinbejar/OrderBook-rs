@@ -751,7 +751,7 @@ where
 /// FIFO with different maker ids, users, order variants, quantities, or
 /// time-in-force — would emit different trades on the next sweep yet still
 /// compare equal. Since pricelevel 0.9 the snapshot's `orders()` vector is
-/// materialized in queue-consumption order, so element-wise [`OrderType`]
+/// materialized in queue-consumption order, so element-wise [`crate::OrderType`]
 /// equality pins maker identity and FIFO exactly.
 ///
 /// Order equality includes the admission timestamp: the journal carries the

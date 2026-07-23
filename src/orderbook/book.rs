@@ -773,8 +773,7 @@ where
     /// (`add_order_inner`, `cancel_order_with_reason`,
     /// `match_order_with_user_outcome`). The same rule extends to user
     /// callbacks: see the re-entrancy contract on
-    /// [`TradeListener`](crate::orderbook::trade::TradeListener) and
-    /// [`PriceLevelChangedListener`](crate::orderbook::book_change_event::PriceLevelChangedListener).
+    /// [`TradeListener`] and [`PriceLevelChangedListener`].
     pub(super) fn acquire_submit_gate(&self, exclusive: bool) -> SubmitGateGuard<'_> {
         if exclusive {
             SubmitGateGuard::Write(self.submit_gate_write())
