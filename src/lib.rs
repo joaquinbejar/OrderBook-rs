@@ -926,6 +926,17 @@ pub mod utils;
 #[cfg(feature = "wire")]
 pub mod wire;
 
+/// Feature-gated FIX protocol bridge.
+///
+/// Maps codec-decoded FIX messages (`fix-codec`) onto
+/// [`OrderBook`](crate::OrderBook) instructions — NewOrderSingle,
+/// OrderCancelRequest and OrderCancelReplaceRequest. See
+/// [`fix`](crate::fix) for details.
+///
+/// Enabled with `--features fix`.
+#[cfg(feature = "fix")]
+pub mod fix;
+
 #[cfg(feature = "bincode")]
 pub use orderbook::BincodeEventSerializer;
 #[cfg(feature = "journal")]

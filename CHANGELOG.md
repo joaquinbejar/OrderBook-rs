@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **FIX protocol bridge (`fix` feature).** A new optional `fix` feature wires
+  `fix-codec` messages onto the matching engine. `apply_fix_message` routes
+  `NewOrderSingle` (`D`), `OrderCancelRequest` (`F`) and
+  `OrderCancelReplaceRequest` (`G`) onto `add_limit_order`,
+  `submit_market_order` and `cancel_order`; `ClOrdID` (tag 11) maps
+  deterministically to an order id (FNV-1a) so cancels and replaces can
+  target the original order. Protocol-only — no session state or transport,
+  which stays the caller's responsibility (e.g. a `fix-session` layer). Opt
+  in with `--features fix`; the module is fully cfg-gated and adds no
+  dependency or behavior when the feature is off.
+
 ## [0.12.0] — 2026-07-14
 
 ### Changed (breaking, semver-minor under 0.x)

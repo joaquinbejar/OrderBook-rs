@@ -120,6 +120,37 @@ This order book engine is built with the following design principles:
   packages still restore — while `1` and future versions stay rejected
   with the existing typed error.
 
+### What's New in Version 0.13.0
+
+#### v0.13.0 — FIX protocol bridge (`fix` feature)
+
+- **Map FIX messages onto the matching engine.** A new optional `fix`
+  feature connects the engine to FIX.4.4 order instructions without any
+  session or transport code. `orderbook_rs::fix::apply_fix_message` turns a
+  `fix-codec`-decoded message into a book instruction:
+  `NewOrderSingle` (`D`) → `add_limit_order` / `submit_market_order`,
+  `OrderCancelRequest` (`F`) → `cancel_order`, and
+  `OrderCancelReplaceRequest` (`G`) → cancel-and-replace. `ClOrdID` (tag 11)
+  is hashed deterministically (FNV-1a) to an order id, so the same client id
+  always targets the same book order across place/cancel/replace.
+- **Zero-cost when off.** The module is fully `cfg`-gated behind the `fix`
+  feature (default off) — no new dependency, no behavior change for
+  existing users. Prices are converted from FIX decimal strings to integer
+  ticks via the book's tick size.
+
+```rust
+use orderbook_rs::fix::apply_fix_message;
+
+// `msg` is a fix_codec::Message decoded from the wire.
+let outcome = apply_fix_message(&book, &msg, /* tick_size */ 10)?;
+```
+
+Enable with `--features fix` in your `Cargo.toml`:
+
+```toml
+orderbook-rs = { version = "0.13", features = ["fix"] }
+```
+
 ### What's New in Version 0.11.0
 
 #### v0.11.0 — replay reproduces the trade-ID stream: namespace in `ReplayBookConfig` (#200)
