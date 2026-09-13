@@ -31,6 +31,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trace carrying a `path` field (`"taker"` / `"maker"`), the order id, the
   executed quantity and the discarded hidden quantity.
 
+- **`SequencerResult::RejectedWithCode { reason, code, may_have_mutated,
+  stp_mode }`** — a rejection carrying its stable wire-side `RejectReason`
+  next to the message, plus the two facts the code cannot express:
+  `may_have_mutated`, set for the errors the engine can return after it has
+  already changed the book, and `stp_mode`, the source book's `STPMode` for
+  a rejection the self-trade-prevention scan produced. `impl
+  From<&OrderBookError> for SequencerResult` fills all four from the typed
+  error in one step and is the intended way to build the variant. Appended
+  variant on the `#[non_exhaustive]` enum: existing journals decode
+  unchanged; journals carrying it fail to decode against older binaries,
+  matching the `MarketOrderByAmount` precedent. The code encodes as its
+  `u16` wire value. The variant governs the sequencer event stream, not
+  the snapshot package, so `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` is
+  unchanged.
+- **`ReplayError::OutcomeMismatch { sequence_num, recorded, actual }`** —
+  raised when a re-executed rejected submit succeeds or fails under a
+  different code than the journal recorded.
+- **`ReplayError::StpModeMismatch { sequence_num, recorded, actual }`** —
+  raised when a journaled self-trade-prevention rejection records a
+  different `STPMode` than the replay book is configured with.
+
 ### Changed (breaking, semver-minor under 0.x)
 
 - **`OrderBook::get_bids` and `OrderBook::get_asks` are removed (#228).**
@@ -72,6 +93,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — obtain them from `OrderBook::levels_with_cumulative_depth`,
   `levels_until_depth` and `levels_in_range`, which is how every caller in
   this repository already did.
+
+- **`ReplayError` gained the `OutcomeMismatch` and `StpModeMismatch`
+  variants (#224)**, so exhaustive matches need new arms; 0.13.0 is the
+  release boundary for them together with the #228 removal above, as
+  `NamespaceRequiresFullReplay` shipped under 0.11.0. Journals carrying
+  `SequencerResult::RejectedWithCode` fail to decode against older binaries
+  (existing journals decode unchanged); no snapshot format change and no
+  `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` bump.
 
 ### Fixed
 
@@ -561,6 +590,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such a journal may return `Ok(false)` when the replay succeeds and the
   resulting snapshot differs from the one captured by the pre-fix run,
   or propagate the replay error when the re-executed update is rejected.
+
+- **Replay re-executes journaled submits that traded before returning an
+  error (#224).** `add_order` emits real fills and *then* returns `Err`
+  for an IOC's unfillable remainder and for a taker STP cancels after
+  non-self fills. A sequencer records those as rejections, and
+  `ReplayEngine` skipped every rejected event, so replay silently rebuilt
+  liquidity the live book had consumed: journal a resting ask of 10 and
+  an IOC buy of 15, and the replayed book still carried the ask. Replay
+  now decides by the *recorded reject code* rather than by the
+  success/failure classification. A submit (`AddOrder`, `MarketOrder`,
+  `MarketOrderByAmount`) journaled as the new
+  `SequencerResult::RejectedWithCode` is re-executed when its code is one
+  replay can reproduce from the book state and `ReplayBookConfig` — the
+  two post-fill codes (`InsufficientLiquidity`, `SelfTradePrevention`)
+  and the pure admission rejections (tick, lot, size band, duplicate id,
+  missing user, post-only crossing), which re-derive the same no-op and
+  double as a check that the config matches the source book — and the
+  re-execution must fail under the same `RejectReason`, or replay aborts
+  with the new `ReplayError::OutcomeMismatch` (sequence, recorded code,
+  and what replay produced instead: a success or a different error). A
+  code whose trigger lives outside the config — the kill switch, the risk
+  limits, `Other` — is **skipped, not re-executed**: those rejections
+  never touch the book, so the skip reproduces the live outcome exactly,
+  where re-executing a kill-switch rejection would rest an order the live
+  book refused or consume liquidity it never touched. Replay therefore
+  does not report a missing kill switch or `RiskConfig` as an
+  `OutcomeMismatch`. A rejected non-submit is skipped as before (the
+  modify paths validate first, cancels are no-ops on a missing order), and
+  a journaled success whose re-execution fails still aborts with
+  `ReplayError::OrderBookError`.
+
+  The reject code is not always enough, so the journal records two more
+  facts. `may_have_mutated` covers the one rejection whose code lies: the
+  residual-admission failure, which the engine returns as a
+  `PriceLevelError` — mapped to `RejectReason::Other(0)` — *after* the
+  sweep's trades are irreversible, and which the code-driven skip would
+  have replayed as a no-op that rebuilds consumed liquidity. A flagged
+  submit is re-executed whatever its code says; since replay cannot
+  reproduce that failure (it takes a concurrent mutation of the level),
+  the disagreement surfaces as `OutcomeMismatch` rather than a silently
+  wrong book. The rest of `Other(0)`, notably the clock-dependent
+  expired-at-admission rejection, is unflagged and still skipped.
+  `stp_mode` records the mode that decided a self-trade-prevention
+  rejection, and replay refuses a `ReplayBookConfig` whose mode differs
+  with the new `ReplayError::StpModeMismatch`.
+
+  `last_applied_seq`, the applied-event count and the progress callback
+  now follow what replay **dispatched** to the book, so a re-executed
+  rejection advances them whether or not it traded; for a journal carrying
+  such rejections they report more than the number of events that changed
+  the book.
+
+  **Stated limitations.** A submit journaled as the string-only `Rejected`
+  keeps the historical skip and therefore the pre-existing gap: replay
+  cannot tell a pure rejection from one that traded first without a code,
+  and producers close it by recording `RejectedWithCode`. Only the reject
+  code is compared — not the error's details (`requested` / `available`
+  and the like), and not the fills behind the rejection — so a discrepancy
+  confined to them can go undetected, because different fills can exhaust
+  the same levels and leave identical books. The same holds for a replay
+  config that differs in a way the code cannot see: under `CancelTaker`
+  and `CancelBoth` alike a taker that fills a foreign maker and then
+  reaches its own is refused under `SelfTradePrevention`, yet only
+  `CancelBoth` cancels that same-user maker. The `stp_mode` guard catches
+  exactly that case, but only for journals that recorded an STP rejection;
+  a mode difference in a run that never prevented a self-trade stays
+  invisible. `replay_from` performs no snapshot comparison —
+  `snapshots_match` is the check that does catch a diverged book, via
+  `ReplayEngine::verify` or run directly against a snapshot of the source
+  book — and matching the source book's configuration remains the caller's
+  contract on every `*_with_config` entry point. Finally, `MarketOrder` /
+  `MarketOrderByAmount` carry no user id, so a market order journaled
+  after STP effects under a user re-executes through the STP-less path and
+  a rejection recorded for it aborts with `OutcomeMismatch` rather than
+  diverging silently.
+
+  Pinned end-to-end from a live book: the IOC remainder and the
+  STP-cancelled taker replay their fills and advance the applied sequence;
+  a kill-switch rejection is skipped with matching books; a tick rejection
+  re-derives the same no-op; the string-only rejection keeps the skip; a
+  rejected submit that succeeds on replay, or fails under a different
+  code, aborts with `OutcomeMismatch`; a success journaled for a failed
+  submit aborts with `OrderBookError`; a rejection flagged
+  `may_have_mutated` under `Other(0)` is re-executed while the expired
+  one is still skipped; a journaled `CancelTaker` rejection replayed under
+  `CancelBoth` aborts with `StpModeMismatch`, and the same journal with
+  the mode unrecorded replays "successfully" into a book `snapshots_match`
+  rejects.
 
 ## [0.12.0] — 2026-07-14
 

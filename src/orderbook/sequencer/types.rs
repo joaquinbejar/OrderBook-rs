@@ -5,7 +5,10 @@
 //! also used by the `Journal` trait for write-ahead
 //! logging and deterministic replay.
 
+use crate::orderbook::error::OrderBookError;
 use crate::orderbook::mass_cancel::MassCancelResult;
+use crate::orderbook::reject_reason::RejectReason;
+use crate::orderbook::stp::STPMode;
 use crate::orderbook::trade::TradeResult;
 use pricelevel::{Hash32, Id, OrderType, OrderUpdate, Side, TimestampMs};
 use serde::{Deserialize, Serialize};
@@ -166,10 +169,182 @@ pub enum SequencerResult {
     },
 
     /// The command was rejected by the order book.
+    ///
+    /// Carries only a human-readable reason. When the journal feeds
+    /// [`ReplayEngine`](crate::ReplayEngine), prefer
+    /// [`Self::RejectedWithCode`]: without a machine-readable code replay
+    /// cannot tell a rejection that never touched the book from one that
+    /// traded first, so a `Rejected` submit is always skipped on replay.
     Rejected {
         /// Human-readable reason for the rejection.
         reason: String,
     },
+
+    /// The command was rejected by the order book, recorded with its
+    /// stable wire-side [`RejectReason`] alongside the human-readable
+    /// message.
+    ///
+    /// A submit — `AddOrder`, `MarketOrder`, `MarketOrderByAmount` — can
+    /// execute real trades and *then* fail (an IOC whose remainder is
+    /// unfillable, a taker STP cancels after non-self fills), so a
+    /// rejection alone does not say whether the book moved. The code lets
+    /// [`ReplayEngine`](crate::ReplayEngine) re-execute the rejections it
+    /// can reproduce from the book state and its config, and check the
+    /// re-executed verdict against the recorded one; see the replay
+    /// entry points for the rules. Build it from the typed error with the
+    /// `From<&OrderBookError>` impl on this enum, which fills every field.
+    /// A hand-built value whose fields disagree with that mapping reopens
+    /// the gaps they exist to close.
+    ///
+    /// Wire-compatible addition (a variant appended to a `#[non_exhaustive]`
+    /// enum): existing journals decode unchanged and bincode variant
+    /// indices are unaffected. Journals carrying `RejectedWithCode` will
+    /// fail to decode against older binaries — this matches the precedent
+    /// set by [`SequencerCommand::MarketOrderByAmount`]. The code encodes
+    /// as its stable `u16` wire value, as `RejectReason` always does. The
+    /// variant governs the sequencer event stream, not the snapshot
+    /// package, so `ORDERBOOK_SNAPSHOT_FORMAT_VERSION` is unchanged.
+    RejectedWithCode {
+        /// Human-readable reason for the rejection.
+        reason: String,
+        /// The stable reject code, as `RejectReason::from(&OrderBookError)`.
+        code: RejectReason,
+        /// Whether the engine may already have changed the book when it
+        /// returned this error.
+        ///
+        /// `true` for the errors a command can return *after* mutating:
+        /// the unfillable IOC / market remainder
+        /// (`InsufficientLiquidity`, `InsufficientLiquidityNotional`), the
+        /// STP-cancelled taker (`SelfTradePrevented`) and the
+        /// residual-admission failure that follows irreversible trades
+        /// (`PriceLevelError`). `false` for every error the engine raises
+        /// before it touches the book.
+        ///
+        /// Replay needs this because the reject code alone does not carry
+        /// it. [`RejectReason::Other`]`(0)` is the library's bucket for
+        /// errors that are not public rejects, and it holds both the
+        /// clock-dependent expired-at-admission rejection — pre-mutation,
+        /// and skipped on replay because a replay clock cannot be expected
+        /// to reproduce it — and the residual-admission `PriceLevelError`,
+        /// which the engine returns only after the sweep's trades are
+        /// irreversible. Skipping the second one rebuilds liquidity the
+        /// live book consumed, so the flag forces replay to re-execute it.
+        may_have_mutated: bool,
+        /// The source book's self-trade-prevention mode when the STP scan
+        /// produced this rejection; `None` for every other rejection.
+        ///
+        /// `OrderBookError::SelfTradePrevented` carries the mode that
+        /// decided the verdict, so recording it lets replay reject a
+        /// mismatched [`ReplayBookConfig`](crate::ReplayBookConfig) up
+        /// front. Two modes can refuse the same taker under the same
+        /// reject code and still leave different books behind —
+        /// `CancelTaker` leaves the same-user maker resting where
+        /// `CancelBoth` cancels it — which is a divergence the code alone
+        /// cannot see.
+        stp_mode: Option<STPMode>,
+    },
+}
+
+/// Whether the engine may already have changed the book when it returned
+/// `err`.
+///
+/// The three add / market paths that emit trades and *then* return `Err`
+/// are the reason this exists: an unfillable IOC or market remainder
+/// (`src/orderbook/modifications.rs`, the `is_immediate` branch), a taker
+/// STP cancels after non-self fills, and the residual admission that fails
+/// once the sweep's trades are already irreversible (which logs at `ERROR`
+/// and removes the level it created empty). The first two are identifiable
+/// from their reject code; the third is not, because it maps to
+/// [`RejectReason::Other`]`(0)` together with pre-mutation errors.
+///
+/// Deliberately conservative: an error is flagged whenever the engine
+/// *can* return it after a mutation, even when a particular call did not
+/// mutate (an STP taker cancelled with zero fills, a `PriceLevelError`
+/// raised by the pre-sweep level-counter read). Over-flagging costs a
+/// re-execution whose verdict is checked; under-flagging silently loses
+/// state.
+///
+/// The match is exhaustive on purpose — no `_` arm — so a new
+/// [`OrderBookError`] variant must classify itself at compile time.
+#[inline]
+#[must_use]
+fn may_have_mutated(err: &OrderBookError) -> bool {
+    match err {
+        // Returned after real fills, or after the level mutation the
+        // sweep authorised.
+        OrderBookError::InsufficientLiquidity { .. }
+        | OrderBookError::InsufficientLiquidityNotional { .. }
+        | OrderBookError::SelfTradePrevented { .. }
+        | OrderBookError::PriceLevelError(_) => true,
+        // Admission and shape checks (all evaluated before the sweep), the
+        // operational gates, and the non-reject internal errors. The
+        // post-sweep post-only rejection is here too: `pricelevel`
+        // structurally refuses to trade for a post-only taker, so that
+        // sweep books zero fills before `PriceCrossing` is raised.
+        OrderBookError::KillSwitchActive
+        | OrderBookError::RiskMaxOpenOrders { .. }
+        | OrderBookError::RiskMaxNotional { .. }
+        | OrderBookError::RiskPriceBand { .. }
+        | OrderBookError::PriceCrossing { .. }
+        | OrderBookError::InvalidTickSize { .. }
+        | OrderBookError::InvalidLotSize { .. }
+        | OrderBookError::InvalidPriceLevel(_)
+        | OrderBookError::OrderSizeOutOfRange { .. }
+        | OrderBookError::MissingUserId { .. }
+        | OrderBookError::DuplicateOrderId { .. }
+        | OrderBookError::QuantityOverflow { .. }
+        | OrderBookError::ZeroVisibleTranche { .. }
+        | OrderBookError::ReserveResidualWouldBeDiscarded { .. }
+        | OrderBookError::OrderNotFound(_)
+        | OrderBookError::InvalidOperation { .. }
+        | OrderBookError::SerializationError { .. }
+        | OrderBookError::DeserializationError { .. }
+        | OrderBookError::ChecksumMismatch { .. } => false,
+        #[cfg(feature = "nats")]
+        OrderBookError::NatsPublishError { .. } | OrderBookError::NatsSerializationError { .. } => {
+            false
+        }
+    }
+}
+
+/// The self-trade-prevention mode that decided an STP rejection.
+///
+/// Only [`OrderBookError::SelfTradePrevented`] carries one; every other
+/// rejection records `None` and replay's configuration guard stays silent.
+#[inline]
+#[must_use]
+fn recorded_stp_mode(err: &OrderBookError) -> Option<STPMode> {
+    match err {
+        OrderBookError::SelfTradePrevented { mode, .. } => Some(*mode),
+        _ => None,
+    }
+}
+
+/// Record a rejection with its stable reject code.
+///
+/// Produces [`SequencerResult::RejectedWithCode`] with `reason` set to
+/// the error's `Display` text and `code` to
+/// [`RejectReason::from(&OrderBookError)`](RejectReason#impl-From<%26OrderBookError>-for-RejectReason),
+/// the same mapping `OrderStatus::Rejected` uses — so a sequencer records
+/// the outcome the command API returned in one step and replay can act on
+/// it.
+///
+/// It also fills the two fields the reject code cannot express:
+/// `may_have_mutated`, so replay re-executes a rejection that may already
+/// have changed the book even when its code says nothing, and `stp_mode`,
+/// so replay can check its own configuration against the source book's.
+/// This impl is the intended way to build the variant; the fields are
+/// public for decoding, not for hand-assembly.
+impl From<&OrderBookError> for SequencerResult {
+    #[inline]
+    fn from(err: &OrderBookError) -> Self {
+        Self::RejectedWithCode {
+            reason: err.to_string(),
+            code: RejectReason::from(err),
+            may_have_mutated: may_have_mutated(err),
+            stp_mode: recorded_stp_mode(err),
+        }
+    }
 }
 
 /// A sequenced event emitted by the Sequencer after processing a command.

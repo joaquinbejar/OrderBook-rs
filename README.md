@@ -48,7 +48,7 @@ This order book engine is built with the following design principles:
 
 ### What's New in Version 0.13.0
 
-#### v0.13.0 — the public API hands out no level handles (#228); exclusive submit gate under STP (#225)
+#### v0.13.0 — the public API hands out no level handles (#228); exclusive submit gate under STP (#225); replay re-executes coded submit rejections (#224)
 
 - **Breaking (semver-minor under 0.x): `OrderBook::get_bids` and
   `OrderBook::get_asks` are removed (#228).** Both cloned the book's live
@@ -89,6 +89,49 @@ This order book engine is built with the following design principles:
   post-only submits, `UpdateQuantity` and `Cancel` keep the shared, fully
   concurrent path. With no level handles left to bypass it (#228), the
   gate now covers every mutation.
+- **`SequencerResult::RejectedWithCode { reason, code, may_have_mutated,
+  stp_mode }`.** `add_order` emits real fills and *then* returns `Err`
+  for an IOC's unfillable remainder and for a taker STP cancels after
+  non-self fills; `ReplayEngine` skipped every rejected event, so replay
+  rebuilt liquidity the live book had consumed. Producers now opt in by
+  recording the typed outcome — `SequencerResult::from(&error)` fills
+  all four fields — and replay decides by the recorded code: a submit
+  rejected under a code replay can reproduce from the book state and
+  `ReplayBookConfig` is re-executed and must fail the same way again,
+  while codes whose trigger lives outside the config (kill switch, risk
+  limits, `Other`) are skipped rather than re-executed, because a
+  rejection that never touched the book is reproduced by doing nothing.
+  `last_applied_seq` / the applied count / the progress callback follow
+  what was **dispatched**, so a re-executed rejection advances them.
+- **The two facts the reject code cannot carry.** `may_have_mutated`
+  flags the errors the engine can return after changing the book,
+  including the residual-admission `PriceLevelError` that maps to
+  `RejectReason::Other(0)`; a flagged submit is re-executed whatever its
+  code says, so that rejection no longer replays as a no-op that
+  resurrects consumed liquidity. `stp_mode` records the mode that
+  decided a self-trade-prevention rejection, and replay refuses a
+  mismatched `ReplayBookConfig`.
+- **`ReplayError::OutcomeMismatch { sequence_num, recorded, actual }`**
+  aborts replay when a re-executed rejection succeeds or fails under a
+  different code than the journal recorded;
+  **`ReplayError::StpModeMismatch { sequence_num, recorded, actual }`**
+  aborts it when a journaled STP rejection was decided under a different
+  `STPMode` than the replay book uses.
+- **Migration.** The string-only `SequencerResult::Rejected` keeps its
+  historical skip, so a journal written with it keeps the pre-existing
+  gap for traded-then-rejected submits; switch producers to
+  `RejectedWithCode`. Journals carrying the new variant cannot be
+  decoded by older readers (existing journals decode unchanged, as for
+  `MarketOrderByAmount`). **Limitations:** only the reject code is
+  reconciled, never the error's details or the fills behind it, so a
+  discrepancy confined to them can go undetected — `snapshots_match`
+  (directly, or via `ReplayEngine::verify`) is the check that catches a
+  diverged book, and `replay_from` performs none. The `stp_mode` guard
+  only fires on journals that recorded an STP rejection.
+  **Breaking (semver-minor under 0.x):** `ReplayError` gained two
+  variants, so exhaustive matches need new arms; 0.13.0 is the release
+  boundary for them together with the #228 removal. No snapshot format
+  change.
 - **Reserve orders are lot-size validated per tranche and on their
   replenishment transfer (#226).** A `ReserveOrder` used to be checked on
   its **total** only, so a 15 visible / 5 hidden reserve was admitted to a

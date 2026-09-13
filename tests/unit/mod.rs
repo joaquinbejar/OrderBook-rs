@@ -29,6 +29,7 @@ mod replay_config_tests;
 mod replay_coverage_tests;
 #[cfg(feature = "journal")]
 mod replay_determinism;
+mod replay_submit_error_tests;
 #[cfg(feature = "special_orders")]
 mod repricing_determinism_tests;
 mod reserve_lot_size_tests;
