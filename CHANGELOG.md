@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.0] — 2026-09-13
 
 ### Added
 
@@ -678,6 +678,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CancelBoth` aborts with `StpModeMismatch`, and the same journal with
   the mode unrecorded replays "successfully" into a book `snapshots_match`
   rejects.
+
+## [0.12.1] — 2026-07-23
+
+### Changed
+
+- Dependency bumps: `uuid` 1.23 → 1.24, `tokio` 1.52 → 1.53,
+  `async-nats` 0.49 → 0.50. The `pricelevel` requirement is relaxed from
+  the exact `0.9.1` to `0.9`, so patch releases of the level engine are
+  picked up without a release here.
+
+### Fixed
+
+- Two intra-doc links resolved correctly: the `TradeListener` /
+  `PriceLevelChangedListener` re-entrancy contract on the submit gate,
+  and the `OrderType` reference in the `snapshots_match` replay-oracle
+  docs.
 
 ## [0.12.0] — 2026-07-14
 

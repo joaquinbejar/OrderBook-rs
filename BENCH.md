@@ -315,28 +315,43 @@ nothing measurable on top — and tightened this scenario's tail
 pre-stack midpoint). Correctness bought with median latency on the
 STP self-cross path; every other scenario's median is unchanged.
 
-**#225 gate-mode comparison.** #225 makes STP-active submits (STP
-enabled, non-zero taker `user_id`) take the exclusive side of the
-`submit_gate` `RwLock` instead of the shared side, so the per-level STP
-scan and the fill it authorises see a consistent queue. `stp_sweep` is
-single-threaded and uncontended, so it isolates the fixed per-op cost
-of exclusive vs shared acquisition on this workload's own submits,
-independent of any cross-thread contention — see `stp_contention`
-below for the multi-threaded contention cost.
+**#225 gate-mode comparison — corrected.** #225 makes STP-active
+submits (STP enabled, non-zero taker `user_id`) take the exclusive
+side of the `submit_gate` `RwLock` instead of the shared side, so the
+per-level STP scan and the fill it authorises see a consistent queue.
+`stp_sweep` is single-threaded and uncontended, so it isolates the
+fixed per-op cost of exclusive vs shared acquisition on this
+workload's own submits, independent of any cross-thread contention —
+see `stp_contention` below for the multi-threaded contention cost.
 
-| Quantile | `main` (shared gate) | #225 branch (exclusive gate) |
-|---|---|---|
-| p50    | 3 375 ns | 2 835 ns |
-| p99    | 6 667 ns | 5 127 ns |
-| p99.9  | 9 711 ns | 7 835 ns |
-| p99.99 | 19 759 ns | 15 919 ns |
+An earlier version of this table reported a `main` baseline slower
+than the #225 branch built on top of it (p50 3 375 ns vs 2 835 ns) and
+concluded the exclusive gate had no measurable cost. That baseline was
+pulled from a contaminated worktree; the branch cannot legitimately run
+faster than the unmodified code it branched from on the same
+single-threaded, uncontended scenario. A clean bisect of
+`stp_sweep_hdr` — two runs per point, medians in ns, same host,
+`Cargo.lock` aligned, worktree rebuilt fresh at every point — replaces
+it:
 
-Medians of three runs per side on the same macOS host, no CPU pinning,
-`Cargo.lock` aligned, `main` at `f167327` with the same bench sources.
-Run-to-run spread on either side was about ±10 % at p50. No
-single-thread regression from the exclusive acquisition is visible; the
-branch runs came out faster, which we attribute to code layout and
-warm-up rather than to the lock mode and do not claim as an improvement.
+| point | p50 | p99 | p99.9 |
+|---|---|---|---|
+| `e7331f0` v0.12.1 | 1 188 | 4 981 | 6 939 |
+| `f167327` +#221 (pre-#225) | 1 167 | 4 919 | 6 607 |
+| `bffaf00` +#225 | 3 021 | 6 063 | 12 631 |
+| `b821df2` +#226 | 3 168 | 6 835 | 15 023 |
+| `8ba6511` +#232 | 3 396 | 7 357 | 15 359 |
+| `1d8bef2` main 0.13.0 | 2 667 | 5 917 | 12 255 |
+
+The step lands at #225 and nowhere else in this walk: p50 goes
+`1 167 → 3 021` ns, p99.9 goes `6 607 → 12 631` ns; #226 and #232 move
+the numbers a little further but do not repeat a step of that size, and
+0.13.0 final settles a bit below the #232 point. On this
+single-threaded, uncontended STP scenario the exclusive submit gate
+roughly doubles both the median and the p99.9. That is the measured
+price of the correctness fix #225 makes; the earlier "no measurable
+cost" conclusion above is withdrawn as a measurement error, not
+reproduced by this bisection.
 
 ### `stp_contention` — N-thread contention on one book, gate-mode comparison (added for #225)
 
@@ -379,8 +394,13 @@ single-threaded scenarios cannot show at all.
 Medians of three runs per side, same host and conditions as the
 `stp_sweep` comparison above, `main` at `f167327`. The `None` column is
 unchanged within noise, as required: an `STPMode::None` book never takes
-the exclusive side. The single-threaded `CancelMaker` row is unchanged
-too, so the uncontended exclusive acquisition has no measurable cost.
+the exclusive side. The single-threaded `CancelMaker` row moves only
+slightly here (`750 → 791` ns); this is not evidence that the
+uncontended exclusive acquisition is free — the dedicated single-thread
+`stp_sweep` bisection above, where every measured op is STP-active,
+puts its fixed per-op cost at roughly double the median. That earlier
+"no measurable cost" reading of this row is withdrawn; the small delta
+here reflects this scenario's own mix, not the true cost of the gate.
 From two threads up the `CancelMaker` column carries the cost of #225 by
 design: in this mix 80 % of the operations (identified passive adds and
 IOC takers) are STP-relevant and now serialize through the exclusive
@@ -604,6 +624,47 @@ the same host and session attributes the differences:
   `−17 %`.
 - **Allocation profile flat:** `18.23 allocs/op`, `~6.2 KB/op` — within
   the historical `15–19` band.
+
+## 0.12.1 → 0.13.0 delta
+
+Medians of three interleaved runs per side, `v0.12.1` worktree versus
+`main` at `1d8bef2` (0.13.0 final), same host (Apple M-series, 12
+performance + 4 efficiency cores, macOS Darwin 25.6.0, `arm64`),
+release profile, `Cargo.lock` aligned, `pricelevel` `0.9.1` on both
+sides. All values in ns.
+
+| scenario | 0.12.1 (p50 / p99 / p99.9) | 0.13.0 (p50 / p99 / p99.9) |
+|---|---|---|
+| `add_only` | 1 083 / 70 015 / 110 463 | 1 084 / 69 311 / 111 231 |
+| `cancel_only` | 42 / 20 799 / 27 087 | 42 / 20 927 / 26 639 |
+| `aggressive_walk` | 42 / 4 291 / 8 631 | 42 / 4 335 / 8 711 |
+| `mass_cancel_burst` | 40 959 / 100 735 / 160 895 | 39 935 / 101 311 / 116 351 |
+| `mixed_70_20_10` | 916 / 32 463 / 54 399 | 917 / 34 559 / 57 695 |
+| `thin_book_sweep` | 42 / 4 875 / 7 127 | 83 / 4 667 / 6 543 |
+| `notional_walk` | 42 / 3 167 / 5 959 | 42 / 3 793 / 7 375 |
+| `stp_sweep` | 1 166 / 4 875 / 6 875 | 2 959 / 5 419 / 12 671 |
+
+- **Medians unchanged** on every scenario except `stp_sweep` and, at
+  p50 only, `thin_book_sweep`.
+- **`stp_sweep` p50 `1 166 → 2 959`, p99.9 `6 875 → 12 671`** is #225's
+  exclusive submit gate, isolated by the commit-by-commit bisection in
+  the `stp_sweep` scenario section above; it is a real, attributable
+  step, not noise.
+- **`thin_book_sweep` p50 `42 → 83`** moves one HDR histogram bucket.
+  The same bisection method finds no step at any single commit across
+  this release for this scenario; on a host where a single-threaded run
+  can land on either a performance or an efficiency core, a bimodal p50
+  like this can appear on its own between two runs with no code change
+  involved. Not attributed to any commit.
+- **`notional_walk` p99 / p99.9 read about 20 % higher** in this
+  pairing, but a commit-by-commit walk across the release shows no step
+  at any single commit (p99 wanders `4 271 → 3 396 → 3 064 → 3 480 →
+  4 043 → 4 376` ns across the intermediate points) — tail noise on
+  this scenario, not a regression.
+- **`mass_cancel_burst` p99.9 reads 28 % lower on 0.13.0.** Not claimed
+  as an improvement; this scenario's tail is noisy run to run.
+- **`mixed_70_20_10` p99 / p99.9 read about 6 % higher** on 0.13.0,
+  within this scenario's own run-to-run spread.
 
 ## Limitations
 
