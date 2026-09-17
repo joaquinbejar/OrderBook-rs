@@ -108,3 +108,25 @@ maintainer:
 We appreciate your interest and look forward to your contributions!
 
 **License**: MIT
+
+<!-- related-projects:start -->
+## Related projects
+
+Repositories by the same author that this project depends on, and repositories that depend on it.
+
+### Depends on
+
+| Repository | Description |
+|------------|-------------|
+| [PriceLevel](https://github.com/joaquinbejar/PriceLevel) · [crates.io](https://crates.io/crates/pricelevel) | Lock-free price level implementation for limit order books. |
+
+### Used by
+
+| Repository | Description |
+|------------|-------------|
+| [hydra-amm](https://github.com/joaquinbejar/hydra-amm) · [crates.io](https://crates.io/crates/hydra-amm) | Universal AMM engine: build, configure and operate any Automated Market Maker through one interface. |
+| [market-maker-rs](https://github.com/joaquinbejar/market-maker-rs) | Quantitative market making strategies, starting with the Avellaneda-Stoikov model. |
+| [Option-Chain-OrderBook](https://github.com/joaquinbejar/Option-Chain-OrderBook) · [crates.io](https://crates.io/crates/option-chain-orderbook) | Option chain order book system (underlying, expiration, strike) built on OrderBook-rs, PriceLevel and OptionStratLib. |
+| [Option-Chain-OrderBook-Backend](https://github.com/joaquinbejar/Option-Chain-OrderBook-Backend) | REST and WebSocket backend service exposing Option-Chain-OrderBook. |
+
+<!-- related-projects:end -->
