@@ -64,7 +64,7 @@ wire = ["dep:zerocopy"]
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
-tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "time"] }
 tempfile = "3"
 proptest = "1.11"
 hdrhistogram = "^7"
@@ -159,7 +159,7 @@ members = [
 orderbook-rs = { path = "." }
 pricelevel = "0.9"
 tracing = "0.1"
-uuid = { version = "1.24", features = ["v4", "v5", "serde"] }
+uuid = { version = "1.26", features = ["v4", "v5", "serde"] }
 dashmap = "6.2"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -169,7 +169,7 @@ crossbeam-skiplist = "0.1"
 crossbeam = "0.8"
 bitflags = { version = "2.13", features = ["serde"] }
 thiserror = "2"
-either = "1.16"
+either = "1.18"
 tracing-subscriber = "0.3"
 async-nats = "0.50"
 bytes = "1"
