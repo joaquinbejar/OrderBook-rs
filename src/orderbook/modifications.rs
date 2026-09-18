@@ -474,7 +474,7 @@ where
     /// # What the gate covers
     ///
     /// The gate mode is chosen **before** anything is read, from
-    /// [`strandable_makers_resting`](Self::strandable_makers_resting) and
+    /// `strandable_makers_resting` and
     /// the STP mode — never from a lookup of the order being modified,
     /// which could go stale between the lookup and the acquisition. The
     /// guard is then held across the *whole* operation: the order lookup,
@@ -1565,7 +1565,7 @@ where
     ///
     /// Reachability is decided per level exactly as the sweep decides it:
     /// the level's orders are read in insertion-sequence (consumption)
-    /// order and handed to [`check_stp_at_level`], whose `safe_quantity` is
+    /// order and handed to `check_stp_at_level`, whose `safe_quantity` is
     /// the non-self depth queued ahead of the first same-user maker. The
     /// engine pre-matches up to that depth and only then cancels the
     /// taker if quantity is still left, so a taker the non-self depth
