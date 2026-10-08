@@ -7,16 +7,23 @@
 use crossbeam::atomic::AtomicCell;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
-use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Atomic cached price layout
+/// bit 127          bits 0..126
+/// ┌──────┬───────────────────────────────┐
+/// │ valid│            price              │
+/// └──────┴───────────────────────────────┘
+/// mask for valid price
+const VALID_MASK: u128 = 1 << 127;
+
+/// mask for price value
+const PRICE_MASK: u128 = !VALID_MASK;
 
 /// A best bid / ask fast-path cache for an [`OrderBook`](crate::OrderBook).
 ///
 /// Each side carries its own validity flag, so reading one side never evicts
 /// the other: after a `best_bid()` then `best_ask()` with no intervening
-/// mutation, both are served from cache. Validity is tracked by a dedicated
-/// `AtomicBool` per side rather than overloading price `0` as an "absent"
-/// sentinel, so a genuine best level at price `0` is representable and
-/// cacheable.
+/// mutation, both are served from cache.
 ///
 /// The cache is advisory: any book mutation calls [`invalidate`](Self::invalidate)
 /// to clear both sides, and a missing side is recomputed from the skiplist. Only
@@ -28,10 +35,6 @@ pub struct PriceLevelCache {
     best_bid_price: AtomicCell<u128>,
     /// Cached best ask price. Meaningful only when `ask_valid` is set.
     best_ask_price: AtomicCell<u128>,
-    /// Whether `best_bid_price` currently holds a trustworthy value.
-    bid_valid: AtomicBool,
-    /// Whether `best_ask_price` currently holds a trustworthy value.
-    ask_valid: AtomicBool,
 }
 
 impl Serialize for PriceLevelCache {
@@ -40,10 +43,12 @@ impl Serialize for PriceLevelCache {
         S: Serializer,
     {
         let mut state = serializer.serialize_struct("PriceLevelCache", 4)?;
-        state.serialize_field("best_bid_price", &self.best_bid_price.load())?;
-        state.serialize_field("best_ask_price", &self.best_ask_price.load())?;
-        state.serialize_field("bid_valid", &self.bid_valid.load(Ordering::Relaxed))?;
-        state.serialize_field("ask_valid", &self.ask_valid.load(Ordering::Relaxed))?;
+        let (bid_valid, bid_price) = Self::decode(self.best_bid_price.load());
+        let (ask_valid, ask_price) = Self::decode(self.best_ask_price.load());
+        state.serialize_field("best_bid_price", &bid_price)?;
+        state.serialize_field("best_ask_price", &ask_price)?;
+        state.serialize_field("bid_valid", &bid_valid)?;
+        state.serialize_field("ask_valid", &ask_valid)?;
         state.end()
     }
 }
@@ -54,64 +59,77 @@ impl PriceLevelCache {
         Self {
             best_bid_price: AtomicCell::new(0),
             best_ask_price: AtomicCell::new(0),
-            bid_valid: AtomicBool::new(false),
-            ask_valid: AtomicBool::new(false),
+        }
+    }
+
+    /// Apply the validity mask on the price with bits-OR op if it is not `u128::MAX`
+    fn encode(price: u128) -> u128 {
+        if price == u128::MAX {
+            return price;
+        }
+        price | VALID_MASK
+    }
+
+    /// Decodes the cached data.
+    fn decode(encoded: u128) -> (bool, u128) {
+        if encoded == u128::MAX {
+            return (false, encoded);
+        }
+        if encoded & VALID_MASK == 0 {
+            (false, encoded & PRICE_MASK)
+        } else {
+            (true, encoded & PRICE_MASK)
         }
     }
 
     /// Invalidate both sides. Called by every book mutation.
     pub fn invalidate(&self) {
-        self.bid_valid.store(false, Ordering::Relaxed);
-        self.ask_valid.store(false, Ordering::Relaxed);
+        self.best_bid_price.fetch_and(PRICE_MASK);
+        self.best_ask_price.fetch_and(PRICE_MASK);
     }
 
     /// Returns the cached best bid, or `None` on a cache miss (an empty or
     /// invalidated bid side). A cached price of `0` is a valid hit.
     pub fn get_cached_best_bid(&self) -> Option<u128> {
-        // Acquire pairs with the Release in `update_best_bid`, so a reader that
-        // observes `bid_valid == true` also observes the price stored before it.
-        if self.bid_valid.load(Ordering::Acquire) {
-            Some(self.best_bid_price.load())
-        } else {
-            None
+        match Self::decode(self.best_bid_price.load()) {
+            (true, price) => Some(price),
+            _ => None,
         }
     }
 
     /// Returns the cached best ask, or `None` on a cache miss (an empty or
     /// invalidated ask side). A cached price of `0` is a valid hit.
     pub fn get_cached_best_ask(&self) -> Option<u128> {
-        if self.ask_valid.load(Ordering::Acquire) {
-            Some(self.best_ask_price.load())
-        } else {
-            None
+        match Self::decode(self.best_ask_price.load()) {
+            (true, price) => Some(price),
+            _ => None,
         }
     }
 
-    /// Update only the bid slot. `Some(price)` caches the price (including `0`);
-    /// `None` (an empty side) leaves the slot invalid so the next read
-    /// recomputes. The ask slot is never touched.
+    /// Updates the best bid price atomically. If the price is `None`, the price becomes invalid
+    /// while keeping the price value
     pub fn update_best_bid(&self, best_bid: Option<u128>) {
         match best_bid {
             Some(price) => {
-                self.best_bid_price.store(price);
-                // Release so the price store above is visible to any reader that
-                // sees `bid_valid == true`.
-                self.bid_valid.store(true, Ordering::Release);
+                self.best_bid_price.store(Self::encode(price));
             }
-            None => self.bid_valid.store(false, Ordering::Relaxed),
+            None => {
+                self.best_bid_price.fetch_and(PRICE_MASK);
+            }
         }
     }
 
-    /// Update only the ask slot. `Some(price)` caches the price (including `0`);
-    /// `None` (an empty side) leaves the slot invalid so the next read
-    /// recomputes. The bid slot is never touched.
+    /// Updates the ask price atomically. If the price is `None`, the price becomes invalid
+    /// while keeping the price value
     pub fn update_best_ask(&self, best_ask: Option<u128>) {
         match best_ask {
             Some(price) => {
-                self.best_ask_price.store(price);
-                self.ask_valid.store(true, Ordering::Release);
+                self.best_ask_price.store(Self::encode(price));
             }
-            None => self.ask_valid.store(false, Ordering::Relaxed),
+            None => {
+                // keep the price but turn off the valid bit
+                self.best_ask_price.fetch_and(PRICE_MASK);
+            }
         }
     }
 }
@@ -170,5 +188,54 @@ mod tests {
         cache.invalidate();
         assert_eq!(cache.get_cached_best_bid(), None);
         assert_eq!(cache.get_cached_best_ask(), None);
+    }
+
+    #[test]
+    fn test_default_cache_is_invalid() {
+        let cache = PriceLevelCache::new();
+        assert_eq!(cache.get_cached_best_bid(), None);
+        assert_eq!(cache.get_cached_best_ask(), None);
+    }
+
+    #[test]
+    fn test_empty_bid_side_is_a_miss_and_does_not_touch_the_other() {
+        let cache = PriceLevelCache::new();
+        cache.update_best_ask(Some(110));
+        cache.update_best_bid(None);
+        assert_eq!(cache.get_cached_best_bid(), None);
+        assert_eq!(cache.get_cached_best_ask(), Some(110));
+    }
+
+    #[test]
+    fn test_u128_max_handling() {
+        assert_eq!(PriceLevelCache::encode(u128::MAX), u128::MAX);
+        assert_eq!(PriceLevelCache::decode(u128::MAX), (false, u128::MAX));
+
+        let cache = PriceLevelCache::new();
+        cache.update_best_bid(Some(u128::MAX));
+        assert_eq!(cache.get_cached_best_bid(), None);
+
+        cache.update_best_ask(Some(u128::MAX));
+        assert_eq!(cache.get_cached_best_ask(), None);
+    }
+
+    #[test]
+    fn test_price_level_cache_serialization() {
+        let cache = PriceLevelCache::new();
+        cache.update_best_bid(Some(100));
+        cache.update_best_ask(Some(200));
+
+        let json = serde_json::to_string(&cache).expect("serialization must succeed");
+        assert!(json.contains("\"best_bid_price\":100"));
+        assert!(json.contains("\"best_ask_price\":200"));
+        assert!(json.contains("\"bid_valid\":true"));
+        assert!(json.contains("\"ask_valid\":true"));
+
+        cache.invalidate();
+        let json_invalid = serde_json::to_string(&cache).expect("serialization must succeed");
+        assert!(json_invalid.contains("\"best_bid_price\":100"));
+        assert!(json_invalid.contains("\"best_ask_price\":200"));
+        assert!(json_invalid.contains("\"bid_valid\":false"));
+        assert!(json_invalid.contains("\"ask_valid\":false"));
     }
 }
