@@ -32,6 +32,19 @@
 //! - **Research**: Platform for studying market microstructure and order flow
 //! - **Educational**: Reference implementation for understanding modern exchange architecture
 //!
+//! ## What's New in Version 0.15.2
+//!
+//! A patch release; no public API change.
+//!
+//! - **`OrderBook::with_clock_and_namespace` derives no default namespace.**
+//!   Building a book with an injected clock and trade-ID namespace no longer
+//!   reads the wall clock or the process id, nor advances the process-wide
+//!   construction counter; the other constructors are unchanged.
+//!   `ReplayEngine::replay_from_with_clock_and_config` uses it when its
+//!   config carries a namespace.
+//! - **Minimum Rust version declared: 1.95** (`rust-version` in
+//!   `Cargo.toml`).
+//!
 //! ## What's New in Version 0.15.1
 //!
 //! A performance patch release; no public API change.
