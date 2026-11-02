@@ -14,14 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trade-ID namespace (wall-clock nanoseconds, the process id and the
   process-wide construction counter) and then threw that namespace away.
   It now assembles the book directly with the injected clock and namespace,
-  so the fully deterministic constructor reads nothing ambient and leaves
-  the construction counter untouched. `with_clock`, `new`,
+  so it no longer derives the default namespace: building the book does not
+  read the wall clock or the process id and leaves the construction counter
+  untouched. (The `DashMap` indexes still seed std `RandomState`, which only
+  affects lookups.) `with_clock`, `new`,
   `with_trade_listener` and `with_trade_and_price_level_listener` behave as
   before: all four share one private constructor and still derive the
   default namespace.
 - `ReplayEngine::replay_from_with_clock_and_config` with a
-  `trade_id_namespace` builds the replayed book with the pure constructor,
-  so a deterministic replay no longer derives a default namespace either.
+  `trade_id_namespace` builds the replayed book with
+  `with_clock_and_namespace`, so it no longer derives a default namespace
+  either.
 
 ## [0.15.1] - 2026-11-02
 
