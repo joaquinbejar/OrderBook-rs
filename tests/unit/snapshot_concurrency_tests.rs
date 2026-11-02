@@ -13,8 +13,8 @@
 //! snapshot whose best ask is not a level with quantity above zero is not
 //! a state the book passed through.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -45,11 +45,16 @@ fn race(
     mut write: impl FnMut(&OrderBook<()>),
 ) -> (Seen, u64) {
     let stop = Arc::new(AtomicBool::new(false));
+    // Both threads start together, so the writer's timer never runs out
+    // before the reader has been scheduled.
+    let start = Arc::new(Barrier::new(2));
     let reader = {
         let book = Arc::clone(&book);
         let stop = Arc::clone(&stop);
+        let start = Arc::clone(&start);
         thread::spawn(move || {
             let mut seen = Seen::default();
+            start.wait();
             while !stop.load(Ordering::Relaxed) {
                 let snapshot = book.create_snapshot(depth).expect("snapshot");
                 seen.reads += 1;
@@ -71,6 +76,7 @@ fn race(
         })
     };
 
+    start.wait();
     let started = Instant::now();
     let mut writes: u64 = 0;
     while started.elapsed() < RUN_FOR {
@@ -78,7 +84,10 @@ fn race(
         writes += 1;
     }
     stop.store(true, Ordering::Relaxed);
-    (reader.join().expect("reader"), writes)
+    let seen = reader.join().expect("reader");
+    // A run with no concurrent read proves nothing.
+    assert!(seen.reads > 0, "the reader took no snapshot during the run");
+    (seen, writes)
 }
 
 fn book_with_resting_ask() -> Arc<OrderBook<()>> {
