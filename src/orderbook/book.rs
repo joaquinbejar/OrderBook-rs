@@ -50,6 +50,16 @@ const DEFAULT_TRADE_ID_NAMESPACE_LABEL: &[u8] = b"orderbook-rs/default-trade-id-
 /// [`default_trade_id_namespace`] for the exhaustion behaviour.
 static DEFAULT_TRADE_ID_NAMESPACE_SEQ: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+std::thread_local! {
+    /// Calls of [`default_trade_id_namespace`] on this thread, so a test can
+    /// show that a constructor never derives the default namespace (and so
+    /// never reads the wall clock, the pid or the global counter) without
+    /// racing other tests that build books in parallel.
+    pub(crate) static DEFAULT_NAMESPACE_DERIVATIONS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
 /// Takes the next value of a namespace construction counter: the value
 /// before a `checked_add(1)`, or `u64::MAX` (logged at `WARN`, counter left
 /// untouched) once the counter is exhausted. Never panics or wraps.
@@ -112,6 +122,12 @@ pub(crate) fn next_namespace_seq(counter: &AtomicU64) -> u64 {
 /// `ReplayBookConfig`), so the default only has to be unique.
 #[must_use]
 pub(crate) fn default_trade_id_namespace(symbol: &str) -> Uuid {
+    #[cfg(test)]
+    let _ = DEFAULT_NAMESPACE_DERIVATIONS.try_with(|calls| {
+        if let Some(next) = calls.get().checked_add(1) {
+            calls.set(next);
+        }
+    });
     let seq = next_namespace_seq(&DEFAULT_TRADE_ID_NAMESPACE_SEQ);
     let wall_ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1139,9 +1155,31 @@ where
     /// reproducible (see [`Self::new`]); use
     /// [`Self::with_clock_and_namespace`] for byte-identical trade IDs.
     pub fn with_clock(symbol: &str, clock: Arc<dyn Clock>) -> Self {
-        // Unique per book without OS entropy (#265).
-        let namespace = default_trade_id_namespace(symbol);
+        Self::from_parts(
+            symbol,
+            clock,
+            default_trade_id_namespace(symbol),
+            None,
+            None,
+        )
+    }
 
+    /// Builds a book from all the inputs a constructor varies: the clock,
+    /// the trade-ID namespace and the two listeners.
+    ///
+    /// This is the only place the struct is assembled. It reads no wall
+    /// clock, no process id and no construction counter; the only ambient
+    /// input is the hasher seed of each `DashMap` index (std
+    /// `RandomState`), which affects lookups only and never the order of
+    /// any output. Whatever a public constructor reads (the default
+    /// namespace, for instance) it reads before calling this.
+    fn from_parts(
+        symbol: &str,
+        clock: Arc<dyn Clock>,
+        namespace: Uuid,
+        trade_listener: Option<TradeListener>,
+        price_level_changed_listener: Option<PriceLevelChangedListener>,
+    ) -> Self {
         Self {
             symbol: symbol.to_string(),
             bids: SkipMap::new(),
@@ -1186,9 +1224,9 @@ where
             market_close_timestamp: AtomicU64::new(0),
             has_market_close: AtomicBool::new(false),
             cache: PriceLevelCache::new(),
-            trade_listener: None,
+            trade_listener,
             _phantom: PhantomData,
-            price_level_changed_listener: None,
+            price_level_changed_listener,
             #[cfg(feature = "special_orders")]
             special_order_tracker: SpecialOrderTracker::new(),
             #[cfg(feature = "special_orders")]
@@ -1214,6 +1252,17 @@ where
     /// run and its replay over the same command stream produce
     /// byte-identical trades.
     ///
+    /// This is the one constructor that never derives the default
+    /// namespace: building the book does not read the wall clock or the
+    /// process id and does not advance the process-wide construction
+    /// counter. Two inputs remain: the `DashMap` indexes seed std
+    /// `RandomState` from the OS (lookups only, never the order of an
+    /// output), and operations read the injected clock (time in force,
+    /// order timestamps). Every other constructor ([`Self::new`],
+    /// [`Self::with_clock`], [`Self::with_trade_listener`], ...) derives
+    /// the default namespace, and setting a namespace afterwards does not
+    /// undo that read.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1228,9 +1277,7 @@ where
     /// assert_eq!(book.symbol(), "AAPL");
     /// ```
     pub fn with_clock_and_namespace(symbol: &str, clock: Arc<dyn Clock>, namespace: Uuid) -> Self {
-        let mut book = Self::with_clock(symbol, clock);
-        book.set_trade_id_namespace(namespace);
-        book
+        Self::from_parts(symbol, clock, namespace, None, None)
     }
 
     /// Replace the clock used by this book.
@@ -2182,69 +2229,13 @@ where
 
     /// Create a new order book for the given symbol with a trade listener
     pub fn with_trade_listener(symbol: &str, trade_listener: TradeListener) -> Self {
-        let namespace = default_trade_id_namespace(symbol);
-
-        Self {
-            symbol: symbol.to_string(),
-            bids: SkipMap::new(),
-            asks: SkipMap::new(),
-            order_locations: DashMap::new(),
-            user_orders: DashMap::new(),
-            transaction_id_generator: UuidGenerator::new(namespace),
-            engine_seq: AtomicU64::new(0),
-            kill_switch: AtomicBool::new(false),
-            risk_state: RiskState::new(),
-            last_trade_price: AtomicCell::new(0),
-            has_traded: AtomicBool::new(false),
-            strandable_makers_resting: AtomicUsize::new(0),
-            match_aborts: AtomicU64::new(0),
-            match_fold_failures: AtomicU64::new(0),
-            trade_ids_exhausted: AtomicBool::new(false),
-            engine_seq_exhausted: AtomicBool::new(false),
-            submit_gate: std::sync::RwLock::new(()),
-            submit_gate_poisoned: AtomicBool::new(false),
-            outbox: super::emission::EventOutbox::default(),
-            level_locks: std::array::from_fn(|_| std::sync::RwLock::new(())),
-            #[cfg(test)]
-            stp_interleave_hook: None,
-            #[cfg(test)]
-            level_interleave_hook: None,
-            #[cfg(test)]
-            fok_level_fault_hook: None,
-            #[cfg(test)]
-            cancel_fault_hook: None,
-            #[cfg(test)]
-            rest_fault_hook: None,
-            #[cfg(test)]
-            rest_interleave_hook: None,
-            #[cfg(test)]
-            rest_risk_fault_hook: None,
-            #[cfg(test)]
-            update_interleave_hook: None,
-            #[cfg(all(test, feature = "special_orders"))]
-            reprice_interleave_hook: None,
-            #[cfg(test)]
-            modify_interleave_hook: None,
-            market_close_timestamp: AtomicU64::new(0),
-            has_market_close: AtomicBool::new(false),
-            cache: PriceLevelCache::new(),
-            trade_listener: Some(trade_listener),
-            _phantom: PhantomData,
-            price_level_changed_listener: None,
-            #[cfg(feature = "special_orders")]
-            special_order_tracker: SpecialOrderTracker::new(),
-            #[cfg(feature = "special_orders")]
-            pending_stops: super::stop_orders::PendingStops::new(),
-            tick_size: None,
-            lot_size: None,
-            min_order_size: None,
-            max_order_size: None,
-            stp_mode: STPMode::None,
-            fee_schedule: None,
-            stop_protection: None,
-            order_state_tracker: None,
-            clock: Arc::new(MonotonicClock) as Arc<dyn Clock>,
-        }
+        Self::from_parts(
+            symbol,
+            Arc::new(MonotonicClock) as Arc<dyn Clock>,
+            default_trade_id_namespace(symbol),
+            Some(trade_listener),
+            None,
+        )
     }
 
     /// Creates a new order book with both a trade listener and a price level change listener.
@@ -2261,69 +2252,13 @@ where
         trade_listener: TradeListener,
         book_changed_listener: PriceLevelChangedListener,
     ) -> Self {
-        let namespace = default_trade_id_namespace(symbol);
-
-        Self {
-            symbol: symbol.to_string(),
-            bids: SkipMap::new(),
-            asks: SkipMap::new(),
-            order_locations: DashMap::new(),
-            user_orders: DashMap::new(),
-            transaction_id_generator: UuidGenerator::new(namespace),
-            engine_seq: AtomicU64::new(0),
-            kill_switch: AtomicBool::new(false),
-            risk_state: RiskState::new(),
-            last_trade_price: AtomicCell::new(0),
-            has_traded: AtomicBool::new(false),
-            strandable_makers_resting: AtomicUsize::new(0),
-            match_aborts: AtomicU64::new(0),
-            match_fold_failures: AtomicU64::new(0),
-            trade_ids_exhausted: AtomicBool::new(false),
-            engine_seq_exhausted: AtomicBool::new(false),
-            submit_gate: std::sync::RwLock::new(()),
-            submit_gate_poisoned: AtomicBool::new(false),
-            outbox: super::emission::EventOutbox::default(),
-            level_locks: std::array::from_fn(|_| std::sync::RwLock::new(())),
-            #[cfg(test)]
-            stp_interleave_hook: None,
-            #[cfg(test)]
-            level_interleave_hook: None,
-            #[cfg(test)]
-            fok_level_fault_hook: None,
-            #[cfg(test)]
-            cancel_fault_hook: None,
-            #[cfg(test)]
-            rest_fault_hook: None,
-            #[cfg(test)]
-            rest_interleave_hook: None,
-            #[cfg(test)]
-            rest_risk_fault_hook: None,
-            #[cfg(test)]
-            update_interleave_hook: None,
-            #[cfg(all(test, feature = "special_orders"))]
-            reprice_interleave_hook: None,
-            #[cfg(test)]
-            modify_interleave_hook: None,
-            market_close_timestamp: AtomicU64::new(0),
-            has_market_close: AtomicBool::new(false),
-            cache: PriceLevelCache::new(),
-            trade_listener: Some(trade_listener),
-            _phantom: PhantomData,
-            price_level_changed_listener: Some(book_changed_listener),
-            #[cfg(feature = "special_orders")]
-            special_order_tracker: SpecialOrderTracker::new(),
-            #[cfg(feature = "special_orders")]
-            pending_stops: super::stop_orders::PendingStops::new(),
-            tick_size: None,
-            lot_size: None,
-            min_order_size: None,
-            max_order_size: None,
-            stp_mode: STPMode::None,
-            fee_schedule: None,
-            stop_protection: None,
-            order_state_tracker: None,
-            clock: Arc::new(MonotonicClock) as Arc<dyn Clock>,
-        }
+        Self::from_parts(
+            symbol,
+            Arc::new(MonotonicClock) as Arc<dyn Clock>,
+            default_trade_id_namespace(symbol),
+            Some(trade_listener),
+            Some(book_changed_listener),
+        )
     }
 
     /// Set a trade listener for this order book

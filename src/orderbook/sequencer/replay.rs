@@ -969,7 +969,13 @@ where
 
         Self::check_namespace_full_replay(from_sequence, config)?;
 
-        let mut book = OrderBook::with_clock(symbol, clock);
+        // With an injected namespace the book is built without deriving the
+        // default one, so a deterministic replay reads no wall clock, pid or
+        // construction counter (see `OrderBook::with_clock_and_namespace`).
+        let mut book = match config.trade_id_namespace {
+            Some(namespace) => OrderBook::with_clock_and_namespace(symbol, clock, namespace),
+            None => OrderBook::with_clock(symbol, clock),
+        };
         config.apply_to(&mut book);
         let last_applied_seq = Self::replay_into(&book, journal, from_sequence, |_, _| {})?;
         Ok((book, last_applied_seq))
@@ -3546,6 +3552,42 @@ mod tests {
             "equal probe IDs prove namespace + counter position match, hence \
              the whole replayed trade-ID stream matched the reference"
         );
+    }
+
+    /// A namespace-carrying config builds the replayed book with the pure
+    /// constructor: it never derives the default namespace, so the replay
+    /// reads no wall clock, pid or construction counter. Without one, the
+    /// replay derives the default namespace once, as before.
+    #[test]
+    fn test_replay_with_config_namespace_construction_skips_default_namespace() {
+        let derivations =
+            || crate::orderbook::book::DEFAULT_NAMESPACE_DERIVATIONS.with(std::cell::Cell::get);
+        let journal = trading_journal(new_id(), new_id());
+        let namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"VENUE/TEST");
+        let with_namespace = ReplayBookConfig::default().with_trade_id_namespace(namespace);
+
+        let before = derivations();
+        let clock: Arc<dyn Clock> = Arc::new(StubClock::new());
+        let _ = ReplayEngine::<()>::replay_from_with_clock_and_config(
+            &journal,
+            0,
+            "TEST",
+            clock,
+            &with_namespace,
+        )
+        .expect("replay with namespace config");
+        assert_eq!(derivations(), before);
+
+        let clock: Arc<dyn Clock> = Arc::new(StubClock::new());
+        let _ = ReplayEngine::<()>::replay_from_with_clock_and_config(
+            &journal,
+            0,
+            "TEST",
+            clock,
+            &ReplayBookConfig::default(),
+        )
+        .expect("replay with default config");
+        assert_eq!(derivations(), before + 1);
     }
 
     /// #200 review: a namespace-carrying config on a suffix replay
