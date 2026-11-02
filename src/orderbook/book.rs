@@ -710,20 +710,6 @@ pub struct OrderBook<T = ()> {
     pub(super) clock: Arc<dyn Clock>,
 }
 
-/// A **lossy, inspection-only** serialization of the order book.
-///
-/// This `Serialize` impl is a human-readable debug/inspection dump, **not** a
-/// persistence or round-trip path. It intentionally omits matching
-/// configuration that [`OrderBook::create_snapshot_package`] preserves —
-/// `stp_mode`, tick/lot/min/max order size, the engine sequence, the kill
-/// switch, the risk config and the stop protection collar — and there is no
-/// corresponding `Deserialize`, so it cannot reconstruct a book. The bids,
-/// asks, and order-location maps use `BTreeMap` so the JSON key ordering is deterministic across process runs, and
-/// the volatile best-bid/ask cache is not serialized.
-///
-/// For durable, reproducible persistence or replay, use
-/// [`OrderBook::snapshot_to_json`] / [`OrderBook::create_snapshot_package`]
-/// instead — those are the determinism-critical paths.
 /// Snapshots the first `depth` levels yielded by `levels` that still hold
 /// at least one order (#313).
 ///
@@ -762,6 +748,20 @@ where
     Ok(out)
 }
 
+/// A **lossy, inspection-only** serialization of the order book.
+///
+/// This `Serialize` impl is a human-readable debug/inspection dump, **not** a
+/// persistence or round-trip path. It intentionally omits matching
+/// configuration that [`OrderBook::create_snapshot_package`] preserves —
+/// `stp_mode`, tick/lot/min/max order size, the engine sequence, the kill
+/// switch, the risk config and the stop protection collar — and there is no
+/// corresponding `Deserialize`, so it cannot reconstruct a book. The bids,
+/// asks, and order-location maps use `BTreeMap` so the JSON key ordering is deterministic across process runs, and
+/// the volatile best-bid/ask cache is not serialized.
+///
+/// For durable, reproducible persistence or replay, use
+/// [`OrderBook::snapshot_to_json`] / [`OrderBook::create_snapshot_package`]
+/// instead — those are the determinism-critical paths.
 impl<T> Serialize for OrderBook<T>
 where
     T: Serialize,
