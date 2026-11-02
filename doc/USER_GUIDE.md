@@ -1294,5 +1294,5 @@ For issues, questions, or contributions:
 ---
 
 **Version:** 0.15.2  
-**Last Updated:** September 2026  
+**Last Updated:** November 2026  
 **License:** MIT
