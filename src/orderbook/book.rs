@@ -710,6 +710,44 @@ pub struct OrderBook<T = ()> {
     pub(super) clock: Arc<dyn Clock>,
 }
 
+/// Snapshots the first `depth` levels yielded by `levels` that still hold
+/// at least one order (#313).
+///
+/// `levels` must already be in book order for the side (asks ascending,
+/// bids descending). A level a concurrent cancel or sweep has emptied but
+/// not yet removed is skipped; the test is on order count, not visible
+/// quantity, so a level holding only hidden or reserve quantity is kept.
+/// The walk stops as soon as `depth` levels are collected.
+///
+/// # Errors
+///
+/// Propagates the first [`PriceLevelError`] returned by
+/// [`PriceLevel::snapshot`].
+fn collect_side_levels<'a, I>(
+    levels: I,
+    side_len: usize,
+    depth: usize,
+) -> Result<Vec<PriceLevelSnapshot>, PriceLevelError>
+where
+    I: Iterator<Item = crossbeam_skiplist::map::Entry<'a, u128, Arc<PriceLevel>>>,
+{
+    let mut out = Vec::with_capacity(depth.min(side_len));
+    if depth == 0 {
+        return Ok(out);
+    }
+    for entry in levels {
+        let snapshot = entry.value().snapshot()?;
+        if snapshot.order_count() == 0 {
+            continue;
+        }
+        out.push(snapshot);
+        if out.len() >= depth {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// A **lossy, inspection-only** serialization of the order book.
 ///
 /// This `Serialize` impl is a human-readable debug/inspection dump, **not** a
@@ -5083,7 +5121,18 @@ where
     /// captured half done: the levels, the pending stops (with their trailed
     /// terms) and the last trade price describe one state between two such
     /// calls. Shared-gate sweeps (books without pending stops) can still
-    /// overlap it, with the level-statistics caveat above. It must not be
+    /// overlap it, with the level-statistics caveat above.
+    ///
+    /// Each side is built by walking the price-ordered level map (asks
+    /// ascending, bids descending) and stops once `depth` levels are kept.
+    /// A level with no orders (one a concurrent cancel or sweep has
+    /// emptied but not yet removed) is skipped, and a level removed during
+    /// the walk is simply not yielded, so the snapshot never lists a level
+    /// with zero orders and never leaves a gap: it holds the first `depth`
+    /// non-empty levels the walk observed. A level holding only hidden or
+    /// reserve quantity still has orders and is kept. Per-level statistics
+    /// stay advisory under concurrent sweeps. On a quiescent book the
+    /// output is identical to a full sort of every level. It must not be
     /// called from caller code that runs under the book's gate (a `Clock`,
     /// `T::clone`): the gate is not reentrant.
     ///
@@ -5101,32 +5150,11 @@ where
             self.on_submit_gate_poisoned();
             poisoned.into_inner()
         });
-        // Get all bid prices and sort them in descending order
-        let mut bid_prices: Vec<u128> = self.bids.iter().map(|item| *item.key()).collect();
-        bid_prices.sort_by(|a, b| b.cmp(a)); // Descending order
-        bid_prices.truncate(depth);
-
-        // Get all ask prices and sort them in ascending order
-        let mut ask_prices: Vec<u128> = self.asks.iter().map(|item| *item.key()).collect();
-        ask_prices.sort(); // Ascending order
-        ask_prices.truncate(depth);
-
-        let mut bid_levels = Vec::with_capacity(bid_prices.len());
-        let mut ask_levels = Vec::with_capacity(ask_prices.len());
-
-        // Create snapshots for each bid level
-        for price in bid_prices {
-            if let Some(entry) = self.bids.get(&price) {
-                bid_levels.push(entry.value().snapshot()?);
-            }
-        }
-
-        // Create snapshots for each ask level
-        for price in ask_prices {
-            if let Some(entry) = self.asks.get(&price) {
-                ask_levels.push(entry.value().snapshot()?);
-            }
-        }
+        // #313: walk each side in price order and skip emptied levels, so
+        // a concurrent cancel or sweep can neither surface a zero-count
+        // level nor leave a gap in the first `depth` levels.
+        let bid_levels = collect_side_levels(self.bids.iter().rev(), self.bids.len(), depth)?;
+        let ask_levels = collect_side_levels(self.asks.iter(), self.asks.len(), depth)?;
 
         Ok(OrderBookSnapshot {
             symbol: self.symbol.clone(),
@@ -6101,24 +6129,10 @@ where
         depth: usize,
         flags: MetricFlags,
     ) -> Result<EnrichedSnapshot, OrderBookError> {
-        // The SkipMap is already price-ordered, so iterate it directly and take
-        // only the requested depth — no collect/sort/truncate of all keys and no
-        // redundant second lookup per kept level. Bids are highest-first (reverse
-        // iteration); asks are lowest-first.
-        let bid_levels: Vec<PriceLevelSnapshot> = self
-            .bids
-            .iter()
-            .rev()
-            .take(depth)
-            .map(|entry| entry.value().snapshot())
-            .collect::<Result<_, PriceLevelError>>()?;
-
-        let ask_levels: Vec<PriceLevelSnapshot> = self
-            .asks
-            .iter()
-            .take(depth)
-            .map(|entry| entry.value().snapshot())
-            .collect::<Result<_, PriceLevelError>>()?;
+        // Price-ordered walk that skips emptied levels (#313), shared with
+        // `create_snapshot`.
+        let bid_levels = collect_side_levels(self.bids.iter().rev(), self.bids.len(), depth)?;
+        let ask_levels = collect_side_levels(self.asks.iter(), self.asks.len(), depth)?;
 
         // Create enriched snapshot with pre-calculated metrics
         EnrichedSnapshot::with_metrics(
