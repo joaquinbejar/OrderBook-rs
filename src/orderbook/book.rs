@@ -12,6 +12,7 @@ use super::market_impact::{MarketImpact, OrderSimulation};
 use super::risk::{ReferencePriceSource, RiskConfig, RiskRebuild, RiskState};
 use super::snapshot::{EnrichedSnapshot, MetricFlags, OrderBookSnapshot, OrderBookSnapshotPackage};
 use super::statistics::{DepthStats, DistributionBin};
+use super::user_orders::UserOrderIds;
 use crate::orderbook::book_change_event::{PriceLevelChangedEvent, PriceLevelChangedListener};
 use crate::orderbook::matching::{MatchOutcome, SweepReservation};
 #[cfg(feature = "special_orders")]
@@ -163,18 +164,24 @@ pub(crate) struct OrderLocation {
     pub(crate) side: Side,
     /// The owner the order is tracked under in `user_orders`.
     pub(crate) user_id: Hash32,
+    /// The sequence the order is tracked under in its owner's
+    /// `user_orders` entry, so removing it there is a binary search rather
+    /// than a scan of every id the owner has resting.
+    pub(crate) user_seq: u64,
 }
 
 impl OrderLocation {
     /// A location for an order resting at `price` on `side`, owned by
-    /// `user_id`.
+    /// `user_id` and tracked under `user_seq` in that owner's
+    /// `user_orders` entry.
     #[must_use]
     #[inline]
-    pub(crate) fn new(price: u128, side: Side, user_id: Hash32) -> Self {
+    pub(crate) fn new(price: u128, side: Side, user_id: Hash32, user_seq: u64) -> Self {
         Self {
             price,
             side,
             user_id,
+            user_seq,
         }
     }
 
@@ -303,7 +310,7 @@ pub struct OrderBook<T = ()> {
     /// A concurrent map from user ID to their order IDs for fast lookup.
     /// Maintained by `add_order`, `cancel_order`, and the matching engine
     /// to enable O(1) user-based mass cancellation.
-    pub(super) user_orders: DashMap<Hash32, Vec<Id>>,
+    pub(super) user_orders: DashMap<Hash32, UserOrderIds>,
 
     /// Generator for unique transaction IDs
     pub(super) transaction_id_generator: UuidGenerator,
@@ -605,6 +612,15 @@ pub struct OrderBook<T = ()> {
     #[cfg(test)]
     pub(super) rest_risk_fault_hook:
         Option<std::sync::Arc<dyn Fn(Id) -> Option<OrderBookError> + Send + Sync>>,
+
+    /// Test-only interleaving point in `UpdateQuantity` (#311), fired with
+    /// the order's id after the update was validated against the resting
+    /// order and right before the level applies it. A test can park the
+    /// update there and consume the order from another thread, so the level
+    /// reports it absent. Like its siblings it exists only in `cfg(test)`
+    /// builds.
+    #[cfg(test)]
+    pub(super) update_interleave_hook: Option<std::sync::Arc<dyn Fn(Id) + Send + Sync>>,
 
     /// Test-only interleaving point in the repricers (#291), fired with the
     /// book and a tracked id right after `get_order` found no order for it
@@ -1161,6 +1177,8 @@ where
             rest_interleave_hook: None,
             #[cfg(test)]
             rest_risk_fault_hook: None,
+            #[cfg(test)]
+            update_interleave_hook: None,
             #[cfg(all(test, feature = "special_orders"))]
             reprice_interleave_hook: None,
             #[cfg(test)]
@@ -2201,6 +2219,8 @@ where
             rest_interleave_hook: None,
             #[cfg(test)]
             rest_risk_fault_hook: None,
+            #[cfg(test)]
+            update_interleave_hook: None,
             #[cfg(all(test, feature = "special_orders"))]
             reprice_interleave_hook: None,
             #[cfg(test)]
@@ -2278,6 +2298,8 @@ where
             rest_interleave_hook: None,
             #[cfg(test)]
             rest_risk_fault_hook: None,
+            #[cfg(test)]
+            update_interleave_hook: None,
             #[cfg(all(test, feature = "special_orders"))]
             reprice_interleave_hook: None,
             #[cfg(test)]
@@ -5772,13 +5794,13 @@ where
     /// materialized by [`PriceLevel::snapshot_by_seq_into`] in the prepare
     /// phase (`PreparedSnapshotLevels::orders`), never the `DashMap`-backed
     /// `iter_orders` view, whose per-instance-hashed order would leak into
-    /// the `user_orders` `Vec<Id>` layout and make a subsequent
+    /// the `user_orders` admission sequence and make a subsequent
     /// `cancel_orders_by_user` diverge across restores of the same package
     /// (#192). This is NOT the original admission history — a snapshot
     /// cannot recover that — but it is deterministic. `order_locations`,
     /// the tracker's `DashSet`s, and the risk maps are order-insensitive,
     /// so their rebuild order does not leak; only `user_orders`, whose
-    /// per-user `Vec` order is consumed by `cancel_orders_by_user`, needs
+    /// per-user admission order is consumed by `cancel_orders_by_user`, needs
     /// the fixed traversal. Every level read happened in the prepare phase,
     /// so no fallible pricelevel call remains here.
     fn commit_restored_levels(&self, prepared: &PreparedSnapshotLevels) {
@@ -5833,9 +5855,11 @@ where
         // insertion sequence), so this walk performs no fallible call.
         for (price, side, order) in &prepared.orders {
             let (price, side) = (*price, *side);
-            self.order_locations
-                .insert(order.id(), OrderLocation::new(price, side, order.user_id()));
-            self.track_user_order(order.user_id(), order.id());
+            let user_seq = self.track_user_order(order.user_id(), order.id());
+            self.order_locations.insert(
+                order.id(),
+                OrderLocation::new(price, side, order.user_id(), user_seq),
+            );
             // #230: the count is not carried by the snapshot; it is
             // recounted from what the restore actually installs, so
             // a restored non-auto reserve keeps its discard

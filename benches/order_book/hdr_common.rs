@@ -220,8 +220,9 @@ pub fn submit_gtc(book: &OrderBook<()>, rng: &mut Rng, id: u64) {
 /// and assert that every one rests (#259 PR review). `submit_gtc`'s
 /// tight band crosses, so a book seeded with it holds only a fraction of
 /// its ids; a scenario that means to act on resting orders seeds here.
-/// Many owners keep each owner's `user_orders` list short (a cancel
-/// removes its id with an order-preserving shift, linear in that list).
+/// Many owners spread the book over many `user_orders` entries;
+/// `cancel_single_owner_hdr` and `fill_single_owner_hdr` cover the
+/// single-owner end.
 pub fn seed_resting(book: &OrderBook<()>, rng: &mut Rng, first_id: u64, n: u64, owners: u16) {
     let before = book.get_all_orders().len();
     for i in 0..n {

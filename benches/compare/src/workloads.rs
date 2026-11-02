@@ -26,9 +26,9 @@ use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
 use crate::adapter::{
-    Book, add_limit_order_with_user, cancel_all, cancel_order, create_snapshot, journal_of_adds,
-    new_book, new_listener_book, new_stp_book, owner, replay, resting_orders, restore,
-    snapshot_package, submit_market_order_with_user,
+    Book, add_limit_order_with_user, cancel_all, cancel_by_user, cancel_order, create_snapshot,
+    journal_of_adds, new_book, new_listener_book, new_stp_book, owner, replay, resting_orders,
+    restore, snapshot_package, submit_market_order_with_user,
 };
 use crate::rng::Rng;
 
@@ -183,10 +183,11 @@ fn dense_book(book: &Book, rng: &mut Rng, first_id: u64, orders: u64, owners: u6
     ids
 }
 
-/// Owners of the cancel / mass-cancel seeds: enough that no owner's
-/// `user_orders` list is long (a cancel removes its id from that list
-/// with an order-preserving `Vec::remove`, linear in the list, on both
-/// versions; with 4 owners and 200 000 orders that shift would dominate).
+/// Owners of the cancel / mass-cancel seeds, spreading the book over many
+/// `user_orders` entries. Before the per-user index removal became a
+/// binary search, a cancel shifted its owner's whole id list, so few
+/// owners would have made that shift dominate; `cancel_single_owner`,
+/// `fill_single_owner` and `mass_cancel_by_user` now measure that end.
 const SEED_OWNERS: u64 = 4_096;
 
 /// Pre-loaded NON-crossing book (every seeded order rests, asserted),
@@ -208,6 +209,69 @@ pub fn cancel_only(preload_ops: u64) -> Histogram<u64> {
         out.clear();
     }
     assert_eq!(resting_orders(&book), 0, "every cancel must hit");
+    hist
+}
+
+/// `cancel_single_owner_hdr`: `cancel_only` with every order owned by
+/// ONE user, cancelled in a seeded random order (shuffled before the
+/// clock). The opposite end from `SEED_OWNERS`: a single market maker, or
+/// anonymous flow (which shares `Hash32::zero()`), whose `user_orders`
+/// entry holds every resting order.
+pub fn cancel_single_owner(preload_ops: u64) -> Histogram<u64> {
+    let book = new_book("BENCH");
+    let mut rng = Rng::new(SEED);
+    let mut hist = new_histogram();
+    let mut ids = dense_book(&book, &mut rng, 1, preload_ops, 1);
+    for i in (1..ids.len()).rev() {
+        let j = rng.range(0, i as u64) as usize;
+        ids.swap(i, j);
+    }
+
+    let mut out = Vec::new();
+    for chunk in ids.chunks(BATCH as usize) {
+        record_batch_into(&mut hist, chunk.len() as u64, &mut out, |j| {
+            cancel_order(&book, chunk[j as usize])
+        });
+        out.clear();
+    }
+    assert_eq!(resting_orders(&book), 0, "every cancel must hit");
+    hist
+}
+
+/// `fill_single_owner_hdr`: `preload_ops` one-lot asks at random prices,
+/// every one owned by ONE maker, each consumed by a one-lot market buy, so
+/// every timed op runs the filled-maker cleanup against that owner's
+/// `user_orders` entry. One sample per op (a fill is well above the tick).
+pub fn fill_single_owner(preload_ops: u64) -> Histogram<u64> {
+    let book = new_book("BENCH");
+    let mut rng = Rng::new(SEED);
+    let mut hist = new_histogram();
+    let maker = owner(0xAA);
+    let taker = owner(0xBB);
+    for id in 1..=preload_ops {
+        let price = 1_001 + rng.range(0, 999) as u128;
+        drop(add_limit_order_with_user(
+            &book,
+            Id::from_u64(id),
+            price,
+            1,
+            Side::Sell,
+            maker,
+        ));
+    }
+    assert_eq!(
+        resting_orders(&book),
+        preload_ops as usize,
+        "seed must rest every order"
+    );
+
+    for id in preload_ops + 1..=2 * preload_ops {
+        let out = record(&mut hist, || {
+            submit_market_order_with_user(&book, Id::from_u64(id), 1, Side::Buy, taker)
+        });
+        drop(out);
+    }
+    assert_eq!(resting_orders(&book), 0, "every maker must be filled");
     hist
 }
 
@@ -440,6 +504,35 @@ pub fn mass_cancel_burst(orders_per_burst: u64, bursts: u64) -> Histogram<u64> {
         let result = record(&mut hist, || cancel_all(&book));
         drop(result);
         assert_eq!(resting_orders(&book), 0, "mass cancel must empty the book");
+    }
+    hist
+}
+
+/// `mass_cancel_by_user_hdr`: a dense book of `orders_per_burst` orders,
+/// every one owned by ONE user, then one timed `cancel_orders_by_user`
+/// for that user. One sample per burst ("ns to drain N orders"), like
+/// `mass_cancel_burst`. The by-user cancel walks the owner's
+/// `user_orders` entry and cancels each id through the single-order path,
+/// so it pays one `user_orders` removal per order at that entry's length.
+pub fn mass_cancel_by_user(orders_per_burst: u64, bursts: u64) -> Histogram<u64> {
+    let book = new_book("BENCH");
+    let mut rng = Rng::new(SEED);
+    let mut hist = new_histogram();
+    let mut next_id = 1u64;
+    // `dense_book` with one owner draws this owner for every order.
+    let mut user = [0u8; 32];
+    user[2] = 0x5A;
+
+    for _ in 0..bursts {
+        dense_book(&book, &mut rng, next_id, orders_per_burst, 1);
+        next_id += orders_per_burst;
+        let result = record(&mut hist, || cancel_by_user(&book, user));
+        drop(result);
+        assert_eq!(
+            resting_orders(&book),
+            0,
+            "by-user cancel must empty the book"
+        );
     }
     hist
 }

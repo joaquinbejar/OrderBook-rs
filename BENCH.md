@@ -397,10 +397,10 @@ historical 29 to 42 ns p50 was mostly the cancel-miss path.
 the price's level stripe, removes the order from the level (its order
 map and FIFO skiplist), then untracks it from the location, user and
 risk indices, and removes the level when it empties (about 10 orders per
-level here, so often). The user-index removal is an order-preserving
-shift of that owner's id list (about 244 ids per owner here); with few
-owners and deep books it grows linearly (see `BENCHMARKS.md`, Criterion
-`cancel_orders_by_user`).
+level here, so often). The user-index removal is a binary search on the
+order's admission sequence in its owner's entry, so it no longer grows
+with the number of orders that owner has resting; `cancel_single_owner`
+measures a single owner with 100 000 resting orders.
 
 ### `aggressive_walk` — taker market orders sweep multi-level book
 

@@ -164,6 +164,7 @@ mod tests {
                 price,
                 side,
                 user_id,
+                ..
             } = *location.value();
             let rests = resting.get(location.key());
             assert!(
@@ -174,8 +175,10 @@ mod tests {
         }
         for (id, (price, side, owner, _)) in &resting {
             assert_eq!(
-                book.order_locations.get(id).map(|loc| *loc),
-                Some(OrderLocation::new(*price, *side, *owner)),
+                book.order_locations
+                    .get(id)
+                    .map(|loc| (loc.price, loc.side, loc.user_id)),
+                Some((*price, *side, *owner)),
                 "order {id} rests but is not indexed"
             );
         }
@@ -184,9 +187,9 @@ mod tests {
         let mut seen: HashSet<Id> = HashSet::new();
         for entry in book.user_orders.iter() {
             assert!(!entry.value().is_empty(), "empty user entry kept");
-            for id in entry.value() {
-                assert!(seen.insert(*id), "order {id} is in the user index twice");
-                let rests = resting.get(id);
+            for id in entry.value().to_vec() {
+                assert!(seen.insert(id), "order {id} is in the user index twice");
+                let rests = resting.get(&id);
                 assert!(
                     rests.is_some_and(|r| r.2 == *entry.key()),
                     "order {id} is in the user index but does not rest (rests: {rests:?})"
@@ -432,12 +435,7 @@ mod tests {
         let entries: Vec<(Hash32, usize)> = book
             .user_orders
             .iter()
-            .map(|entry| {
-                (
-                    *entry.key(),
-                    entry.value().iter().filter(|id| **id == reused).count(),
-                )
-            })
+            .map(|entry| (*entry.key(), usize::from(entry.value().contains(&reused))))
             .filter(|(_, count)| *count > 0)
             .collect();
         assert_eq!(entries, vec![(user(2), 1)], "one entry, the new owner's");
@@ -471,6 +469,157 @@ mod tests {
                 .map(|l| l.price_side()),
             Some((100, Side::Sell))
         );
+        assert_book_consistent(&book);
+    }
+
+    /// #311: the user index is updated before the location claim, so an
+    /// admission whose claim is refused has already appended a slot and
+    /// must take out exactly that one. Admission A of id 1 is parked just
+    /// before its claim (the pre-claim risk hook); admission B of the same
+    /// id and owner rests in the meantime; A then resumes, appends its own
+    /// slot to the shared entry, loses the claim and untracks by its
+    /// sequence. B's slot, the one its location points at, must survive.
+    #[test]
+    fn test_refused_claim_untracks_only_its_own_slot() {
+        // No risk config: its per-order entry would refuse A on its own,
+        // before the claim this test is about.
+        let mut book = OrderBook::<()>::new("RACE-311");
+        book.set_order_state_tracker(OrderStateTracker::with_capacity(1_000));
+        let reused = Id::from_u64(1);
+        let (parked_tx, parked_rx) = channel::<()>();
+        let (resume_tx, resume_rx) = channel::<()>();
+        {
+            let parked_tx = Mutex::new(parked_tx);
+            let resume_rx = Mutex::new(resume_rx);
+            // Parks the first admission of the id only; B passes through.
+            let fired = AtomicBool::new(false);
+            book.rest_risk_fault_hook = Some(Arc::new(move |order_id: Id| {
+                if order_id == reused && !fired.swap(true, Ordering::SeqCst) {
+                    parked_tx
+                        .lock()
+                        .expect("parked sender")
+                        .send(())
+                        .expect("the test thread is waiting");
+                    resume_rx
+                        .lock()
+                        .expect("resume receiver")
+                        .recv_timeout(RENDEZVOUS_TIMEOUT)
+                        .expect("resumed by the test thread");
+                }
+                None
+            }));
+        }
+        let book = Arc::new(book);
+        let first = {
+            let book = Arc::clone(&book);
+            thread::spawn(move || book.add_order(order(1, 0, Side::Sell, 102, 4)))
+        };
+        parked_rx
+            .recv_timeout(RENDEZVOUS_TIMEOUT)
+            .expect("A reached the pre-claim hook");
+        book.add_order(order(1, 0, Side::Sell, 100, 3))
+            .expect("B rests while A is parked");
+        resume_tx.send(()).expect("A is parked");
+        let refused = first.join().expect("A's thread");
+        assert!(matches!(
+            refused,
+            Err(crate::orderbook::OrderBookError::DuplicateOrderId { .. })
+        ));
+
+        assert_eq!(
+            book.user_orders.get(&user(0)).map(|ids| ids.to_vec()),
+            Some(vec![reused]),
+            "one slot is left"
+        );
+        let b_seq = book
+            .order_locations
+            .get(&reused)
+            .map(|location| location.user_seq)
+            .expect("B is located");
+        assert_eq!(
+            book.user_orders
+                .get(&user(0))
+                .and_then(|ids| ids.id_at(b_seq)),
+            Some(reused),
+            "the slot left is B's, the one its location points at"
+        );
+        assert_eq!(
+            book.get_order(reused)
+                .map(|o| o.visible_quantity().as_u64()),
+            Some(3)
+        );
+        assert_book_consistent(&book);
+        // B's location still finds its own slot: cancelling B empties the
+        // owner's entry.
+        assert!(book.cancel_order(reused).expect("cancel").is_some());
+        assert!(book.user_orders.get(&user(0)).is_none(), "entry dropped");
+    }
+
+    /// #311: an `UpdateQuantity` validated against a resting order, whose
+    /// order a sweep then fully consumes before the level applies the
+    /// update. The level reports the order absent and is left empty; the
+    /// update returns `None` and leaves no location, user-index or risk
+    /// entry behind.
+    #[test]
+    fn test_update_quantity_of_an_order_filled_mid_update_leaves_no_index() {
+        let mut book = book();
+        let maker = Id::from_u64(1);
+        let (parked_tx, parked_rx) = channel::<()>();
+        let (resume_tx, resume_rx) = channel::<()>();
+        {
+            let parked_tx = Mutex::new(parked_tx);
+            let resume_rx = Mutex::new(resume_rx);
+            let fired = AtomicBool::new(false);
+            book.update_interleave_hook = Some(Arc::new(move |order_id: Id| {
+                if order_id == maker && !fired.swap(true, Ordering::SeqCst) {
+                    parked_tx
+                        .lock()
+                        .expect("parked sender")
+                        .send(())
+                        .expect("the test thread is waiting");
+                    resume_rx
+                        .lock()
+                        .expect("resume receiver")
+                        .recv_timeout(RENDEZVOUS_TIMEOUT)
+                        .expect("resumed by the test thread");
+                }
+            }));
+        }
+        book.add_order(order(1, 0, Side::Sell, 100, 3))
+            .expect("the maker rests");
+        let book = Arc::new(book);
+        let updater = {
+            let book = Arc::clone(&book);
+            thread::spawn(move || {
+                book.update_order(pricelevel::OrderUpdate::UpdateQuantity {
+                    order_id: maker,
+                    new_quantity: Quantity::new(2),
+                })
+            })
+        };
+        parked_rx
+            .recv_timeout(RENDEZVOUS_TIMEOUT)
+            .expect("the update reached the hook");
+        book.add_order(order(2, 1, Side::Buy, 100, 3))
+            .expect("the taker fills the maker");
+        resume_tx.send(()).expect("the update is parked");
+        let updated = updater
+            .join()
+            .expect("updater")
+            .expect("an absent order is not an error");
+        assert!(updated.is_none(), "the order was gone");
+
+        assert!(book.order_locations.get(&maker).is_none(), "no location");
+        assert!(book.user_orders.get(&user(0)).is_none(), "no user entry");
+        assert!(
+            book.risk_state.orders.get(&maker).is_none(),
+            "no risk entry"
+        );
+        assert_eq!(
+            book.order_status(maker),
+            Some(OrderStatus::Filled { filled_quantity: 3 })
+        );
+        assert!(book.asks.is_empty(), "the emptied level was removed");
         assert_book_consistent(&book);
     }
 

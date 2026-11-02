@@ -148,6 +148,16 @@ path = "benches/order_book/cancel_only_hdr.rs"
 harness = false
 
 [[bench]]
+name = "cancel_single_owner_hdr"
+path = "benches/order_book/cancel_single_owner_hdr.rs"
+harness = false
+
+[[bench]]
+name = "fill_single_owner_hdr"
+path = "benches/order_book/fill_single_owner_hdr.rs"
+harness = false
+
+[[bench]]
 name = "aggressive_walk_hdr"
 path = "benches/order_book/aggressive_walk_hdr.rs"
 harness = false
@@ -170,6 +180,11 @@ harness = false
 [[bench]]
 name = "mass_cancel_burst_hdr"
 path = "benches/order_book/mass_cancel_burst_hdr.rs"
+harness = false
+
+[[bench]]
+name = "mass_cancel_by_user_hdr"
+path = "benches/order_book/mass_cancel_by_user_hdr.rs"
 harness = false
 
 [[bench]]

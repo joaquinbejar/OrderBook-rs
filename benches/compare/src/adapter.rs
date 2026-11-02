@@ -118,6 +118,11 @@ mod common {
         book.cancel_all_orders()
     }
 
+    #[inline]
+    pub fn cancel_by_user(book: &Book, user: [u8; 32]) -> impl Sized {
+        book.cancel_orders_by_user(user.into())
+    }
+
     /// Number of resting orders (setup-time assertions only: it walks
     /// every level).
     pub fn resting_orders(book: &Book) -> usize {

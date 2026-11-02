@@ -67,36 +67,41 @@ where
         }
     }
 
-    /// Register an order in the `user_orders` index.
+    /// Register an order in the `user_orders` index and return the sequence
+    /// it is tracked under, for its [`OrderLocation`](super::book::OrderLocation)
+    /// to carry.
     ///
     /// Orders with `Hash32::zero()` (anonymous) are still tracked so that
     /// `cancel_all_orders` and `cancel_orders_by_side` work correctly.
     #[inline]
-    pub(super) fn track_user_order(&self, user_id: pricelevel::Hash32, order_id: pricelevel::Id) {
-        self.user_orders.entry(user_id).or_default().push(order_id);
+    pub(super) fn track_user_order(
+        &self,
+        user_id: pricelevel::Hash32,
+        order_id: pricelevel::Id,
+    ) -> u64 {
+        self.user_orders
+            .entry(user_id)
+            .or_default()
+            .insert(order_id)
     }
 
-    /// Remove an order from the `user_orders` index.
+    /// Remove an order, tracked under `user_seq`, from the `user_orders`
+    /// index.
     ///
     /// If the user's order list becomes empty, the entry is removed entirely.
     #[inline]
     pub(super) fn untrack_user_order(
         &self,
         user_id: pricelevel::Hash32,
+        user_seq: u64,
         order_id: &pricelevel::Id,
     ) {
         let emptied = match self.user_orders.get_mut(&user_id) {
             Some(mut entry) => {
                 let ids = entry.value_mut();
-                // Order-preserving removal (#252): `Vec::remove`, never
-                // `swap_remove`. An id is tracked at most once per user (the
-                // location claim refuses a duplicate), so stopping at the
-                // first match removes exactly what `retain` would.
-                if let Some(pos) = ids.iter().position(|id| id == order_id) {
-                    // `pos` comes from `position` on this same Vec, so it is
-                    // in bounds and `remove` cannot panic.
-                    ids.remove(pos);
-                }
+                // A binary search on the sequence; the remaining ids keep
+                // their admission order (#252).
+                ids.remove(user_seq, order_id);
                 ids.is_empty()
             }
             None => false,
@@ -107,7 +112,8 @@ where
     }
 
     /// Remove a still-located order from the `user_orders` index, keyed by
-    /// the owner its [`OrderLocation`](super::book::OrderLocation) carries.
+    /// the owner and sequence its [`OrderLocation`](super::book::OrderLocation)
+    /// carries.
     ///
     /// Used where the order already left its price level, so its body (and
     /// `user_id`) is no longer reachable from the level: the fill path for
@@ -123,9 +129,9 @@ where
         let owner = self
             .order_locations
             .get(order_id)
-            .map(|location| location.user_id);
+            .map(|location| (location.user_id, location.user_seq));
         match owner {
-            Some(user_id) => self.untrack_user_order(user_id, order_id),
+            Some((user_id, user_seq)) => self.untrack_user_order(user_id, user_seq, order_id),
             None => self.untrack_order_by_id(order_id),
         }
     }
@@ -136,20 +142,17 @@ where
     /// location is already gone (unreachable in practice). O(active users):
     /// it visits every `user_orders` shard until it finds the id.
     ///
-    /// The removal preserves the relative order of the user's remaining ids
-    /// (`Vec::remove`, not `swap_remove`): `cancel_orders_by_user` walks this
-    /// list, and replay reconciles its result by id order (#252), so a fill
-    /// must not reorder a user's resting orders.
+    /// The removal preserves the relative order of the user's remaining ids:
+    /// `cancel_orders_by_user` walks them in admission order, and replay
+    /// reconciles its result by id order (#252), so a fill must not reorder
+    /// a user's resting orders.
     #[cold]
     #[inline(never)]
     pub(super) fn untrack_order_by_id(&self, order_id: &pricelevel::Id) {
         let mut user_to_remove = None;
         for mut entry in self.user_orders.iter_mut() {
             let ids = entry.value_mut();
-            if let Some(pos) = ids.iter().position(|id| id == order_id) {
-                // `pos` comes from `position` on this same Vec, so it is in
-                // bounds and `remove` cannot panic.
-                ids.remove(pos);
+            if ids.remove_by_id(order_id) {
                 if ids.is_empty() {
                     user_to_remove = Some(*entry.key());
                 }
@@ -596,7 +599,7 @@ mod tests {
         book.submit_market_order_with_user(Id::from_u64(10), 10, Side::Buy, taker)
             .unwrap();
         assert_eq!(
-            book.user_orders.get(&alice).map(|ids| ids.clone()),
+            book.user_orders.get(&alice).map(|ids| ids.to_vec()),
             Some(vec![Id::from_u64(3), Id::from_u64(4)])
         );
         assert!(book.user_orders.get(&bob).is_none());
@@ -608,5 +611,40 @@ mod tests {
             .unwrap();
         assert!(book.user_orders.get(&alice).is_none());
         assert!(book.order_locations.is_empty());
+    }
+
+    /// `untrack_located_order` falls back to scanning every user's entry
+    /// when the id has no location. The scan removes the id from its
+    /// owner's entry only, keeps the owner's other ids in admission order,
+    /// and drops an entry it empties.
+    #[test]
+    fn test_untrack_without_location_scans_user_entries() {
+        let book: OrderBook<()> = OrderBook::new("TEST");
+        let alice = Hash32::new([1; 32]);
+        let bob = Hash32::new([2; 32]);
+        for raw in [1, 2, 3] {
+            book.track_user_order(alice, Id::from_u64(raw));
+        }
+        book.track_user_order(bob, Id::from_u64(4));
+
+        book.untrack_located_order(&Id::from_u64(2));
+        assert_eq!(
+            book.user_orders.get(&alice).map(|ids| ids.to_vec()),
+            Some(vec![Id::from_u64(1), Id::from_u64(3)])
+        );
+        assert_eq!(
+            book.user_orders.get(&bob).map(|ids| ids.to_vec()),
+            Some(vec![Id::from_u64(4)])
+        );
+
+        book.untrack_located_order(&Id::from_u64(4));
+        assert!(
+            book.user_orders.get(&bob).is_none(),
+            "emptied entry dropped"
+        );
+
+        // An id tracked nowhere is a no-op.
+        book.untrack_located_order(&Id::from_u64(99));
+        assert_eq!(book.user_orders.len(), 1);
     }
 }

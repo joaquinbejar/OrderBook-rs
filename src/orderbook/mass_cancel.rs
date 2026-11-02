@@ -724,11 +724,11 @@ where
     /// # Determinism
     ///
     /// [`MassCancelResult::cancelled_order_ids`] follows the user's
-    /// **admission-history order**: the `user_orders` index is a `Vec<Id>`
-    /// appended to as each of the user's orders is admitted
-    /// (`track_user_order`); cancels, fills and modifies take ids out in
-    /// place without reordering the ids that remain (`retain` / `Vec::remove`,
-    /// #252), and this method walks a copy of that `Vec`. Under a
+    /// **admission-history order**: the `user_orders` index records each of
+    /// the user's ids under an admission sequence as it is admitted
+    /// (`track_user_order`); cancels, fills and modifies take ids out
+    /// without renumbering the ids that remain (#252), and this method walks
+    /// them sorted by that sequence. Under a
     /// serialized command stream — as replayed from the journal — that ordering
     /// is fixed and byte-identical across processes, so the emitted
     /// `SequencerResult::MassCancelled` payload is replay-stable without any
@@ -744,7 +744,7 @@ where
     /// price-then-insertion-sequence order as [`Self::cancel_all_orders`] (bids
     /// ascending price, then asks ascending price; within each level ascending
     /// insertion sequence via `PriceLevel::snapshot_by_seq_into`), so the
-    /// per-user `Vec<Id>` — and therefore this method's
+    /// per-user admission order — and therefore this method's
     /// [`MassCancelResult::cancelled_order_ids`] — is byte-identical across every
     /// restore of the same package (#192). The order simply reflects the resting
     /// book at snapshot time, not the sequence in which the user's orders were
@@ -797,7 +797,7 @@ where
         let mut order_ids = self
             .user_orders
             .get(&user_id)
-            .map(|entry| entry.value().clone())
+            .map(|entry| entry.value().to_vec())
             .unwrap_or_default();
         // #286: then the user's pending stops (they are not in the user
         // index), in admission order.

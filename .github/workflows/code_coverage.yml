@@ -42,6 +42,7 @@ jobs:
         run: |
           cargo tarpaulin \
             --engine llvm \
+            --exclude-files 'benches/**' \
             --all-features \
             --workspace \
             --timeout 180 \

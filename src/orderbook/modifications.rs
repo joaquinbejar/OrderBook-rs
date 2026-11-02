@@ -540,6 +540,8 @@ struct UnrestedClaim<'a, T: Clone + Send + Sync + Default + 'static> {
     price: u128,
     /// Its side.
     side: Side,
+    /// The sequence it is tracked under in its owner's `user_orders` entry.
+    user_seq: u64,
     /// The #243 reservation; `None` once disarmed.
     reservation: Option<crate::orderbook::risk::RiskReservation>,
     /// The resting state, once `track_state` recorded it.
@@ -567,8 +569,13 @@ impl<T: Clone + Send + Sync + Default + 'static> Drop for UnrestedClaim<'_, T> {
         if let Some(state) = self.state.take() {
             self.book.withdraw_tracked_state(self.order.id(), &state);
         }
-        self.book
-            .withdraw_unrested(self.order, self.price, self.side, reservation);
+        self.book.withdraw_unrested(
+            self.order,
+            self.price,
+            self.side,
+            self.user_seq,
+            reservation,
+        );
         self.book.remove_level_if_empty(self.side, self.price);
         self.book.cache.invalidate();
     }
@@ -934,6 +941,7 @@ where
                     price,
                     side,
                     user_id: owner,
+                    user_seq,
                 }) = location
                 {
                     // Get the appropriate price levels map
@@ -990,6 +998,13 @@ where
                             new_quantity,
                         };
 
+                        #[cfg(test)]
+                        {
+                            if let Some(hook) = self.update_interleave_hook.as_ref() {
+                                hook(order_id);
+                            }
+                        }
+
                         // Propagate upstream validation / counter errors
                         // (#211): `Ok(None)` is reserved for a genuinely
                         // absent order, never an error swallowed silently.
@@ -1037,7 +1052,7 @@ where
                     if is_empty {
                         self.remove_level_if_empty(side, price);
                         // #288: untrack before releasing the id.
-                        self.untrack_user_order(owner, &order_id);
+                        self.untrack_user_order(owner, user_seq, &order_id);
                         self.order_locations.remove(&order_id);
                     }
 
@@ -1277,7 +1292,7 @@ where
         // First, we find the order's location (price and side) without locking
         let location = self.order_locations.get(&order_id).map(|val| *val);
 
-        let Some(OrderLocation { price, side, .. }) = location else {
+        let Some(location @ OrderLocation { price, side, .. }) = location else {
             // #286: a pending trailing stop rests on no level.
             #[cfg(feature = "special_orders")]
             if self.has_pending_stops() {
@@ -1316,7 +1331,7 @@ where
             return Ok(None);
         };
 
-        self.finish_removal(order_id, &removed, reason);
+        self.finish_removal(order_id, Some(location), &removed, reason);
 
         // If the level became empty, remove it, unless a concurrent
         // admission refilled it meanwhile (#247: checked under the price's
@@ -1370,7 +1385,17 @@ where
     /// state (keeping any prior fill), the location, the per-account risk
     /// contribution, the user index, the strandable-maker count and
     /// special-order tracking. Level-map removal stays with the caller.
-    fn finish_removal(&self, order_id: Id, removed: &RemovedOrder, reason: CancelReason) {
+    ///
+    /// `location` is the order's location when the caller already read it
+    /// (the user index removal then needs no second lookup); `None` reads
+    /// it from `order_locations`.
+    fn finish_removal(
+        &self,
+        order_id: Id,
+        location: Option<OrderLocation>,
+        removed: &RemovedOrder,
+        reason: CancelReason,
+    ) {
         // Track the cancellation in the order state tracker
         let prev_filled = self
             .order_state_tracker
@@ -1395,7 +1420,12 @@ where
         match removed {
             RemovedOrder::Clean(order) => {
                 // Remove the order from the user_orders index
-                self.untrack_user_order(order.user_id(), &order_id);
+                match location {
+                    Some(location) => {
+                        self.untrack_user_order(location.user_id, location.user_seq, &order_id);
+                    }
+                    None => self.untrack_located_order(&order_id),
+                }
                 // #230: this helper is the funnel for user cancels, the
                 // cancel-then-add modifies, mass cancel, expiry eviction and
                 // the self-trade-prevention maker cancel, so one decrement
@@ -1523,7 +1553,7 @@ where
         };
         self.cache.invalidate();
         self.emit_level_changed(side, price_level);
-        self.finish_removal(order_id, &removed, reason);
+        self.finish_removal(order_id, None, &removed, reason);
         match removed {
             RemovedOrder::Clean(_) => Ok(()),
             RemovedOrder::Faulted(error) => {
@@ -3332,17 +3362,24 @@ where
             .on_admission(order_id, order.user_id(), price, quantity)
             .map_err(RestFailure::Risk)?;
 
+        // The user index hands out the sequence the location carries, so it
+        // is updated first. Nothing reads it for this id before the claim
+        // below: `cancel_orders_by_user` and its stale-id purge run under
+        // the exclusive submit gate, and every removal is keyed by the
+        // sequence of a location that already exists.
+        let user_seq = self.track_user_order(order.user_id(), order_id);
         // #288: claim the id before the order becomes matchable. The map's
         // shard guard is dropped at the end of the `match`, before anything
         // else is locked.
         let claimed = match self.order_locations.entry(order_id) {
             dashmap::Entry::Occupied(_) => false,
             dashmap::Entry::Vacant(slot) => {
-                slot.insert(OrderLocation::new(price, side, order.user_id()));
+                slot.insert(OrderLocation::new(price, side, order.user_id(), user_seq));
                 true
             }
         };
         if !claimed {
+            self.untrack_user_order(order.user_id(), user_seq, &order_id);
             self.risk_state.release_reservation(risk_reservation);
             return Err(RestFailure::Duplicate(order_id));
         }
@@ -3354,10 +3391,10 @@ where
             order,
             price,
             side,
+            user_seq,
             reservation: Some(risk_reservation),
             state: None,
         };
-        self.track_user_order(order.user_id(), order_id);
         self.track_state(order_id, state.clone());
         claim.state = Some(state);
 
@@ -3392,7 +3429,7 @@ where
             Err(err) => {
                 drop(stripe);
                 if let Some(risk_reservation) = reservation {
-                    self.withdraw_unrested(order, price, side, risk_reservation);
+                    self.withdraw_unrested(order, price, side, user_seq, risk_reservation);
                 }
                 self.remove_level_if_empty(side, price);
                 self.cache.invalidate();
@@ -3441,15 +3478,16 @@ where
         order: &OrderType<T>,
         price: u128,
         side: Side,
+        user_seq: u64,
         risk_reservation: crate::orderbook::risk::RiskReservation,
     ) {
         let order_id = order.id();
-        self.untrack_user_order(order.user_id(), &order_id);
+        self.untrack_user_order(order.user_id(), user_seq, &order_id);
         // Keyed by the reservation's generation, so this can never
         // release a same-id order's entry (#243 review).
         self.risk_state.release_reservation(risk_reservation);
         self.order_locations.remove_if(&order_id, |_, location| {
-            *location == OrderLocation::new(price, side, order.user_id())
+            *location == OrderLocation::new(price, side, order.user_id(), user_seq)
         });
     }
 

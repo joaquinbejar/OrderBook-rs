@@ -338,7 +338,7 @@ mod tests {
         assert_cancelled(&book, Id::from_u64(3), CancelReason::MassCancelByUser);
         assert_resting_and_tracked(&book, Id::from_u64(2), owner);
         assert_eq!(
-            book.user_orders.get(&owner).map(|ids| ids.clone()),
+            book.user_orders.get(&owner).map(|ids| ids.to_vec()),
             Some(ids(&[2]))
         );
         assert_eq!(open_count(&book, owner), 1, "only the failed order counts");

@@ -220,11 +220,14 @@ bench-hdr:
 	cargo bench --bench add_only_hdr
 	cargo bench --bench add_only_risk_hdr
 	cargo bench --bench cancel_only_hdr
+	cargo bench --bench cancel_single_owner_hdr
+	cargo bench --bench fill_single_owner_hdr
 	cargo bench --bench aggressive_walk_hdr
 	cargo bench --bench notional_walk_hdr
 	cargo bench --bench mixed_70_20_10_hdr
 	cargo bench --bench thin_book_sweep_hdr
 	cargo bench --bench mass_cancel_burst_hdr
+	cargo bench --bench mass_cancel_by_user_hdr
 	cargo bench --bench stp_sweep_hdr
 	cargo bench --bench stp_contention_hdr
 	cargo bench --bench reserve_sweep_hdr

@@ -29,6 +29,7 @@ struct Sizes {
     add_only_warmup: u64,
     add_only_measured: u64,
     cancel_only_preload: u64,
+    single_owner_preload: u64,
     walk_resting_per_level: u64,
     walk_num_levels: u64,
     walk_measured: u64,
@@ -37,6 +38,7 @@ struct Sizes {
     thin_measured: u64,
     mass_cancel_orders: u64,
     mass_cancel_bursts: u64,
+    by_user_bursts: u64,
     stp_measured: u64,
     snapshot_orders: u64,
     snapshot_samples: u64,
@@ -50,6 +52,7 @@ const FULL: Sizes = Sizes {
     add_only_warmup: 200_000,
     add_only_measured: 1_000_000,
     cancel_only_preload: 1_000_000,
+    single_owner_preload: 100_000,
     walk_resting_per_level: 100,
     walk_num_levels: 50,
     walk_measured: 100_000,
@@ -58,6 +61,7 @@ const FULL: Sizes = Sizes {
     thin_measured: 200_000,
     mass_cancel_orders: 10_000,
     mass_cancel_bursts: 500,
+    by_user_bursts: 100,
     stp_measured: 100_000,
     snapshot_orders: 10_000,
     snapshot_samples: 2_000,
@@ -73,6 +77,7 @@ const QUICK: Sizes = Sizes {
     add_only_warmup: 200,
     add_only_measured: 2_000,
     cancel_only_preload: 2_000,
+    single_owner_preload: 2_000,
     walk_resting_per_level: 5,
     walk_num_levels: 5,
     walk_measured: 2_000,
@@ -81,6 +86,7 @@ const QUICK: Sizes = Sizes {
     thin_measured: 2_000,
     mass_cancel_orders: 200,
     mass_cancel_bursts: 5,
+    by_user_bursts: 5,
     stp_measured: 500,
     snapshot_orders: 200,
     snapshot_samples: 5,
@@ -94,10 +100,13 @@ const QUICK: Sizes = Sizes {
 const SCENARIOS: &[(&str, &str, &str)] = &[
     ("add_only", "uncontended", "single"),
     ("cancel_only", "uncontended", "batch"),
+    ("cancel_single_owner", "uncontended", "batch"),
+    ("fill_single_owner", "uncontended", "single"),
     ("aggressive_walk", "uncontended", "batch"),
     ("mixed_70_20_10", "uncontended", "single"),
     ("thin_book_sweep", "uncontended", "batch"),
     ("mass_cancel_burst", "uncontended", "single"),
+    ("mass_cancel_by_user", "uncontended", "single"),
     ("stp_cancel_maker", "uncontended", "single"),
     ("snapshot_create_10k", "uncontended", "single"),
     ("snapshot_restore_10k", "uncontended", "single"),
@@ -134,6 +143,8 @@ fn run_one(scenario: &str, s: &Sizes) {
     let hist = match scenario {
         "add_only" => workloads::add_only(s.add_only_warmup, s.add_only_measured),
         "cancel_only" => workloads::cancel_only(s.cancel_only_preload),
+        "cancel_single_owner" => workloads::cancel_single_owner(s.single_owner_preload),
+        "fill_single_owner" => workloads::fill_single_owner(s.single_owner_preload),
         "aggressive_walk" => {
             workloads::aggressive_walk(s.walk_resting_per_level, s.walk_num_levels, s.walk_measured)
         }
@@ -141,6 +152,9 @@ fn run_one(scenario: &str, s: &Sizes) {
         "thin_book_sweep" => workloads::thin_book_sweep(s.thin_measured),
         "mass_cancel_burst" => {
             workloads::mass_cancel_burst(s.mass_cancel_orders, s.mass_cancel_bursts)
+        }
+        "mass_cancel_by_user" => {
+            workloads::mass_cancel_by_user(s.mass_cancel_orders, s.by_user_bursts)
         }
         "stp_cancel_maker" => workloads::stp_cancel_maker(s.stp_measured),
         "snapshot_create_10k" => workloads::snapshot_create(s.snapshot_orders, s.snapshot_samples),

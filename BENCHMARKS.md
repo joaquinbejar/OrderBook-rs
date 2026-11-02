@@ -258,12 +258,13 @@ CSV: `doc/bench/0.14.0/criterion.csv`.
 | `serialization/bincode_deserialize_trade` | 112.71 ns |
 | `serialization/bincode_deserialize_book_change` | 12.693 ns |
 
-`cancel_orders_by_user/10000` and `cancel_orders_by_side/10000` grow
-faster than linearly: every cancel removes its id from the owner's
-`user_orders` list with an order-preserving `Vec::remove` (#252), which
-shifts the rest of that list, so cancelling all of one owner's `n`
-orders costs O(n²). Unchanged since v0.13.1 (which used `retain`, also
-O(n) per call); a follow-up, not a 0.14.0 regression.
+`cancel_orders_by_user/10000` and `cancel_orders_by_side/10000` grew
+faster than linearly up to 0.15.0: every cancel removed its id from the
+owner's `user_orders` list with an order-preserving `Vec::remove`
+(#252), which shifted the rest of that list, so cancelling all of one
+owner's `n` orders cost O(n²). The per-user index now finds an id by
+binary search on its admission sequence and marks it removed, so each
+removal is amortized O(log n) and the admission order is kept.
 
 ## Reproducing
 

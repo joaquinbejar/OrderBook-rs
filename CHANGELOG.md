@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI and `make coverage*` now require cargo-tarpaulin >= 0.37.5, the first
   release that reads Rust 1.99 coverage data.
+- **Performance: user-index removal no longer scans the owner's orders
+  (#311).** Each `user_orders` entry is an append-only list of
+  `(sequence, id)` slots, and `OrderLocation` carries the order's
+  sequence, so a cancel, filled maker or modify finds its slot by binary
+  search and marks it removed instead of shifting the owner's whole
+  list. One owner with `n` resting orders paid O(n) per removal, and
+  `cancel_orders_by_user` / `cancel_orders_by_side` O(n²); every
+  `add_limit_order` caller is that one owner (`Hash32::zero()`). Adds
+  stay a single push, admission order for `cancel_orders_by_user` (#252)
+  and location-last release (#288) are kept. Single-owner cancel and fill
+  go from about 24 µs to 1 µs at 100 000 resting orders, and
+  `cancel_orders_by_user` over 10 000 orders from 29.5 ms to 3.8 ms; new
+  benches `cancel_single_owner_hdr`, `fill_single_owner_hdr` and
+  `mass_cancel_by_user_hdr` cover that case.
 
 ## [0.15.0] - 2026-09-30
 

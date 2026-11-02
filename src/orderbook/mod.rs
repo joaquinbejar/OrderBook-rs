@@ -37,6 +37,7 @@ pub mod snapshot;
 mod tests;
 /// Enhanced trade result that includes symbol information
 pub mod trade;
+mod user_orders;
 
 /// Fee schedule implementation for trading fees
 pub mod fees;
