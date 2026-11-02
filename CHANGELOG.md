@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-11-02
+
+A concurrency fix release: snapshots taken during a cancel or sweep no
+longer show emptied levels or gaps (#313), and `best_bid()` / `best_ask()`
+no longer serve a stale or phantom price after a racing read (#309). No
+public API or snapshot format change.
+
 ### Fixed
 
 - **`create_snapshot` no longer reports emptied levels or leaves gaps
@@ -4177,7 +4184,8 @@ change.
 - **Market Metrics**: VWAP, micro price, queue analysis, depth
   statistics, and functional iterators.
 
-[Unreleased]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.2...HEAD
+[Unreleased]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.3...HEAD
+[0.15.3]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.2...v0.15.3
 [0.15.2]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.14.0...v0.15.0

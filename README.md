@@ -46,7 +46,7 @@ This order book engine is built with the following design principles:
 - **Research**: Platform for studying market microstructure and order flow
 - **Educational**: Reference implementation for understanding modern exchange architecture
 
-### What's New in Version 0.15.3 (unreleased)
+### What's New in Version 0.15.3
 
 - **Consistent snapshots under concurrent writes (#313).**
   `create_snapshot` and `enriched_snapshot` walk each side in price
