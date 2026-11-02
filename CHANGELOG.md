@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-02
+
+A performance patch release: user-index removal no longer scans the
+owner's resting orders (#311). No public API or snapshot format change.
+
 ### Changed
 
 - CI and `make coverage*` now require cargo-tarpaulin >= 0.37.5, the first
@@ -25,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cancel_orders_by_user` over 10 000 orders from 29.5 ms to 3.8 ms; new
   benches `cancel_single_owner_hdr`, `fill_single_owner_hdr` and
   `mass_cancel_by_user_hdr` cover that case.
+- `PriceLevelCache` gains tests for the default state, the empty bid side,
+  serialization, and prices at or above 2^127, which must round trip
+  unchanged (#310, follow-up to the #308 review).
 
 ## [0.15.0] - 2026-09-30
 
@@ -4086,6 +4094,7 @@ change.
 - **Market Metrics**: VWAP, micro price, queue analysis, depth
   statistics, and functional iterators.
 
-[Unreleased]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.13.1...v0.14.0

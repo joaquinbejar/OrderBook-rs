@@ -1293,6 +1293,6 @@ For issues, questions, or contributions:
 
 ---
 
-**Version:** 0.15.0  
+**Version:** 0.15.1  
 **Last Updated:** September 2026  
 **License:** MIT
