@@ -122,6 +122,7 @@ make bench-hdr                 # every _hdr bench binary, incl. stp_contention_h
 cargo bench --bench mixed_70_20_10_hdr   # single scenario
 cargo bench --bench stp_contention_hdr   # all 8 mode x thread-count scenarios in one binary
 cargo bench --features special_orders --bench pending_stops_hdr   # pending trailing stops (#286)
+cargo bench --bench best_price_read_hdr  # best bid + ask reads, quiet and with one writer (#309)
 ```
 
 Each bench writes its raw HDR histogram to
@@ -946,6 +947,33 @@ single-run tail noise on a loaded host, not an effect of the collar.
 Paths without a pending stop never read the collar: `quiet_0`,
 `thin_book_sweep` and `aggressive_walk` stayed within noise of `v0.14.0`
 in a paired comparison on the same host (two rounds each).
+
+### `best_price_read`: best bid + ask reads, quiet and with one writer (added for #309)
+
+`best_price_read_hdr` times `BATCH` (`32`) `best_bid()` + `best_ask()`
+pairs per `Instant` pair (`record_batch`; one pair is far below the clock
+tick) on a 10 000-order non-crossing book, 200 000 batches. Two
+scenarios:
+
+- `best_price_read`: nothing mutates the book.
+- `best_price_read_1w`: one writer thread adds an ask in front of the best
+  ask and cancels it in a loop for the whole measurement, so every write
+  moves the best ask: the worst case for a best-price cache that must
+  never serve a stale price.
+
+The same two scenarios are in `benches/compare` (`scripts/bench_compare.sh`).
+#309 measured three shapes against `main`, 5 interleaved rounds each,
+per-pair ns, median of rounds:
+
+| scenario | `main` (stale-prone cache) p50 / p99 | no cache p50 / p99 | generation-tagged cache (shipped) p50 / p99 |
+|---|---|---|---|
+| `best_price_read` | 7 / 10 | 13 / 16 | 5 / 6 |
+| `best_price_read_1w` | 14 / 31 to 35 | 53 / 384 | 6 / 13 |
+
+`main`'s `best_price_read_1w` number is not a valid baseline for
+correctness: on that shape nearly every write left it serving a stale
+price. Every write scenario of `benches/compare` stayed within noise of
+`main` for both prototypes.
 
 ## 0.11.0 → 0.12.0 delta
 

@@ -1031,7 +1031,6 @@ where
         reservation: SweepReservation,
         arithmetic_verified_price: u128,
     ) -> Result<MatchOutcome, OrderBookError> {
-        self.cache.invalidate();
         let mut match_result =
             MatchResult::new(order_id, Quantity::new(mode.initial_match_quantity()));
         let mut stop = StopCondition::from_mode(&mode);

@@ -53,6 +53,13 @@ This order book engine is built with the following design principles:
   order and skip emptied levels, so a snapshot taken during a cancel or
   sweep never lists a zero-order level and never leaves a gap in the
   first `depth` levels. No format change.
+- **Fresh best bid / ask under concurrent reads (#309).** `best_bid()`
+  and `best_ask()` (and the post-only and headroom checks, `mid_price`
+  and `spread` that read them) can no longer keep serving a price from
+  before a completed write. The `PriceLevelCache` fast path is now a
+  per-side generation tag plus a lock-free seqlock slot, and a quiet
+  read got faster (about 5 ns per bid + ask pair on a 10 000-order
+  book). No API or format change.
 
 ### What's New in Version 0.15.2
 

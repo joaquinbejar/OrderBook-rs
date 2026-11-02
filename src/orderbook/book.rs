@@ -1722,7 +1722,22 @@ where
             Side::Sell => &self.asks,
         };
         let _stripe = self.lock_level_exclusive(price);
-        Self::remove_empty_level_locked(levels, price)
+        let removed = Self::remove_empty_level_locked(levels, price);
+        if removed {
+            self.side_cache(side).bump();
+        }
+        removed
+    }
+
+    /// The best-price fast path of `side` (#309). Every insert or removal
+    /// of a level key on `side` must call `bump()` on it after the skiplist
+    /// operation returns.
+    #[inline]
+    pub(super) fn side_cache(&self, side: Side) -> &super::cache::BestPriceSide {
+        match side {
+            Side::Buy => &self.cache.bids,
+            Side::Sell => &self.cache.asks,
+        }
     }
 
     /// [`Self::remove_level_if_empty`] for a caller that already holds the
@@ -2729,38 +2744,48 @@ where
 
     /// Get the best bid price, if any
     ///
+    /// Never older than the last level insert or removal that completed
+    /// before the call (#309): a price walked before a level change is
+    /// tagged with the generation that change retired, so it is never
+    /// served after it.
+    ///
     /// # Performance
-    /// O(1) operation using SkipMap's ordered structure (highest price is last)
+    /// A hit is a few relaxed atomic loads of the generation-tagged
+    /// `PriceLevelCache` slot; a miss walks
+    /// the bid `SkipMap` to its highest key (O(log n)) and publishes it.
+    #[inline]
     pub fn best_bid(&self) -> Option<u128> {
-        if let Some(cached_bid) = self.cache.get_cached_best_bid() {
-            return Some(cached_bid);
+        // Load the generation BEFORE the walk, so a level change racing the
+        // walk retires what this call publishes (#309).
+        let generation = self.cache.bids.current();
+        if let Some(price) = self.cache.bids.read(generation) {
+            return Some(price);
         }
-
-        // SkipMap maintains sorted order, best bid (highest price) is last
-        let best_price = self.bids.iter().next_back().map(|entry| *entry.key());
-
-        // Update only the bid slot — never evict the ask side.
-        self.cache.update_best_bid(best_price);
-
-        best_price
+        let best = self.bids.back().map(|entry| *entry.key());
+        if let Some(price) = best {
+            self.cache.bids.publish(generation, price);
+        }
+        best
     }
 
     /// Get the best ask price, if any
     ///
+    /// Same freshness guarantee as [`best_bid`](Self::best_bid) (#309).
+    ///
     /// # Performance
-    /// O(1) operation using SkipMap's ordered structure (lowest price is first)
+    /// A hit is a few relaxed atomic loads of the generation-tagged cache
+    /// slot; a miss reads the ask `SkipMap` head (O(1)) and publishes it.
+    #[inline]
     pub fn best_ask(&self) -> Option<u128> {
-        if let Some(cached_ask) = self.cache.get_cached_best_ask() {
-            return Some(cached_ask);
+        let generation = self.cache.asks.current();
+        if let Some(price) = self.cache.asks.read(generation) {
+            return Some(price);
         }
-
-        // SkipMap maintains sorted order, best ask (lowest price) is first
-        let best_price = self.asks.iter().next().map(|entry| *entry.key());
-
-        // Update only the ask slot — never evict the bid side.
-        self.cache.update_best_ask(best_price);
-
-        best_price
+        let best = self.asks.front().map(|entry| *entry.key());
+        if let Some(price) = best {
+            self.cache.asks.publish(generation, price);
+        }
+        best
     }
 
     /// Integer midpoint of the best bid and best ask, in price units,
@@ -5767,8 +5792,6 @@ where
     /// the fixed traversal. Every level read happened in the prepare phase,
     /// so no fallible pricelevel call remains here.
     fn commit_restored_levels(&self, prepared: &PreparedSnapshotLevels) {
-        self.cache.invalidate();
-
         // Clear all existing data
         while let Some(entry) = self.bids.pop_front() {
             drop(entry);
@@ -5812,6 +5835,10 @@ where
         for (price, level) in &prepared.asks {
             self.asks.insert(*price, level.clone());
         }
+        // #309: both sides were replaced; retire any price a reader
+        // published from the pre-restore or half-restored levels.
+        self.cache.bids.bump();
+        self.cache.asks.bump();
 
         // The orders were materialized by the prepare phase in the fixed
         // traversal order (bids then asks, ascending price, ascending

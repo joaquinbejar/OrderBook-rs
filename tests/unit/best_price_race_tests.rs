@@ -116,7 +116,10 @@ fn best_ask_matches_the_levels_after_every_write() {
         "best_ask() was stale after {stale_after_cancel} cancel(s) over {writes} writes and \
          {reads} reads; first: {first_stale:?}"
     );
-    assert_eq!(served, levels, "best_ask() disagrees with the levels at rest");
+    assert_eq!(
+        served, levels,
+        "best_ask() disagrees with the levels at rest"
+    );
     assert_eq!(served, Some(RESTING_ASK));
 }
 
