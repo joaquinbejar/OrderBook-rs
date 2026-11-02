@@ -1656,6 +1656,169 @@ mod test_book_specific {
         );
     }
 
+    /// Calls of the default-namespace derivation on this thread.
+    fn default_namespace_derivations() -> u64 {
+        crate::orderbook::book::DEFAULT_NAMESPACE_DERIVATIONS.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn test_with_clock_and_namespace_construction_skips_default_namespace() {
+        let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"VENUE/PURE");
+        let before = default_namespace_derivations();
+        let book = deterministic_book("PURE", namespace);
+        assert_eq!(
+            default_namespace_derivations(),
+            before,
+            "the pure constructor must not read the wall clock, pid or counter"
+        );
+        // And it still trades on the injected namespace.
+        let again = deterministic_book("PURE", namespace);
+        assert_eq!(
+            run_fixed_stream_trade_ids(&book),
+            run_fixed_stream_trade_ids(&again)
+        );
+        assert_eq!(default_namespace_derivations(), before);
+    }
+
+    #[test]
+    fn test_default_constructors_construction_derive_default_namespace_once() {
+        use crate::orderbook::clock::{Clock, StubClock};
+        use std::sync::Arc;
+
+        let listener: crate::TradeListener = Arc::new(|_| {});
+        let level_listener: crate::PriceLevelChangedListener = Arc::new(|_| {});
+        type Build = Box<dyn Fn() -> OrderBook<()>>;
+        let constructors: [(&str, Build); 4] = [
+            ("new", Box::new(|| OrderBook::new("D"))),
+            (
+                "with_clock",
+                Box::new(|| {
+                    OrderBook::with_clock("D", Arc::new(StubClock::new()) as Arc<dyn Clock>)
+                }),
+            ),
+            (
+                "with_trade_listener",
+                Box::new(move || OrderBook::with_trade_listener("D", Arc::clone(&listener))),
+            ),
+            (
+                "with_trade_and_price_level_listener",
+                Box::new(move || {
+                    let trades: crate::TradeListener = Arc::new(|_| {});
+                    OrderBook::with_trade_and_price_level_listener(
+                        "D",
+                        trades,
+                        Arc::clone(&level_listener),
+                    )
+                }),
+            ),
+        ];
+        for (name, build) in constructors {
+            let before = default_namespace_derivations();
+            let _book = build();
+            assert_eq!(
+                default_namespace_derivations(),
+                before + 1,
+                "{name} derives the default namespace exactly once"
+            );
+        }
+    }
+
+    /// A clock that counts its reads, to show which calls read time.
+    #[derive(Debug, Default)]
+    struct CountingClock {
+        reads: std::sync::atomic::AtomicU64,
+    }
+
+    impl crate::orderbook::clock::Clock for CountingClock {
+        fn now_millis(&self) -> pricelevel::TimestampMs {
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            pricelevel::TimestampMs::new(42)
+        }
+    }
+
+    #[test]
+    fn test_with_clock_and_namespace_construction_reads_no_clock_operations_read_injected() {
+        use crate::orderbook::clock::Clock;
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        let clock = Arc::new(CountingClock::default());
+        let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"VENUE/COUNT");
+        let book: OrderBook<()> = OrderBook::with_clock_and_namespace(
+            "COUNT",
+            Arc::clone(&clock) as Arc<dyn Clock>,
+            namespace,
+        );
+        assert_eq!(
+            clock.reads.load(Ordering::Relaxed),
+            0,
+            "construction reads no time"
+        );
+
+        let resting = create_order_id();
+        book.add_limit_order(resting, 1000, 10, Side::Sell, TimeInForce::Gtc, None)
+            .expect("resting sell");
+        assert!(
+            clock.reads.load(Ordering::Relaxed) > 0,
+            "an operation reads the injected clock"
+        );
+        let order = book.get_order(resting).expect("resting order");
+        assert_eq!(order.timestamp(), pricelevel::TimestampMs::new(42));
+    }
+
+    #[test]
+    fn test_public_constructors_configuration_unchanged_by_shared_constructor() {
+        use crate::orderbook::clock::{Clock, StubClock};
+        use std::sync::Arc;
+
+        let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"VENUE/CFG");
+        let stub = Arc::new(StubClock::new()) as Arc<dyn Clock>;
+        let trades: crate::TradeListener = Arc::new(|_| {});
+        let levels: crate::PriceLevelChangedListener = Arc::new(|_| {});
+
+        let pure: OrderBook<()> =
+            OrderBook::with_clock_and_namespace("CFG", Arc::clone(&stub), namespace);
+        let clocked: OrderBook<()> = OrderBook::with_clock("CFG", Arc::clone(&stub));
+        let plain: OrderBook<()> = OrderBook::new("CFG");
+        let one = OrderBook::<()>::with_trade_listener("CFG", Arc::clone(&trades));
+        let both = OrderBook::<()>::with_trade_and_price_level_listener(
+            "CFG",
+            Arc::clone(&trades),
+            Arc::clone(&levels),
+        );
+
+        // Clocks: the injected one where given, otherwise MonotonicClock.
+        assert!(Arc::ptr_eq(pure.clock(), &stub));
+        assert!(Arc::ptr_eq(clocked.clock(), &stub));
+        for book in [&plain, &one, &both] {
+            assert_eq!(format!("{:?}", book.clock()), "MonotonicClock");
+        }
+        // Listeners: only the ones passed in.
+        for book in [&pure, &clocked, &plain] {
+            assert!(book.trade_listener.is_none());
+            assert!(book.price_level_changed_listener.is_none());
+        }
+        assert!(one.trade_listener.is_some());
+        assert!(one.price_level_changed_listener.is_none());
+        assert!(both.trade_listener.is_some());
+        assert!(both.price_level_changed_listener.is_some());
+        // Namespace: the injected one only on the pure constructor.
+        assert_eq!(pure.transaction_id_generator.namespace(), namespace);
+        assert_ne!(clocked.transaction_id_generator.namespace(), namespace);
+        // The rest of the configuration is the 0.15.1 default everywhere.
+        for book in [&pure, &clocked, &plain, &one, &both] {
+            assert_eq!(book.symbol(), "CFG");
+            assert_eq!(book.stp_mode(), crate::STPMode::None);
+            assert!(book.fee_schedule().is_none());
+            assert!(book.tick_size().is_none());
+            assert!(book.lot_size().is_none());
+            assert!(book.order_state_tracker().is_none());
+            assert_eq!(book.best_bid(), None);
+            assert_eq!(book.best_ask(), None);
+        }
+    }
+
     #[test]
     fn test_default_constructors_keep_distinct_namespaces() {
         // OrderBook::new must keep minting a distinct namespace per book

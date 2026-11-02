@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`OrderBook::with_clock_and_namespace` no longer reads the wall clock.**
+  It used to build the book through `with_clock`, which derives the default
+  trade-ID namespace (wall-clock nanoseconds, the process id and the
+  process-wide construction counter) and then threw that namespace away.
+  It now assembles the book directly with the injected clock and namespace,
+  so it no longer derives the default namespace: building the book does not
+  read the wall clock or the process id and leaves the construction counter
+  untouched. (The `DashMap` indexes still seed std `RandomState`, which only
+  affects lookups.) `with_clock`, `new`,
+  `with_trade_listener` and `with_trade_and_price_level_listener` behave as
+  before: all four share one private constructor and still derive the
+  default namespace.
+- `ReplayEngine::replay_from_with_clock_and_config` with a
+  `trade_id_namespace` builds the replayed book with
+  `with_clock_and_namespace`, so it no longer derives a default namespace
+  either.
+
 ## [0.15.1] - 2026-11-02
 
 A performance patch release: user-index removal no longer scans the
