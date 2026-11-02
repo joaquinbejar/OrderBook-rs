@@ -22,13 +22,14 @@
 use hdrhistogram::Histogram;
 use orderbook_rs::Id;
 use orderbook_rs::Side;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
 use crate::adapter::{
-    Book, add_limit_order_with_user, cancel_all, cancel_by_user, cancel_order, create_snapshot,
-    journal_of_adds, new_book, new_listener_book, new_stp_book, owner, replay, resting_orders,
-    restore, snapshot_package, submit_market_order_with_user,
+    Book, add_limit_order, add_limit_order_with_user, best_prices, cancel_all, cancel_by_user,
+    cancel_order, create_snapshot, journal_of_adds, new_book, new_listener_book, new_stp_book,
+    owner, replay, resting_orders, restore, snapshot_package, submit_market_order_with_user,
 };
 use crate::rng::Rng;
 
@@ -710,4 +711,47 @@ pub fn contended_same_price_adds(
         merged.add(&hist).expect("merge histograms");
     }
     merged
+}
+
+/// `best_price_read_hdr` (#309): `BATCH` `best_bid()` + `best_ask()` pairs
+/// per `Instant` pair on the [`resting_book`] of `orders` orders, `samples`
+/// batches. With `writer`, one thread adds an ask at 1 000 (in front of
+/// the best ask, crossing nothing) and cancels it in a loop for the whole
+/// measurement, so every write moves the best ask.
+pub fn best_price_read(orders: u64, samples: u64, writer: bool) -> Histogram<u64> {
+    let (book, _) = resting_book(orders);
+    let book = Arc::new(book);
+    let stop = Arc::new(AtomicBool::new(false));
+    let start = Arc::new(Barrier::new(if writer { 2 } else { 1 }));
+    let handle = writer.then(|| {
+        let book = Arc::clone(&book);
+        let stop = Arc::clone(&stop);
+        let start = Arc::clone(&start);
+        std::thread::spawn(move || {
+            start.wait();
+            let mut id = 1_000_000_000u64;
+            let mut writes = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                let order = Id::from_u64(id);
+                id += 1;
+                drop(add_limit_order(&book, order, 1_000, 1, Side::Sell));
+                drop(cancel_order(&book, order));
+                writes += 2;
+            }
+            writes
+        })
+    });
+    start.wait();
+    let mut hist = new_histogram();
+    let mut out = Vec::new();
+    for _ in 0..samples {
+        record_batch_into(&mut hist, BATCH, &mut out, |_| best_prices(&book));
+        out.clear();
+    }
+    stop.store(true, Ordering::Relaxed);
+    if let Some(handle) = handle {
+        let writes = handle.join().expect("best_price_read writer");
+        assert!(writes > 0, "the writer made progress");
+    }
+    hist
 }

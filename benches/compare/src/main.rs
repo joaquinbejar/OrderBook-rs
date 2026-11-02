@@ -46,6 +46,8 @@ struct Sizes {
     replay_samples: u64,
     contended_warmup: u64,
     contended_per_thread: u64,
+    best_price_orders: u64,
+    best_price_samples: u64,
 }
 
 const FULL: Sizes = Sizes {
@@ -69,6 +71,8 @@ const FULL: Sizes = Sizes {
     replay_samples: 300,
     contended_warmup: 5_000,
     contended_per_thread: 50_000,
+    best_price_orders: 10_000,
+    best_price_samples: 200_000,
 };
 
 // Tiny op counts — only meant to prove the pipeline runs end to end
@@ -94,6 +98,8 @@ const QUICK: Sizes = Sizes {
     replay_samples: 5,
     contended_warmup: 50,
     contended_per_thread: 500,
+    best_price_orders: 200,
+    best_price_samples: 500,
 };
 
 /// Every scenario, in run order: `(name, class, timer)`.
@@ -115,6 +121,8 @@ const SCENARIOS: &[(&str, &str, &str)] = &[
     ("contended_add_8t", "contended", "batch"),
     ("contended_add_listeners_4t", "contended", "batch"),
     ("contended_add_listeners_8t", "contended", "batch"),
+    ("best_price_read", "uncontended", "batch"),
+    ("best_price_read_1w", "contended", "batch"),
 ];
 
 fn emit(scenario: &str, class: &str, timer: &str, hist: &Histogram<u64>) {
@@ -186,6 +194,12 @@ fn run_one(scenario: &str, s: &Sizes) {
             s.contended_per_thread,
             true,
         ),
+        "best_price_read" => {
+            workloads::best_price_read(s.best_price_orders, s.best_price_samples, false)
+        }
+        "best_price_read_1w" => {
+            workloads::best_price_read(s.best_price_orders, s.best_price_samples, true)
+        }
         _ => unreachable!("every SCENARIOS entry has a match arm"),
     };
     emit(scenario, class, timer, &hist);
