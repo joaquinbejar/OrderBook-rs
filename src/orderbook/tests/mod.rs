@@ -27,6 +27,7 @@ mod repricing;
 mod restore_validation;
 mod serialize_tests;
 mod snapshot;
+mod snapshot_walk;
 mod statistics_tests;
 mod stop_protection;
 mod stp;

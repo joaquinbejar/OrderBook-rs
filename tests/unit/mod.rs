@@ -59,6 +59,7 @@ mod reserve_residual_replay_tests;
 mod restore_user_orders_determinism_tests;
 mod risk_layer_tests;
 mod sequencer_types_tests;
+mod snapshot_concurrency_tests;
 mod snapshot_restore_tests;
 #[cfg(feature = "special_orders")]
 mod special_order_restore_tests;
