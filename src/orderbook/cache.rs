@@ -171,4 +171,52 @@ mod tests {
         assert_eq!(cache.get_cached_best_bid(), None);
         assert_eq!(cache.get_cached_best_ask(), None);
     }
+
+    #[test]
+    fn test_default_cache_is_invalid() {
+        let cache = PriceLevelCache::new();
+        assert_eq!(cache.get_cached_best_bid(), None);
+        assert_eq!(cache.get_cached_best_ask(), None);
+    }
+
+    #[test]
+    fn test_empty_bid_side_is_a_miss_and_does_not_touch_the_other() {
+        let cache = PriceLevelCache::new();
+        cache.update_best_ask(Some(110));
+        cache.update_best_bid(None);
+        assert_eq!(cache.get_cached_best_bid(), None);
+        assert_eq!(cache.get_cached_best_ask(), Some(110));
+    }
+
+    #[test]
+    fn test_prices_at_or_above_2_pow_127_are_cacheable() {
+        // The book has no upper price bound, so every u128 price must survive
+        // a round trip through the cache unchanged.
+        let cache = PriceLevelCache::new();
+        let high = (1u128 << 127) + 5;
+        cache.update_best_bid(Some(high));
+        assert_eq!(cache.get_cached_best_bid(), Some(high));
+        cache.update_best_ask(Some(u128::MAX));
+        assert_eq!(cache.get_cached_best_ask(), Some(u128::MAX));
+    }
+
+    #[test]
+    fn test_price_level_cache_serialization() {
+        let cache = PriceLevelCache::new();
+        cache.update_best_bid(Some(100));
+        cache.update_best_ask(Some(200));
+
+        let json = serde_json::to_string(&cache).expect("serialization must succeed");
+        assert!(json.contains("\"best_bid_price\":100"));
+        assert!(json.contains("\"best_ask_price\":200"));
+        assert!(json.contains("\"bid_valid\":true"));
+        assert!(json.contains("\"ask_valid\":true"));
+
+        cache.invalidate();
+        let json_invalid = serde_json::to_string(&cache).expect("serialization must succeed");
+        assert!(json_invalid.contains("\"best_bid_price\":100"));
+        assert!(json_invalid.contains("\"best_ask_price\":200"));
+        assert!(json_invalid.contains("\"bid_valid\":false"));
+        assert!(json_invalid.contains("\"ask_valid\":false"));
+    }
 }
