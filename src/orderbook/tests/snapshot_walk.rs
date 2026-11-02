@@ -8,8 +8,7 @@ mod tests {
 
     fn book() -> OrderBook<()> {
         let book = OrderBook::<()>::new("TEST");
-        let mut id = 1u64;
-        for price in [1000u128, 990, 980, 970] {
+        for (id, price) in [(1u64, 1000u128), (2, 990), (3, 980), (4, 970)] {
             book.add_limit_order(
                 Id::from_u64(id),
                 price,
@@ -19,9 +18,8 @@ mod tests {
                 None,
             )
             .expect("bid");
-            id += 1;
         }
-        for price in [1010u128, 1020, 1030, 1040] {
+        for (id, price) in [(5u64, 1010u128), (6, 1020), (7, 1030), (8, 1040)] {
             book.add_limit_order(
                 Id::from_u64(id),
                 price,
@@ -31,7 +29,6 @@ mod tests {
                 None,
             )
             .expect("ask");
-            id += 1;
         }
         book
     }
