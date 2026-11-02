@@ -59,6 +59,14 @@ pub fn register_benchmarks(c: &mut Criterion) {
         );
     }
 
+    // ─── create_snapshot, bounded depth (#313) ──────────────────────
+    // Top-of-book view on a deep book: the walk stops after `depth`
+    // non-empty levels per side instead of collecting every key.
+    group.bench_function("create_snapshot_depth10", |b| {
+        let book = make_populated_book(10_000);
+        b.iter_with_large_drop(|| black_box(book.create_snapshot(10).expect("snapshot")));
+    });
+
     // ─── restore_from_snapshot ──────────────────────────────────────
     for &order_count in &[100, 1_000, 10_000] {
         group.bench_with_input(
