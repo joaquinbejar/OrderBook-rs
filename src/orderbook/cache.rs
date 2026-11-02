@@ -468,9 +468,17 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("creator parked after linking");
 
-        let joiner_done = Arc::new(AtomicBool::new(false));
+        // Deterministic blocked-state check: while the creator is parked
+        // after linking and before bumping, it must hold the price stripe
+        // exclusively, so no joiner can take the shared side and return.
+        let stripe = book.level_stripe(9_880).expect("stripe for 9880");
+        assert!(
+            matches!(stripe.try_read(), Err(std::sync::TryLockError::WouldBlock)),
+            "a joiner could take the shared stripe while the creator had not bumped"
+        );
+
         let joiner = {
-            let (book, done) = (Arc::clone(&book), Arc::clone(&joiner_done));
+            let book = Arc::clone(&book);
             std::thread::spawn(move || {
                 book.add_limit_order(
                     Id::from_u64(4),
@@ -481,15 +489,9 @@ mod tests {
                     None,
                 )
                 .expect("joiner add");
-                done.store(true, Ordering::SeqCst);
                 book.best_ask()
             })
         };
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(
-            !joiner_done.load(Ordering::SeqCst),
-            "the joiner returned while the creator had not bumped the generation"
-        );
 
         release_tx.send(()).expect("release creator");
         creator.join().expect("creator thread");

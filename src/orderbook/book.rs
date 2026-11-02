@@ -1707,7 +1707,7 @@ where
     }
 
     /// The stripe of `price`: `price % LEVEL_LOCK_STRIPES`.
-    fn level_stripe(&self, price: u128) -> Option<&std::sync::RwLock<()>> {
+    pub(super) fn level_stripe(&self, price: u128) -> Option<&std::sync::RwLock<()>> {
         let stripe = u128::try_from(LEVEL_LOCK_STRIPES)
             .ok()
             .and_then(|stripes| price.checked_rem(stripes))
