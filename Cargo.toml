@@ -204,6 +204,11 @@ path = "benches/order_book/reserve_sweep_hdr.rs"
 harness = false
 
 [[bench]]
+name = "best_price_read_hdr"
+path = "benches/order_book/best_price_read_hdr.rs"
+harness = false
+
+[[bench]]
 name = "pending_stops_hdr"
 path = "benches/order_book/pending_stops_hdr.rs"
 harness = false

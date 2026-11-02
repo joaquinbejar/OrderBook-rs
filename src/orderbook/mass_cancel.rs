@@ -499,7 +499,6 @@ where
         // tracking maps wholesale, so no admission, cancel or modify may run
         // between the collection and the clear (see "Concurrency" above).
         let _gate = self.submit_gate_write();
-        self.cache.invalidate();
         trace!("Order book {}: Mass cancel ALL orders (bulk)", self.symbol);
 
         // 1. Collect all order IDs before clearing, in the fixed
@@ -562,6 +561,9 @@ where
         // 2b. Drain both SkipMaps
         while self.bids.pop_front().is_some() {}
         while self.asks.pop_front().is_some() {}
+        // #309: retire the published best prices after the drain.
+        self.cache.bids.bump();
+        self.cache.asks.bump();
 
         // 2c. Clear special order tracker and the pending trailing stops
         // (#286; their risk contribution goes with the clear below).
@@ -580,7 +582,6 @@ where
         // (#248). No-op without a RiskConfig.
         self.risk_state.clear();
 
-        self.cache.invalidate();
         // Refresh the depth gauges; both sides are now empty.
         self.record_depth_metric();
 

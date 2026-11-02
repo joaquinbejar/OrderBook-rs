@@ -577,7 +577,6 @@ impl<T: Clone + Send + Sync + Default + 'static> Drop for UnrestedClaim<'_, T> {
             reservation,
         );
         self.book.remove_level_if_empty(self.side, self.price);
-        self.book.cache.invalidate();
     }
 }
 
@@ -834,7 +833,6 @@ where
             self.check_kill_switch()?;
         }
 
-        self.cache.invalidate();
         trace!("Order book {}: Updating order {:?}", self.symbol, update);
         // #286: a pending trailing stop rests on no level; its modify is
         // applied to the stop store (exclusive gate: stops are pending).
@@ -1056,7 +1054,6 @@ where
                         self.order_locations.remove(&order_id);
                     }
 
-                    self.cache.invalidate();
                     if is_empty {
                         // Refresh depth gauges now that a level was
                         // removed during the modification path.
@@ -1275,8 +1272,8 @@ where
     /// (#248):
     ///
     /// - the order **still rests**: [`OrderBookError::PriceLevelError`];
-    ///   no index, risk, state or level-map change and no event (only the
-    ///   price-level cache was invalidated up front, which is harmless);
+    ///   no index, risk, state or level-map change and no event (the
+    ///   best-price cache is untouched: no level key changed);
     /// - the order is **gone** (pricelevel can commit a removal and then
     ///   report a broken level invariant, poisoning the level): the removal
     ///   is completed on the book side exactly like a successful cancel
@@ -1288,7 +1285,6 @@ where
         order_id: Id,
         reason: CancelReason,
     ) -> Result<Option<Arc<OrderType<T>>>, OrderBookError> {
-        self.cache.invalidate();
         // First, we find the order's location (price and side) without locking
         let location = self.order_locations.get(&order_id).map(|val| *val);
 
@@ -1326,7 +1322,6 @@ where
             empty_level = price_level.order_count() == 0;
         }
 
-        self.cache.invalidate();
         let Some(removed) = removed else {
             return Ok(None);
         };
@@ -1551,7 +1546,6 @@ where
         let Some(removed) = self.remove_resolved(price_level, order_id)? else {
             return Ok(());
         };
-        self.cache.invalidate();
         self.emit_level_changed(side, price_level);
         self.finish_removal(order_id, None, &removed, reason);
         match removed {
@@ -2434,7 +2428,7 @@ where
     ///
     /// # Errors
     /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
-    /// is engaged. The check runs before any cache invalidation, STP
+    /// is engaged. The check runs before any level change, STP
     /// validation, tick/lot validation, or matching work. Returns
     /// [`OrderBookError::MatchAborted`] for an aborted sweep (see above).
     /// Returns [`OrderBookError::RiskRejectedAfterTrades`] when the taker
@@ -2522,7 +2516,7 @@ where
     ///
     /// # Errors
     /// Returns [`OrderBookError::KillSwitchActive`] when the kill switch
-    /// is engaged. The check runs before any cache invalidation, STP
+    /// is engaged. The check runs before any level change, STP
     /// validation, tick/lot validation, or matching work. Returns
     /// [`OrderBookError::MatchAborted`] when the sweep stopped at a failed
     /// price level (#240): the committed prefix reached the trade listener
@@ -2795,7 +2789,6 @@ where
             }
         }
 
-        self.cache.invalidate();
         // Attempt to match the order immediately (with STP user_id propagation).
         // The outcome also carries whether STP cancelled the taker (#97) and
         // whether a per-level post-only guard refused to trade (#209).
@@ -3412,9 +3405,40 @@ where
         // and dropped a whole level (its order map's shard array is about
         // 16 KB) on every add to an existing level.
         let unit_order = self.convert_to_unit_type(order);
-        let stripe = self.lock_level(price);
-        let price_level =
-            price_levels.get_or_insert_with(price, || Arc::new(PriceLevel::new(price)));
+        // #309 review: joining an existing level keeps the shared stripe,
+        // but CREATING a level takes the stripe exclusively and links the
+        // key and bumps the side's best-price generation while holding it.
+        // A joiner either finds no key (and waits here for the exclusive
+        // stripe, i.e. for the creator's bump) or finds the key, which it
+        // can only do after acquiring the shared stripe the creator
+        // released after its bump; so no admission into a new level can
+        // return while the old best price is still servable.
+        // At most one of the two is held at a time.
+        let mut shared_stripe = self.lock_level(price);
+        let mut exclusive_stripe = None;
+        let price_level = match price_levels.get(&price) {
+            Some(existing) => existing,
+            None => {
+                drop(shared_stripe.take());
+                exclusive_stripe = self.lock_level_exclusive(price);
+                let mut created = false;
+                let entry = price_levels.get_or_insert_with(price, || {
+                    created = true;
+                    Arc::new(PriceLevel::new(price))
+                });
+                // A concurrent creator cannot link this key while the
+                // exclusive stripe is held, so `created` is false only when
+                // another creator finished before the stripe was taken.
+                if created {
+                    #[cfg(test)]
+                    if let Some(hook) = self.level_create_hook.as_ref() {
+                        hook(price);
+                    }
+                    self.side_cache(side).bump();
+                }
+                entry
+            }
+        };
         let level = price_level.value();
 
         // Admission into the level is validated upstream since pricelevel
@@ -3427,17 +3451,18 @@ where
         let admitted = match admission {
             Ok(admitted) => admitted,
             Err(err) => {
-                drop(stripe);
+                drop(shared_stripe);
+                drop(exclusive_stripe);
                 if let Some(risk_reservation) = reservation {
                     self.withdraw_unrested(order, price, side, user_seq, risk_reservation);
                 }
                 self.remove_level_if_empty(side, price);
-                self.cache.invalidate();
                 self.record_depth_metric();
                 return Err(RestFailure::Level(err));
             }
         };
-        drop(stripe);
+        drop(shared_stripe);
+        drop(exclusive_stripe);
         #[cfg(test)]
         if let Some(hook) = self.rest_interleave_hook.as_ref() {
             hook(order_id);
@@ -3793,7 +3818,6 @@ where
             prior_status.unwrap_or(OrderStatus::Open),
         )
         .map_err(RestFailure::into_error)?;
-        self.cache.invalidate();
         Ok(())
     }
 }

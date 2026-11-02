@@ -24,6 +24,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same order), so `create_snapshot_package` checksums and replay
   determinism are unchanged; no snapshot format change. Per-level
   statistics stay advisory under concurrent sweeps.
+- **`best_bid()` / `best_ask()` no longer serve a stale or phantom price
+  after a write that raced a read (#309).** The best-price cache was a
+  validity flag that every write cleared *before* its level change
+  completed, so a reader that walked the skiplist inside that window
+  stored the pre-write price as valid, and it stayed valid until the next
+  write; after a cancel it could name a level that no longer existed. The
+  post-only check, the headroom prechecks (`will_cross_market`),
+  `mid_price` and `spread` read the same value, so a non-crossing
+  post-only order could be refused with `PriceCrossing`. The cache is now
+  generation-tagged per side: each side's generation is bumped *after*
+  every level insert or removal completes (new level on admission,
+  emptied-level removal on cancel, fill or modify, `cancel_all_orders`,
+  snapshot restore), a reader loads it *before* walking and publishes
+  `(generation, price)` through a lock-free seqlock, and a hit requires
+  the published generation to be the current one. The price is now held
+  in two `AtomicU64` halves instead of a `crossbeam` `AtomicCell<u128>`,
+  which is not lock-free on stable Rust (it falls back to a global
+  striped lock). Adding to or leaving a level that stays linked no longer
+  clears the cache. Removing the cache outright was prototyped and
+  benchmarked too and rejected: with `scripts/bench_compare.sh --rounds 5`
+  against `main`, one `best_bid()` + `best_ask()` pair on a quiet
+  10 000-order book went from 7 ns to 13 ns p50 without a cache and to
+  5 ns with the generation-tagged one; with one writer moving the best
+  ask it went from 14 ns (main, serving stale values) to 53 ns p50 /
+  384 ns p99 without a cache and to 6 ns / 13 ns with it. Every write
+  scenario (`add_only`, `mixed_70_20_10`, `cancel_only`,
+  `aggressive_walk`, `contended_add_4t` / `_8t`, `stp_cancel_maker`) is
+  within noise of `main` for both. New bench `best_price_read_hdr`
+  (`best_price_read` and `best_price_read_1w`, also in
+  `benches/compare`). Compatibility: no public API, snapshot format or
+  event change; `PriceLevelCache` stays private and is still not
+  serialized. The cache unit tests were rewritten for the new type; the
+  #310 high-price test is kept as a `u128::MAX` round trip through the
+  two halves.
 
 ## [0.15.2] - 2026-11-02
 

@@ -125,6 +125,19 @@ mod common {
 
     /// Number of resting orders (setup-time assertions only: it walks
     /// every level).
+    /// One `best_bid()` + `best_ask()` pair (#309); the prices are
+    /// returned so the caller can `black_box` them.
+    #[inline]
+    pub fn best_prices(book: &Book) -> (Option<u128>, Option<u128>) {
+        (book.best_bid(), book.best_ask())
+    }
+
+    /// A GTC limit with no user, for the `best_price_read_1w` writer.
+    #[inline]
+    pub fn add_limit_order(book: &Book, id: Id, price: u128, qty: u64, side: Side) -> impl Sized {
+        book.add_limit_order(id, price, qty, side, TimeInForce::Gtc, None)
+    }
+
     pub fn resting_orders(book: &Book) -> usize {
         book.get_all_orders().len()
     }
