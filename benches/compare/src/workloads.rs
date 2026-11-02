@@ -722,10 +722,14 @@ pub fn best_price_read(orders: u64, samples: u64, writer: bool) -> Histogram<u64
     let (book, _) = resting_book(orders);
     let book = Arc::new(book);
     let stop = Arc::new(AtomicBool::new(false));
+    // Set by the writer after its first add + cancel pair, so the reader
+    // never measures (or stops) before the writer made progress.
+    let ready = Arc::new(AtomicBool::new(false));
     let start = Arc::new(Barrier::new(if writer { 2 } else { 1 }));
     let handle = writer.then(|| {
         let book = Arc::clone(&book);
         let stop = Arc::clone(&stop);
+        let ready = Arc::clone(&ready);
         let start = Arc::clone(&start);
         std::thread::spawn(move || {
             start.wait();
@@ -737,11 +741,17 @@ pub fn best_price_read(orders: u64, samples: u64, writer: bool) -> Histogram<u64
                 drop(add_limit_order(&book, order, 1_000, 1, Side::Sell));
                 drop(cancel_order(&book, order));
                 writes += 2;
+                ready.store(true, Ordering::Release);
             }
             writes
         })
     });
     start.wait();
+    if writer {
+        while !ready.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+    }
     let mut hist = new_histogram();
     let mut out = Vec::new();
     for _ in 0..samples {

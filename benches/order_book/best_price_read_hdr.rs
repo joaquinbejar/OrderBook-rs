@@ -75,10 +75,14 @@ fn quiet() {
 fn one_writer() {
     let book = Arc::new(seeded_book());
     let stop = Arc::new(AtomicBool::new(false));
+    // Set by the writer after its first add + cancel pair, so the reader
+    // never measures (or stops) before the writer made progress.
+    let ready = Arc::new(AtomicBool::new(false));
     let start = Arc::new(Barrier::new(2));
     let writer = {
         let book = Arc::clone(&book);
         let stop = Arc::clone(&stop);
+        let ready = Arc::clone(&ready);
         let start = Arc::clone(&start);
         std::thread::spawn(move || {
             start.wait();
@@ -91,11 +95,15 @@ fn one_writer() {
                     .expect("writer add");
                 book.cancel_order(order).expect("writer cancel");
                 writes += 2;
+                ready.store(true, Ordering::Release);
             }
             writes
         })
     };
     start.wait();
+    while !ready.load(Ordering::Acquire) {
+        std::thread::yield_now();
+    }
     let hist = read_loop(&book);
     stop.store(true, Ordering::Relaxed);
     let writes = writer.join().expect("writer thread");

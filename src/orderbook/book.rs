@@ -620,6 +620,14 @@ pub struct OrderBook<T = ()> {
     #[cfg(test)]
     pub(super) rest_interleave_hook: Option<std::sync::Arc<dyn Fn(Id) + Send + Sync>>,
 
+    /// Test-only interleaving point inside the level-creation path of an
+    /// admission (#309 review), receiving the price: it fires after the new
+    /// level key is linked and before its side's best-price generation is
+    /// bumped, with the price's stripe held exclusively. A test parks the
+    /// creator there to prove a joining admission cannot complete first.
+    #[cfg(test)]
+    pub(super) level_create_hook: Option<std::sync::Arc<dyn Fn(u128) + Send + Sync>>,
+
     /// Test-only fault injection for the risk reservation of an order about
     /// to rest (#291), receiving its id. Returning an error makes the
     /// reservation fail with nothing reserved, as a concurrent admission on
@@ -1251,6 +1259,8 @@ where
             rest_fault_hook: None,
             #[cfg(test)]
             rest_interleave_hook: None,
+            #[cfg(test)]
+            level_create_hook: None,
             #[cfg(test)]
             rest_risk_fault_hook: None,
             #[cfg(test)]

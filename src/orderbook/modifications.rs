@@ -3405,19 +3405,40 @@ where
         // and dropped a whole level (its order map's shard array is about
         // 16 KB) on every add to an existing level.
         let unit_order = self.convert_to_unit_type(order);
-        let stripe = self.lock_level(price);
-        let mut created = false;
-        let price_level = price_levels.get_or_insert_with(price, || {
-            created = true;
-            Arc::new(PriceLevel::new(price))
-        });
-        // #309: a new level key may be the new best price; retire the
-        // side's published best price now that the key is linked. A closure
-        // that ran but lost the insert race to a concurrent creator only
-        // costs a spurious bump.
-        if created {
-            self.side_cache(side).bump();
-        }
+        // #309 review: joining an existing level keeps the shared stripe,
+        // but CREATING a level takes the stripe exclusively and links the
+        // key and bumps the side's best-price generation while holding it.
+        // A joiner either finds no key (and waits here for the exclusive
+        // stripe, i.e. for the creator's bump) or finds the key, which it
+        // can only do after acquiring the shared stripe the creator
+        // released after its bump; so no admission into a new level can
+        // return while the old best price is still servable.
+        // At most one of the two is held at a time.
+        let mut shared_stripe = self.lock_level(price);
+        let mut exclusive_stripe = None;
+        let price_level = match price_levels.get(&price) {
+            Some(existing) => existing,
+            None => {
+                drop(shared_stripe.take());
+                exclusive_stripe = self.lock_level_exclusive(price);
+                let mut created = false;
+                let entry = price_levels.get_or_insert_with(price, || {
+                    created = true;
+                    Arc::new(PriceLevel::new(price))
+                });
+                // A concurrent creator cannot link this key while the
+                // exclusive stripe is held, so `created` is false only when
+                // another creator finished before the stripe was taken.
+                if created {
+                    #[cfg(test)]
+                    if let Some(hook) = self.level_create_hook.as_ref() {
+                        hook(price);
+                    }
+                    self.side_cache(side).bump();
+                }
+                entry
+            }
+        };
         let level = price_level.value();
 
         // Admission into the level is validated upstream since pricelevel
@@ -3430,7 +3451,8 @@ where
         let admitted = match admission {
             Ok(admitted) => admitted,
             Err(err) => {
-                drop(stripe);
+                drop(shared_stripe);
+                drop(exclusive_stripe);
                 if let Some(risk_reservation) = reservation {
                     self.withdraw_unrested(order, price, side, user_seq, risk_reservation);
                 }
@@ -3439,7 +3461,8 @@ where
                 return Err(RestFailure::Level(err));
             }
         };
-        drop(stripe);
+        drop(shared_stripe);
+        drop(exclusive_stripe);
         #[cfg(test)]
         if let Some(hook) = self.rest_interleave_hook.as_ref() {
             hook(order_id);

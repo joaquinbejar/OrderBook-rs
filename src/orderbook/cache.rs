@@ -422,4 +422,79 @@ mod tests {
             (Some(9_000), Some(9_882))
         );
     }
+
+    #[test]
+    fn test_join_cannot_complete_before_the_creators_bump() {
+        // #309 review: writer A links a new best ask level and parks before
+        // bumping the generation; writer B adds to that same level. B must
+        // not return while A is parked, and once B returns best_ask() must
+        // serve the new level, never the cached old best.
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (parked_tx, parked_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = std::sync::Mutex::new(release_rx);
+        let fired = AtomicBool::new(false);
+        let mut book = ask_book();
+        book.level_create_hook = Some(Arc::new(move |price: u128| {
+            if price == 9_880 && !fired.swap(true, Ordering::SeqCst) {
+                parked_tx.send(()).expect("signal parked");
+                release_rx
+                    .lock()
+                    .expect("release lock")
+                    .recv()
+                    .expect("release");
+            }
+        }));
+        let book = Arc::new(book);
+        assert_eq!(book.best_ask(), Some(9_882), "the old best is published");
+
+        let creator = {
+            let book = Arc::clone(&book);
+            std::thread::spawn(move || {
+                book.add_limit_order(
+                    Id::from_u64(3),
+                    9_880,
+                    1,
+                    Side::Sell,
+                    TimeInForce::Gtc,
+                    None,
+                )
+                .expect("creator add")
+            })
+        };
+        parked_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("creator parked after linking");
+
+        let joiner_done = Arc::new(AtomicBool::new(false));
+        let joiner = {
+            let (book, done) = (Arc::clone(&book), Arc::clone(&joiner_done));
+            std::thread::spawn(move || {
+                book.add_limit_order(
+                    Id::from_u64(4),
+                    9_880,
+                    1,
+                    Side::Sell,
+                    TimeInForce::Gtc,
+                    None,
+                )
+                .expect("joiner add");
+                done.store(true, Ordering::SeqCst);
+                book.best_ask()
+            })
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !joiner_done.load(Ordering::SeqCst),
+            "the joiner returned while the creator had not bumped the generation"
+        );
+
+        release_tx.send(()).expect("release creator");
+        creator.join().expect("creator thread");
+        let seen_by_joiner = joiner.join().expect("joiner thread");
+        assert_eq!(seen_by_joiner, Some(9_880));
+        assert_eq!(book.best_ask(), Some(9_880));
+    }
 }
