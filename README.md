@@ -46,6 +46,16 @@ This order book engine is built with the following design principles:
 - **Research**: Platform for studying market microstructure and order flow
 - **Educational**: Reference implementation for understanding modern exchange architecture
 
+### What's New in Version 0.15.1
+
+A performance patch release; no public API change.
+
+- **User-index removal by admission sequence (#311).** Cancelling or
+  filling an order no longer scans every resting order of its owner:
+  single-owner cancel and fill drop from about 24 µs to 1 µs at
+  100 000 resting orders, and `cancel_orders_by_user` /
+  `cancel_orders_by_side` are no longer quadratic.
+
 ### What's New in Version 0.15.0
 
 #### Added
