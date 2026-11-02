@@ -1,7 +1,8 @@
 [package]
 name = "orderbook-rs"
-version = "0.15.1"
+version = "0.15.2"
 edition = "2024"
+rust-version = "1.95"
 authors = ["Joaquin Bejar <jb@taunais.com>"]
 description = "A high-performance, lock-free price level implementation for limit order books in Rust. This library provides the building blocks for creating efficient trading systems with support for multiple order types and concurrent access patterns."
 license = "MIT"

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-11-02
+
+A patch release: the fully deterministic constructor no longer derives a
+default trade-ID namespace. The crate now declares its minimum Rust
+version, 1.95. No public API or snapshot format change.
+
 ### Fixed
 
 - **`OrderBook::with_clock_and_namespace` no longer reads the wall clock.**
@@ -25,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `trade_id_namespace` builds the replayed book with
   `with_clock_and_namespace`, so it no longer derives a default namespace
   either.
+
+### Changed
+
+- `Cargo.toml` declares `rust-version = "1.95"`, the oldest toolchain the
+  crate already needed (`AtomicU64::try_update`); older toolchains now get
+  a clear MSRV error instead of `E0658`.
 
 ## [0.15.1] - 2026-11-02
 
