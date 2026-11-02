@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`create_snapshot` no longer reports emptied levels or leaves gaps
+  under concurrent cancels and sweeps (#313).** Each side is now built by
+  walking the price-ordered level map (asks ascending, bids descending),
+  skipping any level with no orders and stopping after `depth` kept
+  levels. Before, a snapshot taken while a shared-gate cancel or sweep ran
+  could list a level at zero quantity (its last order gone, the level not
+  yet removed), or drop a level removed between key collection and read,
+  returning fewer than `depth` levels while more were resting.
+  `enriched_snapshot` / `enriched_snapshot_with_metrics` had the
+  zero-count half of the same bug and use the same walk. Levels holding
+  only hidden or reserve quantity still have orders and are kept.
+  Compatibility: on a quiescent book the output is identical (same levels,
+  same order), so `create_snapshot_package` checksums and replay
+  determinism are unchanged; no snapshot format change. Per-level
+  statistics stay advisory under concurrent sweeps.
+
 ## [0.15.2] - 2026-11-02
 
 A patch release: the fully deterministic constructor no longer derives a

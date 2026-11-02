@@ -32,6 +32,14 @@
 //! - **Research**: Platform for studying market microstructure and order flow
 //! - **Educational**: Reference implementation for understanding modern exchange architecture
 //!
+//! ## What's New in Version 0.15.3 (unreleased)
+//!
+//! - **Consistent snapshots under concurrent writes (#313).**
+//!   `create_snapshot` and `enriched_snapshot` walk each side in price
+//!   order and skip emptied levels, so a snapshot taken during a cancel or
+//!   sweep never lists a zero-order level and never leaves a gap in the
+//!   first `depth` levels. No format change.
+//!
 //! ## What's New in Version 0.15.2
 //!
 //! A patch release; no public API change.
