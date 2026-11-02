@@ -1,1 +1,0 @@
-{"$message_type":"unused_extern","lint_level":"force-warn","unused_extern_names":["bitflags","crossbeam","crossbeam_skiplist","dashmap","either","hdrhistogram","proptest","sha2","tempfile","thiserror","tokio","tracing"]}

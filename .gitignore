@@ -58,3 +58,7 @@ tmp_reply.json
 /.windsurfrules
 .full_engine_diff.patch
 smoke-results.json
+
+# Local-only files: the contributor rules and review benchmark output.
+rules/global_rules.md
+target-review/
