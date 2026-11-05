@@ -344,6 +344,23 @@ mod tests {
         );
     }
 
+    /// A match or market taker reusing a pending stop's id is refused, and
+    /// the stop stays pending (#321).
+    #[test]
+    fn test_market_taker_reusing_a_pending_stop_id_is_refused() {
+        let book = new_book();
+        book.add_order(limit(1, 94, 10, Side::Buy, user(1)))
+            .expect("bid 94");
+        book.add_order(stop(50, Side::Sell, 90, 100, 5, 6))
+            .expect("pending stop");
+        let err = book
+            .submit_market_order(id(50), 1, Side::Sell)
+            .expect_err("the stop owns the id");
+        assert!(matches!(err, OrderBookError::DuplicateOrderId { .. }));
+        assert_eq!(book.trailing_stop_count(), 1);
+        assert_eq!(book.visible_quantity_at_price(94, Side::Buy), Some(10));
+    }
+
     /// M4: a market-order id already in use (only reachable by someone who
     /// knows the trade-id namespace) is refused: nothing trades, the stop
     /// ends `Rejected { DuplicateOrderId }`.

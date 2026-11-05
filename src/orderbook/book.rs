@@ -994,6 +994,26 @@ impl<T> OrderBook<T> {
         cfg!(feature = "special_orders") && matches!(order, OrderType::TrailingStop { .. })
     }
 
+    /// Refuses a match or market taker whose id a resting order or a pending
+    /// stop owns (#321).
+    ///
+    /// Without this, the sweep reaches the level where the id rests, the level
+    /// refuses it as a self-match, and the taker walks on to a worse price
+    /// while one id is live twice. Call it under the submit gate, ahead of the
+    /// headroom (#240) and arithmetic (#244) checks: those record `Rejected`
+    /// under the taker's id, which here would overwrite the live order's state.
+    /// For the same reason this records no status transition, like the
+    /// `add_order` duplicate check.
+    pub(super) fn check_taker_id_not_owned(&self, order_id: Id) -> Result<(), OrderBookError> {
+        if self.order_locations.contains_key(&order_id) || self.id_is_pending_stop(order_id) {
+            crate::orderbook::metrics::record_reject(
+                crate::orderbook::reject_reason::RejectReason::DuplicateOrderId,
+            );
+            return Err(OrderBookError::DuplicateOrderId { order_id });
+        }
+        Ok(())
+    }
+
     /// Whether `order_id` is a pending trailing stop (#286): the id is
     /// owned, like a resting order's location. `false` without
     /// `special_orders`.
@@ -4475,6 +4495,8 @@ where
             self.submit_needs_exclusive_gate(false, user_id, false, false),
         );
         let result = (|| {
+            // #321: first, so a refusal records nothing under a live id.
+            self.check_taker_id_not_owned(order_id)?;
             // #240: under the same gate the sweep holds, before any mutation.
             self.check_trade_id_headroom(order_id, side, None)?;
             // #244: worst-case notional / fee representability, same place.
@@ -5032,6 +5054,8 @@ where
             self.submit_needs_exclusive_gate(false, user_id, false, false),
         );
         let result = (|| {
+            // #321: first, so a refusal records nothing under a live id.
+            self.check_taker_id_not_owned(order_id)?;
             // #240: under the gate the sweep holds, before any mutation.
             self.check_trade_id_headroom(order_id, side, None)?;
             // #244: the amount bounds the notional this sweep can consume.
@@ -5107,6 +5131,8 @@ where
             self.submit_needs_exclusive_gate(false, user_id, false, false),
         );
         let result = (|| {
+            // #321: first, so a refusal records nothing under a live id.
+            self.check_taker_id_not_owned(order_id)?;
             // #240: under the same gate the sweep holds, before any
             // mutation; only a limit that actually crosses is refused.
             self.check_trade_id_headroom(order_id, side, Some(limit_price))?;

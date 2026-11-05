@@ -25,6 +25,7 @@ mod post_trade_risk;
 #[cfg(feature = "special_orders")]
 mod repricing;
 mod restore_validation;
+mod reused_taker_id;
 mod serialize_tests;
 mod snapshot;
 mod snapshot_walk;
