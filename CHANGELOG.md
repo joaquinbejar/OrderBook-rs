@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-11-05
+
+A fix release: a match or market taker reusing a live id is refused (#321).
+No public API or snapshot format change.
+
 ### Fixed
 
 - **A match or market taker reusing a live id is refused instead of trading
@@ -4198,7 +4203,8 @@ change.
 - **Market Metrics**: VWAP, micro price, queue analysis, depth
   statistics, and functional iterators.
 
-[Unreleased]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.3...HEAD
+[Unreleased]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.4...HEAD
+[0.15.4]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.3...v0.15.4
 [0.15.3]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.2...v0.15.3
 [0.15.2]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.0...v0.15.1
