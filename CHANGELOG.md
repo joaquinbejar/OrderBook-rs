@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A match or market taker reusing a live id is refused instead of trading
+  through the best price (#321).** `match_order*`, `match_limit_order*`,
+  `match_market_order*`, `match_market_order_by_amount*`, the
+  `submit_market_order*` wrappers and `match_orders_batch` now return
+  `DuplicateOrderId` when a resting order or pending stop owns the taker's id,
+  as `add_order` already did. Before, the level holding the id refused it as a
+  self-match and the sweep moved on: the taker filled at a worse price, every
+  order at the skipped level lost its priority, and the id was live twice. The
+  check runs under the submit gate ahead of the #240 and #244 checks, so nothing
+  trades and the resting order's state is unchanged. Compatibility: callers that
+  reused an id now get an error where they got fills; fresh ids match as before.
+
 ## [0.15.3] - 2026-11-02
 
 A concurrency fix release: snapshots taken during a cancel or sweep no

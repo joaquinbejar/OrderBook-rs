@@ -818,6 +818,8 @@ where
         // the drain would then report a discard that never happened.
         let _gate = self.acquire_coherent_submit_gate(false);
         let result = (|| {
+            // #321: before anything that could record state under this id.
+            self.check_taker_id_not_owned(order_id)?;
             // #244: worst-case notional / fee representability, before any
             // mutation — identical to every publishing entry point.
             let verified =
@@ -882,6 +884,8 @@ where
             false,
         ));
         let result = (|| {
+            // #321: see `match_order`.
+            self.check_taker_id_not_owned(order_id)?;
             // #244: see `match_order`.
             let verified =
                 self.check_trade_arithmetic_or_reject(order_id, side, quantity, limit_price)?;
