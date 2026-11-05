@@ -32,6 +32,13 @@
 //! - **Research**: Platform for studying market microstructure and order flow
 //! - **Educational**: Reference implementation for understanding modern exchange architecture
 //!
+//! ## What's New in Version 0.15.4
+//!
+//! A match or market taker reusing the id of a resting order or pending stop
+//! is refused with `DuplicateOrderId` instead of trading through the best
+//! price (#321). Callers that reused an id now get an error where they got
+//! fills; fresh ids match as before.
+//!
 //! ## What's New in Version 0.15.3
 //!
 //! - **Consistent snapshots under concurrent writes (#313).**
