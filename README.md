@@ -1603,6 +1603,8 @@ Centralized trade event routing and multi-book orchestration:
 
 - **BookManager**: Manage multiple order books with unified trade listener
 - **Standard & Tokio Support**: Synchronous and async variants
+  (`BookManagerTokio` needs the `tokio` feature, on by default; build with
+  `default-features = false` to keep Tokio out of the dependency graph)
 - **Event Routing**: Centralized trade notifications across all books
 
 #### Aggregate Statistics
