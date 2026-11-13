@@ -1889,15 +1889,15 @@ Repositories by the same author that this project depends on, and repositories t
 
 | Repository | Description |
 |------------|-------------|
-| [PriceLevel](https://github.com/joaquinbejar/PriceLevel) · [crates.io](https://crates.io/crates/pricelevel) | Lock-free price level implementation for limit order books. |
+| [PriceLevel](https://github.com/joaquinbejar/PriceLevel) | Lock-free price level that stores and matches the orders resting at each price of the book. |
 
 ### Used by
 
 | Repository | Description |
 |------------|-------------|
-| [hydra-amm](https://github.com/joaquinbejar/hydra-amm) · [crates.io](https://crates.io/crates/hydra-amm) | Universal AMM engine: build, configure and operate any Automated Market Maker through one interface. |
-| [market-maker-rs](https://github.com/joaquinbejar/market-maker-rs) | Quantitative market making strategies, starting with the Avellaneda-Stoikov model. |
-| [Option-Chain-OrderBook](https://github.com/joaquinbejar/Option-Chain-OrderBook) · [crates.io](https://crates.io/crates/option-chain-orderbook) | Option chain order book system (underlying, expiration, strike) built on OrderBook-rs, PriceLevel and OptionStratLib. |
-| [Option-Chain-OrderBook-Backend](https://github.com/joaquinbejar/Option-Chain-OrderBook-Backend) | REST and WebSocket backend service exposing Option-Chain-OrderBook. |
+| [Option-Chain-OrderBook](https://github.com/joaquinbejar/Option-Chain-OrderBook) | Option chain order book system; uses this crate as the per-contract limit order book. |
+| [Option-Chain-OrderBook-Backend](https://github.com/joaquinbejar/Option-Chain-OrderBook-Backend) | REST and WebSocket backend for option-chain-orderbook; uses this crate's order and depth types in its API. |
+| [hydra-amm](https://github.com/joaquinbejar/hydra-amm) | Universal AMM engine; uses this crate to model order-book style liquidity alongside its AMM pools. |
+| [market-maker-rs](https://github.com/joaquinbejar/market-maker-rs) | Quantitative market making library; uses this crate as the order book its strategies quote into and backtest against. |
 
 <!-- related-projects:end -->
