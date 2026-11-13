@@ -46,6 +46,13 @@ This order book engine is built with the following design principles:
 - **Research**: Platform for studying market microstructure and order flow
 - **Educational**: Reference implementation for understanding modern exchange architecture
 
+### What's New in Version 0.16.0
+
+`tokio` is an optional dependency behind a `tokio` feature, on by default
+(#324). Default builds are unchanged. Build with `default-features = false`
+to keep Tokio out of the dependency graph; `BookManagerTokio` then is not
+available, and `nats` turns `tokio` back on.
+
 ### What's New in Version 0.15.4
 
 A match or market taker reusing the id of a resting order or pending stop

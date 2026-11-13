@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-13
+
+A feature release: `tokio` becomes an optional dependency behind a `tokio`
+feature, on by default (#324). Default builds are unchanged; a build with
+`default-features = false` no longer has Tokio or `BookManagerTokio`, hence
+the minor bump. No snapshot or wire format change.
+
 ### Changed
 
 - **`tokio` is now an optional dependency behind a `tokio` feature (#324).**
@@ -4215,7 +4222,8 @@ change.
 - **Market Metrics**: VWAP, micro price, queue analysis, depth
   statistics, and functional iterators.
 
-[Unreleased]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.4...HEAD
+[Unreleased]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.4...v0.16.0
 [0.15.4]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.3...v0.15.4
 [0.15.3]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.2...v0.15.3
 [0.15.2]: https://github.com/joaquinbejar/OrderBook-rs/compare/v0.15.1...v0.15.2
