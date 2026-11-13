@@ -62,3 +62,7 @@ smoke-results.json
 # Local-only files: the contributor rules and review benchmark output.
 rules/global_rules.md
 target-review/
+
+# Local agent tooling, not part of the crate
+.codex/
+.agents/
