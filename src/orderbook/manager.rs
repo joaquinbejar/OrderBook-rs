@@ -39,10 +39,13 @@ use crate::orderbook::trade::{TradeEvent, TradeListener, TradeResult};
 use pricelevel::{Hash32, Side, TimestampMs};
 use std::any::Any;
 use std::collections::HashMap;
+#[cfg(feature = "tokio")]
 use std::future::Future;
+#[cfg(feature = "tokio")]
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(feature = "tokio")]
 use std::task::Poll;
 use tracing::{debug, error, info};
 
@@ -727,7 +730,10 @@ where
     }
 }
 
+#[cfg(feature = "tokio")]
 /// BookManager implementation using Tokio mpsc channels.
+///
+/// Available with the `tokio` feature (on by default).
 ///
 /// # Trade-event channel is unbounded by design
 ///
@@ -772,6 +778,7 @@ where
     drops: Arc<DropTracker>,
 }
 
+#[cfg(feature = "tokio")]
 impl<T> BookManagerTokio<T>
 where
     T: Clone + Send + Sync + Default + 'static,
@@ -980,6 +987,7 @@ where
     }
 }
 
+#[cfg(feature = "tokio")]
 impl<T> BookManagerTokio<T>
 where
     T: Clone + Send + Sync + Default + 'static,
@@ -1069,6 +1077,7 @@ where
     }
 }
 
+#[cfg(feature = "tokio")]
 impl<T> BookManager<T> for BookManagerTokio<T>
 where
     T: Clone + Send + Sync + Default + 'static,
@@ -1125,6 +1134,7 @@ where
     }
 }
 
+#[cfg(feature = "tokio")]
 impl<T> Default for BookManagerTokio<T>
 where
     T: Clone + Send + Sync + Default + 'static,

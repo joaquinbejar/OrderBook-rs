@@ -98,7 +98,7 @@ crossbeam = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
-tokio = { workspace = true, features = ["sync", "rt", "time"] }
+tokio = { workspace = true, features = ["sync", "rt", "time"], optional = true }
 bitflags = { workspace = true }
 thiserror = { workspace = true }
 either = { workspace = true }
@@ -112,9 +112,13 @@ zerocopy = { workspace = true, optional = true }
 
 
 [features]
-default = []
+default = ["tokio"]
+# `BookManagerTokio` and its Tokio trade-event channel (#324). On by default;
+# build with `default-features = false` to keep Tokio out of the dependency
+# graph. The core order book (matching, levels, snapshots) never needs it.
+tokio = ["dep:tokio"]
 special_orders = []
-nats = ["dep:async-nats", "dep:bytes"]
+nats = ["tokio", "dep:async-nats", "dep:bytes"]
 bincode = ["dep:bincode"]
 journal = ["dep:crc32fast", "dep:memmap2"]
 alloc-counters = []
@@ -223,6 +227,7 @@ required-features = ["alloc-counters"]
 [[test]]
 name = "tests"
 path = "tests/unit/mod.rs"
+required-features = ["tokio"]
 
 [[test]]
 name = "alloc_budget"
@@ -237,7 +242,7 @@ required-features = ["alloc-counters", "bincode"]
 [[test]]
 name = "metrics_tests"
 path = "tests/metrics/mod.rs"
-required-features = ["metrics"]
+required-features = ["metrics", "tokio"]
 
 
 [lib]

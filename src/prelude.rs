@@ -19,7 +19,9 @@
 // Core order book types
 pub use crate::orderbook::OrderBook;
 pub use crate::orderbook::clock::{Clock, MonotonicClock, StubClock};
-pub use crate::orderbook::manager::{BookManager, BookManagerStd, BookManagerTokio};
+#[cfg(feature = "tokio")]
+pub use crate::orderbook::manager::BookManagerTokio;
+pub use crate::orderbook::manager::{BookManager, BookManagerStd};
 pub use crate::orderbook::{ManagerError, OrderBookError};
 
 // Iterator types

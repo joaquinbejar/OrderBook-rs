@@ -1589,6 +1589,8 @@
 //!
 //! - **BookManager**: Manage multiple order books with unified trade listener
 //! - **Standard & Tokio Support**: Synchronous and async variants
+//!   (`BookManagerTokio` needs the `tokio` feature, on by default; build with
+//!   `default-features = false` to keep Tokio out of the dependency graph)
 //! - **Event Routing**: Centralized trade notifications across all books
 //!
 //! ### Aggregate Statistics
@@ -1802,7 +1804,9 @@ pub use orderbook::implied_volatility::{
     SolverConfig,
 };
 pub use orderbook::iterators::LevelInfo;
-pub use orderbook::manager::{BookManager, BookManagerStd, BookManagerTokio};
+#[cfg(feature = "tokio")]
+pub use orderbook::manager::BookManagerTokio;
+pub use orderbook::manager::{BookManager, BookManagerStd};
 pub use orderbook::market_impact::{MarketImpact, OrderSimulation};
 pub use orderbook::order_state::{
     CancelReason, OrderStateListener, OrderStateTracker, OrderStatus,

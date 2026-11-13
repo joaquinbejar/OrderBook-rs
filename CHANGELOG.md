@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`tokio` is now an optional dependency behind a `tokio` feature (#324).**
+  Only `BookManagerTokio` and the `nats` publishers use it; the core order
+  book (matching, levels, snapshots) does not. The feature is in `default`,
+  so existing builds are unchanged. Build with `default-features = false` to
+  drop Tokio from the dependency graph; `BookManagerTokio` and its
+  re-exports in `prelude` and the crate root are then unavailable. The `nats`
+  feature enables `tokio`. A new CI job builds and lints the crate with
+  `--no-default-features` and checks that `cargo tree -e normal` shows no
+  Tokio.
+
 ## [0.15.4] - 2026-11-05
 
 A fix release: a match or market taker reusing a live id is refused (#321).

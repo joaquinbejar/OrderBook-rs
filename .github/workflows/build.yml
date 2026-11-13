@@ -41,3 +41,29 @@ jobs:
 
       - name: Build
         run: make build
+
+  no-default-features:
+    # The core order book must build without Tokio (#324).
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build without default features
+        run: cargo build -p orderbook-rs --no-default-features
+
+      - name: Clippy without default features
+        run: cargo clippy -p orderbook-rs --lib --no-default-features -- -D warnings
+
+      - name: Tokio is absent from the normal dependency graph
+        run: |
+          if cargo tree -p orderbook-rs -e normal --no-default-features --prefix none | grep -E '^tokio v'; then
+            echo "tokio is in the dependency graph of orderbook-rs with --no-default-features" >&2
+            exit 1
+          fi
