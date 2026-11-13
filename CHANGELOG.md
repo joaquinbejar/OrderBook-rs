@@ -24,6 +24,9 @@ snapshot or wire format change.
   1.29, `either` 1.19, `proptest` 1.12 (dev); every other entry is written as
   `X.Y` of its current release. No code change was needed. `bincode` stays at
   2.0: the 3.0.0 release on crates.io is a placeholder that does not compile.
+- **`.codex/` and `.agents/` are no longer tracked** and are listed in
+  `.gitignore`. They hold local tooling configuration, never shipped in the
+  published crate (`Cargo.toml` `include` already left them out).
 
 - **`tokio` is now an optional dependency behind a `tokio` feature (#324).**
   Only `BookManagerTokio` and the `nats` publishers use it; the core order
