@@ -12,9 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 A feature release: `tokio` becomes an optional dependency behind a `tokio`
 feature, on by default (#324). Default builds are unchanged; a build with
 `default-features = false` no longer has Tokio or `BookManagerTokio`, hence
-the minor bump. No snapshot or wire format change.
+the minor bump. Dependencies move to their latest stable releases. No
+snapshot or wire format change.
 
 ### Changed
+
+- **Dependencies at their latest stable releases, declared as `X.Y`.**
+  Notably `async-nats` 0.50 → 0.52 (its `jetstream::Context` is what
+  `NatsTradePublisher::new` and `NatsBookChangePublisher::new` take, so users
+  of the `nats` feature need `async-nats` 0.52 too), `tokio` 1.54, `uuid`
+  1.29, `either` 1.19, `proptest` 1.12 (dev); every other entry is written as
+  `X.Y` of its current release. No code change was needed. `bincode` stays at
+  2.0: the 3.0.0 release on crates.io is a placeholder that does not compile.
 
 - **`tokio` is now an optional dependency behind a `tokio` feature (#324).**
   Only `BookManagerTokio` and the `nats` publishers use it; the core order

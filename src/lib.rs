@@ -39,6 +39,10 @@
 //! to keep Tokio out of the dependency graph; `BookManagerTokio` then is not
 //! available, and `nats` turns `tokio` back on.
 //!
+//! Dependencies move to their latest stable releases; with the `nats`
+//! feature, the publishers now take an `async-nats` 0.52
+//! `jetstream::Context`. `bincode` stays at 2.0.
+//!
 //! ## What's New in Version 0.15.4
 //!
 //! A match or market taker reusing the id of a resting order or pending stop
