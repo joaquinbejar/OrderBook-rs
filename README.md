@@ -48,12 +48,15 @@ This order book engine is built with the following design principles:
 
 ### What's New in Version 0.16.1 (unreleased)
 
-A pegged re-price sweep never trades (#328). Each peg is priced against
+A pegged re-price sweep never trades when sweeps run serialized with
+submits, as the sequencer runs them (#328). Each peg is priced against
 the touch as it stands when it is re-priced, pegs moved earlier in the
 same sweep included, and a peg does not count its own order: a best level
 holding only the peg is skipped for the next level, so a mid peg no
 longer ratchets on an unchanged book. A target that would cross is
-reported in `RepricingResult::failed_orders` and the peg stays in place.
+reported in `RepricingResult::failed_orders` and the peg stays in place;
+a submit running concurrently with a sweep can still move the touch
+between that check and the re-price.
 No API, snapshot or wire format change.
 
 ### What's New in Version 0.16.0
