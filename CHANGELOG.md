@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A pegged re-price sweep no longer trades on a stale touch (#328).** The
+  sweep read the best bid, best ask and mid once and priced every peg from
+  that copy, so a peg moved earlier in the sweep could make a later
+  opposite-side peg cross and trade: a taker fill at a price its owner never
+  sent, a wash trade between one user's pegs with STP off, a silent cancel
+  under `CancelMaker`, or a peg stuck on every sweep under `CancelTaker` /
+  `CancelBoth`. Each peg now reads the touch as it stands when it is
+  re-priced, and a peg does not count its own order: on its own side, a best
+  level holding only the peg is skipped for the next level (a mid peg no
+  longer ratchets, e.g. 150 then 175, on an unchanged book). A target that
+  would still cross is not sent: it is reported in
+  `RepricingResult::failed_orders` and the peg stays where it was. The cross
+  check and the price update are two steps, so the strict no-trade guarantee
+  holds when sweeps are serialized with submits, as the sequencer does.
+  Passive clamp, tick snap, price floor, #174 failure reporting, id-order
+  iteration (#106) and the #291 stale-registration release are unchanged.
+  New Criterion rows `pegged_reprice/sweep_moves/1000` and
+  `pegged_reprice/sweep_steady/1000`.
+
+  Compatibility: behaviour change only, no API, snapshot or wire format
+  change. A peg alone at the best level now prices off the next level
+  instead of its own quote, so repriced prices can differ from 0.16.0. A
+  re-price that would cross now appears in `failed_orders` instead of
+  trading.
+
 ## [0.16.0] - 2026-11-13
 
 A feature release: `tokio` becomes an optional dependency behind a `tokio`
