@@ -9,9 +9,9 @@
 //!   for the next level, so a mid peg does not chase its own quote. A
 //!   re-price is passive only; a target that would cross the book is
 //!   reported in [`RepricingResult::failed_orders`] and the peg is left in
-//!   place (#328). The guarantee is strict when sweeps run serialized with
-//!   submits (as the sequencer runs them): a concurrent submit can move the
-//!   touch between the cross check and the re-price.
+//!   place (#328). The cross check and the re-insert run under the
+//!   exclusive submit gate, so a concurrent submit cannot move the touch
+//!   in between.
 //! - **TrailingStop**: held **off book** as pending stops and driven by the
 //!   book's prints (#286): the watermark follows the prints in the stop's
 //!   favour, the stop price trails it by `trail_amount`, and a print at or

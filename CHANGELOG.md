@@ -21,8 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer ratchets, e.g. 150 then 175, on an unchanged book). A target that
   would still cross is not sent: it is reported in
   `RepricingResult::failed_orders` and the peg stays where it was. The cross
-  check and the price update are two steps, so the strict no-trade guarantee
-  holds when sweeps are serialized with submits, as the sequencer does.
+  check and the re-insert run under the exclusive submit gate, so a
+  concurrent submit cannot move the touch in between and the no-trade
+  guarantee holds without serializing sweeps with submits.
   Passive clamp, tick snap, price floor, #174 failure reporting, id-order
   iteration (#106) and the #291 stale-registration release are unchanged.
   New Criterion rows `pegged_reprice/sweep_moves/1000` and

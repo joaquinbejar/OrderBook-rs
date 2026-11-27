@@ -812,7 +812,7 @@ where
     }
 
     /// The body of [`Self::update_order`], run under the gate it took.
-    fn update_order_gated(
+    pub(super) fn update_order_gated(
         &self,
         update: OrderUpdate,
     ) -> Result<Option<Arc<OrderType<T>>>, OrderBookError> {

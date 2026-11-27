@@ -48,8 +48,8 @@ This order book engine is built with the following design principles:
 
 ### What's New in Version 0.16.1 (unreleased)
 
-A pegged re-price sweep never trades when sweeps run serialized with
-submits, as the sequencer runs them (#328). Each peg is priced against
+A pegged re-price sweep never trades, also with concurrent submitters
+(#328). Each peg is priced against
 the touch as it stands when it is re-priced, pegs moved earlier in the
 same sweep included, and a peg does not count its own order: a best level
 holding only the peg is skipped for the next level, so a mid peg no

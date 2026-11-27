@@ -33,8 +33,8 @@ failing preflight rejects the order untouched.
 - A pegged re-price is passive (#328): each peg reads the touch as it
   stands when it is re-priced, without its own order, and a target that
   would cross is reported in `RepricingResult::failed_orders` instead of
-  trading. The guarantee is strict when sweeps run serialized with
-  submits, as the sequencer runs them.
+  trading. The cross check and the re-insert run under the exclusive
+  submit gate, so a concurrent submit cannot move the touch in between.
 
 The sweep reuses per-thread scratch buffers (`MatchingPool`) so the hot
 path stays allocation-light. Trades carry the maker and taker order ids,

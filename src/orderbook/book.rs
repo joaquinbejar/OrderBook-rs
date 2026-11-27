@@ -661,6 +661,13 @@ pub struct OrderBook<T = ()> {
     #[cfg(all(test, feature = "special_orders"))]
     pub(super) reprice_guard_hook: Option<RepriceInterleaveHook<T>>,
 
+    /// Test-only point in the pegged repricer (#328), fired with the book
+    /// and a peg's id while the exclusive submit gate is held between the
+    /// no-cross guard and the re-insert, so a test can prove no concurrent
+    /// submit can land in that window. Exists only in `cfg(test)` builds.
+    #[cfg(all(test, feature = "special_orders"))]
+    pub(super) reprice_gated_hook: Option<RepriceInterleaveHook<T>>,
+
     /// listens to possible trades when an order is added
     pub trade_listener: Option<TradeListener>,
 
@@ -1296,6 +1303,8 @@ where
             reprice_interleave_hook: None,
             #[cfg(all(test, feature = "special_orders"))]
             reprice_guard_hook: None,
+            #[cfg(all(test, feature = "special_orders"))]
+            reprice_gated_hook: None,
             #[cfg(test)]
             modify_interleave_hook: None,
             market_close_timestamp: AtomicU64::new(0),
@@ -6782,9 +6791,9 @@ where
     /// reference / no valid passive tick this cycle is a no-op, not a failure,
     /// and is not recorded.
     ///
-    /// Each re-price goes through the public, gated `update_order`, so on an
-    /// STP-enabled book this loop takes and releases the exclusive submit
-    /// gate once per order (#225). Correct and deadlock-free — the gate is
+    /// Each re-price takes the exclusive submit gate for its cross check
+    /// and re-insert (#328, which also covers the #225 STP requirement),
+    /// so this loop takes and releases it once per moved peg. Correct and deadlock-free — the gate is
     /// never held across iterations — but the sweep is not atomic as a
     /// batch: concurrent flow interleaves between consecutive re-prices.
     ///
@@ -6792,7 +6801,7 @@ where
     /// every peg moved earlier in the sweep, and without its own order
     /// (`touch_excluding`, #328). A re-price is passive only: a target that
     /// would cross the live book is recorded in `failures` and the peg is
-    /// left in place, so a sequential sweep never trades.
+    /// left in place, so a sweep never trades, also with concurrent submitters.
     ///
     /// # Errors
     ///
@@ -6858,7 +6867,11 @@ where
                         hook(self, order_id);
                     }
                     // A re-price is passive only (#328): never let it take
-                    // liquidity, whatever the clamp computed.
+                    // liquidity, whatever the clamp computed. The exclusive
+                    // submit gate spans the cross check through the
+                    // re-insert, so no concurrent submit, cancel or modify
+                    // can move the opposite touch in between.
+                    let gate = self.submit_gate_write();
                     if self.will_cross_market(new_price, *side) {
                         trace!(
                             "Pegged re-price of {} to {} would cross the touch",
@@ -6874,7 +6887,16 @@ where
                         order_id,
                         new_price: pricelevel::Price::new(new_price),
                     };
-                    match self.update_order(update) {
+                    #[cfg(test)]
+                    if let Some(hook) = self.reprice_gated_hook.as_ref() {
+                        hook(self, order_id);
+                    }
+                    let result = self.update_order_gated(update);
+                    // #286: settle pending stops under the same gate, as
+                    // `update_order` does.
+                    self.settle_pending_stops();
+                    drop(gate);
+                    match result {
                         Ok(_) => {
                             repriced_count = checked_reprice_count(repriced_count)?;
                             trace!(
@@ -6960,11 +6982,9 @@ where
     /// does not count its own order: on its own side, a best level holding
     /// only the peg is skipped for the next level. A target that would
     /// still cross the book is not sent; it is reported as a failure and
-    /// the peg stays where it was. The cross check and the price update
-    /// are two steps (the modify path has no post-only option), so the
-    /// strict "a sweep never trades" guarantee holds when sweeps are
-    /// serialized with submits, as the sequencer serializes them; a
-    /// submit racing a sweep can move the touch between the two.
+    /// the peg stays where it was. The cross check and the re-insert run
+    /// under one exclusive submit gate, so a submit racing a sweep cannot
+    /// move the touch between the two and a sweep never trades.
     fn reprice_pegged_orders(&self) -> Result<usize, OrderBookError> {
         self.reprice_pegged_collecting(&mut Vec::new())
     }
