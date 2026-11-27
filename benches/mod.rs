@@ -43,7 +43,14 @@ criterion_group!(
     order_book::pending_stops::register_benchmarks
 );
 
+// #328: pegged re-price sweeps, after the pending-stop rows.
+#[cfg(feature = "special_orders")]
+criterion_group!(
+    pegged_reprice_benches,
+    order_book::pegged_reprice::register_benchmarks
+);
+
 #[cfg(not(feature = "special_orders"))]
 criterion_main!(benches);
 #[cfg(feature = "special_orders")]
-criterion_main!(benches, pending_stop_benches);
+criterion_main!(benches, pending_stop_benches, pegged_reprice_benches);

@@ -10,8 +10,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use orderbook_rs::OrderBook;
 use orderbook_rs::orderbook::repricing::RepricingOperations;
+use orderbook_rs::{OrderBook, STPMode, StubClock, snapshots_match};
 use pricelevel::{
     Hash32, Id, OrderType, PegReferenceType, Price, Quantity, Side, TimeInForce, TimestampMs,
 };
@@ -401,4 +401,246 @@ fn reprice_records_risk_rejected_peg_in_failed_orders_issue_174() {
         90,
         "a rejected re-price leaves the peg at its old price"
     );
+}
+
+// ---------------------------------------------------------------------------
+// #328: each peg reads the touch as it stands when it is re-priced, without
+// its own order, and a re-price never trades.
+// ---------------------------------------------------------------------------
+
+fn user(byte: u8) -> Hash32 {
+    Hash32::new([byte; 32])
+}
+
+fn mid_peg(id: u64, price: u128, side: Side, owner: Hash32) -> OrderType<()> {
+    OrderType::PeggedOrder {
+        id: Id::from_u64(id),
+        price: Price::new(price),
+        quantity: Quantity::new(5),
+        side,
+        user_id: owner,
+        timestamp: TimestampMs::new(1),
+        time_in_force: TimeInForce::Gtc,
+        reference_price_offset: 0,
+        reference_price_type: PegReferenceType::MidPrice,
+        extra_fields: (),
+    }
+}
+
+/// The #328 book: a third user's bid 100 / ask 200, a buy mid peg (id 3)
+/// resting at 100 and a sell mid peg (id 4) resting at 200, 5 lots each.
+fn issue_328_book(
+    stp: STPMode,
+    buy_owner: Hash32,
+    sell_owner: Hash32,
+    trades: Arc<AtomicUsize>,
+) -> OrderBook<()> {
+    let counter = trades.clone();
+    // A stub clock: two books built this way are identical, timestamps
+    // included, so a sweep on each can be compared with `snapshots_match`.
+    let mut book = OrderBook::<()>::with_clock("PEG/USD", Arc::new(StubClock::starting_at(1)));
+    book.set_trade_listener(Arc::new(move |_trade| {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+    book.set_stp_mode(stp);
+    let third = user(9);
+    book.add_limit_order_with_user(
+        Id::from_u64(1),
+        100,
+        5,
+        Side::Buy,
+        TimeInForce::Gtc,
+        third,
+        None,
+    )
+    .expect("third-party bid");
+    book.add_limit_order_with_user(
+        Id::from_u64(2),
+        200,
+        5,
+        Side::Sell,
+        TimeInForce::Gtc,
+        third,
+        None,
+    )
+    .expect("third-party ask");
+    book.add_order(mid_peg(3, 100, Side::Buy, buy_owner))
+        .expect("buy peg");
+    book.add_order(mid_peg(4, 200, Side::Sell, sell_owner))
+        .expect("sell peg");
+    book
+}
+
+/// Runs one sweep on the #328 book and asserts the acceptance criteria.
+fn assert_issue_328_sweep_is_passive(stp: STPMode, buy_owner: Hash32, sell_owner: Hash32) {
+    let trades = Arc::new(AtomicUsize::new(0));
+    let book = issue_328_book(stp, buy_owner, sell_owner, trades.clone());
+    assert_eq!(trades.load(Ordering::SeqCst), 0, "setup must not trade");
+
+    let result = book.reprice_special_orders().expect("sweep");
+
+    assert_eq!(trades.load(Ordering::SeqCst), 0, "a sweep must never trade");
+    assert!(
+        result.failed_orders.is_empty(),
+        "no re-price fails because of the other peg: {:?}",
+        result.failed_orders
+    );
+    let buy = book
+        .get_order(Id::from_u64(3))
+        .expect("buy peg still rests");
+    let sell = book
+        .get_order(Id::from_u64(4))
+        .expect("sell peg still rests");
+    assert_eq!(buy.visible_quantity(), Quantity::new(5));
+    assert_eq!(sell.visible_quantity(), Quantity::new(5));
+    let bid = book.best_bid().expect("bid");
+    let ask = book.best_ask().expect("ask");
+    assert!(bid < ask, "book uncrossed: bid {bid} ask {ask}");
+    // Buy peg reads mid(100, 200) = 150. Sell peg then reads bid 150 (the
+    // buy peg) and ask 200 (itself excluded: the third-party ask shares the
+    // level, so the level is the touch) = 175.
+    assert_eq!(buy.price(), Price::new(150));
+    assert_eq!(sell.price(), Price::new(175));
+}
+
+#[test]
+fn test_reprice_opposite_mid_pegs_different_owners_no_trade() {
+    assert_issue_328_sweep_is_passive(STPMode::None, user(1), user(2));
+}
+
+#[test]
+fn test_reprice_opposite_mid_pegs_same_owner_stp_none_no_trade() {
+    assert_issue_328_sweep_is_passive(STPMode::None, user(1), user(1));
+}
+
+#[test]
+fn test_reprice_opposite_mid_pegs_same_owner_cancel_maker_no_cancel() {
+    assert_issue_328_sweep_is_passive(STPMode::CancelMaker, user(1), user(1));
+}
+
+#[test]
+fn test_reprice_opposite_mid_pegs_same_owner_cancel_taker_no_reject() {
+    assert_issue_328_sweep_is_passive(STPMode::CancelTaker, user(1), user(1));
+}
+
+#[test]
+fn test_reprice_opposite_mid_pegs_same_owner_cancel_both_no_reject() {
+    assert_issue_328_sweep_is_passive(STPMode::CancelBoth, user(1), user(1));
+}
+
+#[test]
+fn test_reprice_repeated_sweeps_unchanged_book_stable_prices() {
+    let trades = Arc::new(AtomicUsize::new(0));
+    let counter = trades.clone();
+    let book = OrderBook::<()>::with_trade_listener(
+        "PEG/USD",
+        Arc::new(move |_trade| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }),
+    );
+    book.add_limit_order(Id::from_u64(1), 100, 5, Side::Buy, TimeInForce::Gtc, None)
+        .expect("bid");
+    book.add_limit_order(Id::from_u64(2), 200, 5, Side::Sell, TimeInForce::Gtc, None)
+        .expect("ask");
+    // Rests below the bid, so it is not the touch it reads.
+    book.add_order(mid_peg(3, 90, Side::Buy, user(1)))
+        .expect("peg");
+
+    let mut prices = Vec::new();
+    for _ in 0..3 {
+        book.reprice_special_orders().expect("sweep");
+        prices.push(book.get_order(Id::from_u64(3)).expect("peg").price());
+    }
+    // Old behaviour: 150, then 175 (mid of its own 150 bid and 200).
+    assert_eq!(prices, vec![Price::new(150); 3]);
+    assert_eq!(trades.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn test_reprice_peg_alone_at_best_reads_next_level() {
+    let book = OrderBook::<()>::new("PEG/USD");
+    book.add_limit_order(Id::from_u64(1), 100, 5, Side::Buy, TimeInForce::Gtc, None)
+        .expect("bid");
+    book.add_limit_order(Id::from_u64(2), 200, 5, Side::Sell, TimeInForce::Gtc, None)
+        .expect("ask");
+    // Buy BestBid peg alone at 120 (the best bid): it reads 100, not itself.
+    let peg = OrderType::PeggedOrder {
+        id: Id::from_u64(3),
+        price: Price::new(120),
+        quantity: Quantity::new(5),
+        side: Side::Buy,
+        user_id: user(1),
+        timestamp: TimestampMs::new(1),
+        time_in_force: TimeInForce::Gtc,
+        reference_price_offset: 1,
+        reference_price_type: PegReferenceType::BestBid,
+        extra_fields: (),
+    };
+    book.add_order(peg).expect("peg");
+    book.reprice_special_orders().expect("sweep");
+    assert_eq!(
+        book.get_order(Id::from_u64(3)).expect("peg").price(),
+        Price::new(101)
+    );
+    // Stable: a second sweep reads 100 again.
+    book.reprice_special_orders().expect("sweep");
+    assert_eq!(
+        book.get_order(Id::from_u64(3)).expect("peg").price(),
+        Price::new(101)
+    );
+}
+
+#[test]
+fn test_reprice_peg_sharing_best_level_reads_that_level() {
+    let book = OrderBook::<()>::new("PEG/USD");
+    book.add_limit_order(Id::from_u64(1), 120, 5, Side::Buy, TimeInForce::Gtc, None)
+        .expect("bid at the peg's level");
+    book.add_limit_order(Id::from_u64(2), 100, 5, Side::Buy, TimeInForce::Gtc, None)
+        .expect("deeper bid");
+    book.add_limit_order(Id::from_u64(4), 200, 5, Side::Sell, TimeInForce::Gtc, None)
+        .expect("ask");
+    let peg = OrderType::PeggedOrder {
+        id: Id::from_u64(3),
+        price: Price::new(120),
+        quantity: Quantity::new(5),
+        side: Side::Buy,
+        user_id: user(1),
+        timestamp: TimestampMs::new(1),
+        time_in_force: TimeInForce::Gtc,
+        reference_price_offset: 1,
+        reference_price_type: PegReferenceType::BestBid,
+        extra_fields: (),
+    };
+    book.add_order(peg).expect("peg");
+    book.reprice_special_orders().expect("sweep");
+    // Another order rests at 120, so 120 is the touch: 120 + 1.
+    assert_eq!(
+        book.get_order(Id::from_u64(3)).expect("peg").price(),
+        Price::new(121)
+    );
+}
+
+#[test]
+fn test_reprice_issue_328_sweep_identical_books_snapshots_match() {
+    let a = issue_328_book(
+        STPMode::CancelBoth,
+        user(1),
+        user(1),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let b = issue_328_book(
+        STPMode::CancelBoth,
+        user(1),
+        user(1),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    for _ in 0..3 {
+        let ra = a.reprice_special_orders().expect("sweep a");
+        let rb = b.reprice_special_orders().expect("sweep b");
+        assert_eq!(ra.pegged_orders_repriced, rb.pegged_orders_repriced);
+        assert_eq!(ra.failed_orders, rb.failed_orders);
+    }
+    let sa = a.create_snapshot(usize::MAX).expect("snapshot a");
+    let sb = b.create_snapshot(usize::MAX).expect("snapshot b");
+    assert!(snapshots_match(&sa, &sb));
 }

@@ -46,6 +46,19 @@ This order book engine is built with the following design principles:
 - **Research**: Platform for studying market microstructure and order flow
 - **Educational**: Reference implementation for understanding modern exchange architecture
 
+### What's New in Version 0.16.1 (unreleased)
+
+A pegged re-price sweep never trades, also with concurrent submitters
+(#328). Each peg is priced against
+the touch as it stands when it is re-priced, pegs moved earlier in the
+same sweep included, and a peg does not count its own order: a best level
+holding only the peg is skipped for the next level, so a mid peg no
+longer ratchets on an unchanged book. A target that would cross is
+reported in `RepricingResult::failed_orders` and the peg stays in place;
+a submit running concurrently with a sweep can still move the touch
+between that check and the re-price.
+No API, snapshot or wire format change.
+
 ### What's New in Version 0.16.0
 
 `tokio` is an optional dependency behind a `tokio` feature, on by default

@@ -30,6 +30,11 @@ failing preflight rejects the order untouched.
 - Other `pricelevel` order types (iceberg, reserve, market-to-limit,
   pegged) follow the same sweep; pegged and trailing orders are repriced
   by `special_orders` (`repricing.rs`, `stop_orders.rs`).
+- A pegged re-price is passive (#328): each peg reads the touch as it
+  stands when it is re-priced, without its own order, and a target that
+  would cross is reported in `RepricingResult::failed_orders` instead of
+  trading. The cross check and the re-insert run under the exclusive
+  submit gate, so a concurrent submit cannot move the touch in between.
 
 The sweep reuses per-thread scratch buffers (`MatchingPool`) so the hot
 path stays allocation-light. Trades carry the maker and taker order ids,

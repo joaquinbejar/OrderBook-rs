@@ -413,4 +413,145 @@ mod tests {
         assert_eq!(book.pegged_order_count(), 0);
         assert_eq!(book.trailing_stop_count(), 0);
     }
+
+    /// #328: a target that would cross the live book at the final guard
+    /// (here the touch moved between pricing and the guard) is reported as a
+    /// failure; the peg is left in place and nothing trades.
+    #[test]
+    fn test_reprice_pegged_cross_guard_reports_failure_no_trade() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let trades = Arc::new(AtomicUsize::new(0));
+        let counter = trades.clone();
+        let mut book = OrderBook::<()>::with_trade_listener(
+            "PEG_GUARD",
+            Arc::new(move |_trade| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        let bid = book.add_limit_order(Id::from_u64(1), 100, 5, Side::Buy, TimeInForce::Gtc, None);
+        assert!(bid.is_ok());
+        let ask = book.add_limit_order(Id::from_u64(2), 200, 5, Side::Sell, TimeInForce::Gtc, None);
+        assert!(ask.is_ok());
+        let peg_id = Id::from_u64(3);
+        let peg = OrderType::PeggedOrder {
+            id: peg_id,
+            price: Price::new(90),
+            quantity: Quantity::new(5),
+            side: Side::Buy,
+            user_id: Hash32::zero(),
+            timestamp: TimestampMs::new(1),
+            time_in_force: TimeInForce::Gtc,
+            reference_price_offset: 0,
+            reference_price_type: PegReferenceType::MidPrice,
+            extra_fields: (),
+        };
+        assert!(book.add_order(peg).is_ok());
+
+        // The peg prices to mid(100, 200) = 150; before the guard an ask
+        // arrives at 140, so 150 would now cross.
+        let fired = Arc::new(AtomicBool::new(false));
+        book.reprice_guard_hook = Some(Arc::new(move |book, order_id| {
+            if order_id == peg_id && !fired.swap(true, Ordering::SeqCst) {
+                let late = book.add_limit_order(
+                    Id::from_u64(4),
+                    140,
+                    5,
+                    Side::Sell,
+                    TimeInForce::Gtc,
+                    None,
+                );
+                assert!(late.is_ok());
+            }
+        }));
+
+        let result = book.reprice_special_orders();
+        assert!(result.is_ok());
+        let result = result.unwrap_or_default();
+        assert_eq!(result.pegged_orders_repriced, 0);
+        assert_eq!(result.failed_orders.len(), 1);
+        assert!(
+            result
+                .failed_orders
+                .iter()
+                .all(|(id, reason)| *id == peg_id && reason.contains("would cross"))
+        );
+        assert_eq!(trades.load(Ordering::SeqCst), 0);
+        let resting = book.get_order(peg_id).map(|order| order.price());
+        assert_eq!(resting, Some(Price::new(90)));
+        assert_eq!(book.best_ask(), Some(140));
+        assert_eq!(book.best_bid(), Some(100));
+    }
+
+    /// #328 (adversarial review): the exclusive submit gate is held from the
+    /// no-cross guard through the re-insert, so a concurrent submit cannot
+    /// rest a crossing order in that window and turn the re-price into a
+    /// trade.
+    #[test]
+    fn test_reprice_pegged_holds_exclusive_gate_through_reinsert() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let trades = Arc::new(AtomicUsize::new(0));
+        let counter = trades.clone();
+        let mut book = OrderBook::<()>::with_trade_listener(
+            "PEG_GATED",
+            Arc::new(move |_trade| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        let bid = book.add_limit_order(Id::from_u64(1), 100, 5, Side::Buy, TimeInForce::Gtc, None);
+        assert!(bid.is_ok());
+        let ask = book.add_limit_order(Id::from_u64(2), 200, 5, Side::Sell, TimeInForce::Gtc, None);
+        assert!(ask.is_ok());
+        let peg_id = Id::from_u64(3);
+        let peg = OrderType::PeggedOrder {
+            id: peg_id,
+            price: Price::new(90),
+            quantity: Quantity::new(5),
+            side: Side::Buy,
+            user_id: Hash32::zero(),
+            timestamp: TimestampMs::new(1),
+            time_in_force: TimeInForce::Gtc,
+            reference_price_offset: 0,
+            reference_price_type: PegReferenceType::MidPrice,
+            extra_fields: (),
+        };
+        assert!(book.add_order(peg).is_ok());
+
+        // Inside the window a concurrent submit (here a probe on the gate it
+        // must take) is blocked: neither side of the gate is available.
+        let blocked = Arc::new(AtomicBool::new(false));
+        let seen = blocked.clone();
+        book.reprice_gated_hook = Some(Arc::new(move |book, order_id| {
+            if order_id == peg_id {
+                let read_blocked = matches!(
+                    book.submit_gate.try_read(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                );
+                let write_blocked = matches!(
+                    book.submit_gate.try_write(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                );
+                seen.store(read_blocked && write_blocked, Ordering::SeqCst);
+            }
+        }));
+
+        let result = book.reprice_special_orders();
+        assert!(result.is_ok());
+        let result = result.unwrap_or_default();
+        assert!(blocked.load(Ordering::SeqCst));
+        assert_eq!(result.pegged_orders_repriced, 1);
+        assert!(result.failed_orders.is_empty());
+        assert_eq!(trades.load(Ordering::SeqCst), 0);
+        let resting = book.get_order(peg_id).map(|order| order.price());
+        assert_eq!(resting, Some(Price::new(150)));
+
+        // Once the sweep released the gate, a submit lands normally.
+        let late =
+            book.add_limit_order(Id::from_u64(4), 160, 5, Side::Sell, TimeInForce::Gtc, None);
+        assert!(late.is_ok());
+        assert_eq!(trades.load(Ordering::SeqCst), 0);
+    }
 }
