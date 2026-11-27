@@ -2,7 +2,14 @@
 //!
 //! - **PeggedOrder**: orders that track a reference price (best bid, best
 //!   ask, mid price, or last trade). [`RepricingOperations::reprice_pegged_orders`]
-//!   moves them through the gated `update_order`.
+//!   moves them through the gated `update_order`. Each peg is priced
+//!   against the touch as it stands when it is re-priced (pegs moved
+//!   earlier in the same sweep included), and a peg does not count its own
+//!   order: on its own side, a best level holding only the peg is skipped
+//!   for the next level, so a mid peg does not chase its own quote. A
+//!   re-price is passive only; a target that would cross the book is
+//!   reported in [`RepricingResult::failed_orders`] and the peg is left in
+//!   place (#328).
 //! - **TrailingStop**: held **off book** as pending stops and driven by the
 //!   book's prints (#286): the watermark follows the prints in the stop's
 //!   favour, the stop price trails it by `trail_amount`, and a print at or

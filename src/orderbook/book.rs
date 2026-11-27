@@ -654,6 +654,13 @@ pub struct OrderBook<T = ()> {
     #[cfg(all(test, feature = "special_orders"))]
     pub(super) reprice_interleave_hook: Option<RepriceInterleaveHook<T>>,
 
+    /// Test-only interleaving point in the pegged repricer (#328), fired
+    /// with the book and a peg's id after its new price was computed and
+    /// before the final no-cross guard, so a test can move the touch in
+    /// that window. Exists only in `cfg(test)` builds.
+    #[cfg(all(test, feature = "special_orders"))]
+    pub(super) reprice_guard_hook: Option<RepriceInterleaveHook<T>>,
+
     /// listens to possible trades when an order is added
     pub trade_listener: Option<TradeListener>,
 
@@ -1287,6 +1294,8 @@ where
             update_interleave_hook: None,
             #[cfg(all(test, feature = "special_orders"))]
             reprice_interleave_hook: None,
+            #[cfg(all(test, feature = "special_orders"))]
+            reprice_guard_hook: None,
             #[cfg(test)]
             modify_interleave_hook: None,
             market_close_timestamp: AtomicU64::new(0),
@@ -6705,6 +6714,65 @@ where
         !self.order_locations.contains_key(&order_id)
     }
 
+    /// The best bid and best ask a pegged order on `side`, resting at
+    /// `resting_price`, reads when it is re-priced (#328).
+    ///
+    /// A peg does not count its own order: on the peg's side, when the best
+    /// level sits at the peg's resting price and holds only one order (the
+    /// peg itself), the next level on that side is used instead; when other
+    /// orders share the level, the level is the touch. The opposite side is
+    /// the plain best. Without the exclusion a mid peg would chase its own
+    /// quote and ratchet on every sweep of an unchanged book.
+    ///
+    /// The single-order test is exact for the peg's own level: the caller
+    /// read the peg at `resting_price` from the location index, so a
+    /// one-order level there holds the peg.
+    #[must_use]
+    fn touch_excluding(&self, side: Side, resting_price: u128) -> (Option<u128>, Option<u128>) {
+        match side {
+            Side::Buy => {
+                let ask = self.best_ask();
+                let bid = match self.best_bid() {
+                    Some(best)
+                        if best == resting_price && Self::level_holds_one(&self.bids, best) =>
+                    {
+                        self.bids
+                            .range(..best)
+                            .rev()
+                            .find(|entry| entry.value().order_count() > 0)
+                            .map(|entry| *entry.key())
+                    }
+                    other => other,
+                };
+                (bid, ask)
+            }
+            Side::Sell => {
+                let bid = self.best_bid();
+                let ask = match self.best_ask() {
+                    Some(best)
+                        if best == resting_price && Self::level_holds_one(&self.asks, best) =>
+                    {
+                        self.asks
+                            .range((std::ops::Bound::Excluded(best), std::ops::Bound::Unbounded))
+                            .find(|entry| entry.value().order_count() > 0)
+                            .map(|entry| *entry.key())
+                    }
+                    other => other,
+                };
+                (bid, ask)
+            }
+        }
+    }
+
+    /// Whether the level at `price` on `levels` holds exactly one order.
+    #[inline]
+    #[must_use]
+    fn level_holds_one(levels: &SkipMap<u128, Arc<PriceLevel>>, price: u128) -> bool {
+        levels
+            .get(&price)
+            .is_some_and(|entry| entry.value().order_count() == 1)
+    }
+
     /// Re-price every pegged order, returning the count repriced and pushing a
     /// `(order_id, reason)` pair onto `failures` for each one whose
     /// `update_order` is **rejected** (e.g. a risk-admission rejection). The
@@ -6720,6 +6788,12 @@ where
     /// never held across iterations — but the sweep is not atomic as a
     /// batch: concurrent flow interleaves between consecutive re-prices.
     ///
+    /// Each peg reads the touch as it stands when it is re-priced, after
+    /// every peg moved earlier in the sweep, and without its own order
+    /// (`touch_excluding`, #328). A re-price is passive only: a target that
+    /// would cross the live book is recorded in `failures` and the peg is
+    /// left in place, so a sequential sweep never trades.
+    ///
     /// # Errors
     ///
     /// [`OrderBookError::ArithmeticOverflow`] if the repriced count cannot
@@ -6734,10 +6808,9 @@ where
             return Ok(0);
         }
 
-        let best_bid = self.best_bid();
-        let best_ask = self.best_ask();
-        // Exact integer midpoint (#245): no `f64` round trip / truncating cast.
-        let mid_price = self.integer_mid_price();
+        // A sweep never trades (#328), so the last print cannot change
+        // during it: read once. The touch, by contrast, moves with every
+        // re-price and is read fresh for each peg below.
         let last_trade = if self.has_traded.load(Ordering::Relaxed) {
             Some(self.last_trade_price.load())
         } else {
@@ -6755,7 +6828,17 @@ where
                     reference_price_type,
                     ..
                 } = order.as_ref()
-                    && let Some(new_price) = calculate_pegged_price(
+                {
+                    // The touch as it stands now, after every peg moved
+                    // earlier in this sweep, without this peg's own order
+                    // (#328).
+                    let (best_bid, best_ask) = self.touch_excluding(*side, current_price.as_u128());
+                    // Exact integer midpoint (#245): no `f64` round trip.
+                    let mid_price = match (best_bid, best_ask) {
+                        (Some(bid), Some(ask)) => Some(bid.midpoint(ask)),
+                        _ => None,
+                    };
+                    let Some(new_price) = calculate_pegged_price(
                         *reference_price_type,
                         *reference_price_offset,
                         *side,
@@ -6764,9 +6847,29 @@ where
                         mid_price,
                         last_trade,
                         self.tick_size,
-                    )
-                    && new_price != current_price.as_u128()
-                {
+                    ) else {
+                        continue;
+                    };
+                    if new_price == current_price.as_u128() {
+                        continue;
+                    }
+                    #[cfg(test)]
+                    if let Some(hook) = self.reprice_guard_hook.as_ref() {
+                        hook(self, order_id);
+                    }
+                    // A re-price is passive only (#328): never let it take
+                    // liquidity, whatever the clamp computed.
+                    if self.will_cross_market(new_price, *side) {
+                        trace!(
+                            "Pegged re-price of {} to {} would cross the touch",
+                            order_id, new_price
+                        );
+                        failures.push((
+                            order_id,
+                            format!("pegged re-price to {new_price} would cross the touch"),
+                        ));
+                        continue;
+                    }
                     let update = OrderUpdate::UpdatePrice {
                         order_id,
                         new_price: pricelevel::Price::new(new_price),
@@ -6849,6 +6952,19 @@ where
     /// surfaced through this count-only entry point — use
     /// [`reprice_special_orders`](Self::reprice_special_orders), whose
     /// [`RepricingResult::failed_orders`] records every rejected re-price.
+    ///
+    /// # Passive only (#328)
+    ///
+    /// Each peg is priced against the touch as it stands when it is
+    /// re-priced, not a copy taken at the start of the sweep, and a peg
+    /// does not count its own order: on its own side, a best level holding
+    /// only the peg is skipped for the next level. A target that would
+    /// still cross the book is not sent; it is reported as a failure and
+    /// the peg stays where it was. The cross check and the price update
+    /// are two steps (the modify path has no post-only option), so the
+    /// strict "a sweep never trades" guarantee holds when sweeps are
+    /// serialized with submits, as the sequencer serializes them; a
+    /// submit racing a sweep can move the touch between the two.
     fn reprice_pegged_orders(&self) -> Result<usize, OrderBookError> {
         self.reprice_pegged_collecting(&mut Vec::new())
     }
@@ -6869,7 +6985,21 @@ where
     /// reason)` pair for every re-price whose `update_order` was rejected (e.g.
     /// a risk-admission rejection). These were previously swallowed (#174); a
     /// rejected re-price leaves the order at its prior price (validate-first
-    /// modify, #98/#168).
+    /// modify, #98/#168). A re-price that would cross the book is also
+    /// recorded there, with the peg left in place (#328).
+    ///
+    /// # Passive only (#328)
+    ///
+    /// Each peg is priced against the touch as it stands when it is
+    /// re-priced, not a copy taken at the start of the sweep, and a peg
+    /// does not count its own order: on its own side, a best level holding
+    /// only the peg is skipped for the next level. A target that would
+    /// still cross the book is not sent; it is reported as a failure and
+    /// the peg stays where it was. The cross check and the price update
+    /// are two steps (the modify path has no post-only option), so the
+    /// strict "a sweep never trades" guarantee holds when sweeps are
+    /// serialized with submits, as the sequencer serializes them; a
+    /// submit racing a sweep can move the touch between the two.
     fn reprice_special_orders(&self) -> Result<RepricingResult, OrderBookError> {
         let mut failed_orders = Vec::new();
         let pegged_count = self.reprice_pegged_collecting(&mut failed_orders)?;
